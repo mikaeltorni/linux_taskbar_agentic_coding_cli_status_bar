@@ -165,7 +165,11 @@ def poll_once(
         )
         snapshot["enabled"] = True
         status["clis"][cli_id] = snapshot
-        if snapshot.get("error"):
+        # Warn only on error transitions: a throttled snapshot carries its
+        # error across many second-scale ticks and must not spam the journal.
+        if snapshot.get("error") and snapshot["error"] != (
+            previous_clis.get(cli_id) or {}
+        ).get("error"):
             LOGGER.warning("cli %s: %s", cli_id, snapshot["error"])
     _write_status(status, home)
     return status

@@ -163,6 +163,30 @@ class TestPollOnce:
         assert claude["checked_at"] == NOW
         assert claude["retry_after_until"] == NOW + 300
 
+    def test_carried_error_is_logged_once_not_per_tick(
+        self, sandbox_home, monkeypatch, caplog
+    ):
+        """An unchanged CLI error must not be re-warned on every poll tick."""
+        _configure(sandbox_home)
+
+        def fake_collect_claude(home, last, min_interval=None):
+            return {"windows": [], "error": "HTTP 429", "checked_at": NOW}
+
+        monkeypatch.setattr(poller, "collect_claude", fake_collect_claude)
+        # The centralized logger does not propagate to root, so caplog's
+        # handler is attached to it directly for the duration of the test.
+        poller.LOGGER.addHandler(caplog.handler)
+        try:
+            first = poller.poll_once(home=sandbox_home, now=NOW)
+            poller.poll_once(home=sandbox_home, previous=first, now=NOW + 5)
+        finally:
+            poller.LOGGER.removeHandler(caplog.handler)
+        warnings = [
+            record for record in caplog.records
+            if "HTTP 429" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+
     def test_tmux_refresh_is_throttled_between_ticks(self, sandbox_home, monkeypatch):
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
