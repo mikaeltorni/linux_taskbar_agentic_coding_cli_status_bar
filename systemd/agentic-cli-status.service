@@ -1,0 +1,18 @@
+# agentic-cli-status.service — systemd user unit for the rate-limit poller.
+#
+# Installed to ~/.config/systemd/user/ by install.sh and enabled for
+# default.target so polling starts at login and keeps running. The poller
+# re-reads its config every tick, so reconfiguration needs no restart.
+
+[Unit]
+Description=Agentic coding CLI rate-limit status poller
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 -m agentic_cli_status.poller --daemon
+Environment=PYTHONPATH=%h/.local/share/agentic-cli-status
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
