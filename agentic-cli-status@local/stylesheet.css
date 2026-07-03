@@ -1,0 +1,35 @@
+/* stylesheet.css — agentic-cli-status@local
+ *
+ * Per-CLI severity coloring for the taskbar indicator segments. The poller
+ * only supplies used percentages; these classes map usage bands to colors:
+ *   acs-ok    < 60% used
+ *   acs-warn  60–84% used
+ *   acs-crit  >= 85% used
+ *   acs-stale data older than the configured staleness threshold
+ *   acs-off   no data available for the CLI
+ */
+
+.acs-segment {
+  margin: 0 3px;
+  font-weight: bold;
+}
+
+.acs-ok {
+  color: #8ff0a4;
+}
+
+.acs-warn {
+  color: #f8e45c;
+}
+
+.acs-crit {
+  color: #ff7b63;
+}
+
+.acs-stale {
+  opacity: 0.6;
+}
+
+.acs-off {
+  color: #9a9996;
+}

@@ -1,0 +1,7 @@
+{
+  "uuid": "agentic-cli-status@local",
+  "name": "Agentic CLI Status",
+  "description": "Taskbar indicator showing Codex, Claude Code, and Grok CLI rate-limit usage collected by the agentic-cli-status poller.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1
+}
