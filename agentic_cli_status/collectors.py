@@ -413,21 +413,53 @@ def _grok_last_billing(log_file: Path) -> dict[str, Any] | None:
 # tmux pane fallback: parse rendered /status | /usage TUI text
 # ---------------------------------------------------------------------------
 
-#: Per-CLI patterns matching "<window label> ... NN% used/left" lines in the
-#: rendered TUI output. Grouped as (label, regex, percent_is_remaining).
-_PANE_PATTERNS: dict[str, list[tuple[str, re.Pattern[str], bool]]] = {
+#: Per-CLI window keywords used to find "<window label> … NN% left|used"
+#: lines in the rendered TUI output. Grouped as (label, keyword regex).
+_PANE_WINDOW_KEYWORDS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "codex": [
-        ("5h", re.compile(r"5h(?:our)?\s+limit.*?(\d+(?:\.\d+)?)\s*%", re.I | re.S), False),
-        ("week", re.compile(r"week(?:ly)?\s+limit.*?(\d+(?:\.\d+)?)\s*%", re.I | re.S), False),
+        ("5h", re.compile(r"5h(?:our)?\s+limit", re.I)),
+        ("week", re.compile(r"week(?:ly)?\s+limit", re.I)),
     ],
     "claude_code": [
-        ("5h", re.compile(r"(?:current\s+session|5-?h).*?(\d+(?:\.\d+)?)\s*%", re.I | re.S), False),
-        ("week", re.compile(r"(?:current\s+week|weekly).*?(\d+(?:\.\d+)?)\s*%", re.I | re.S), False),
+        ("5h", re.compile(r"current\s+session|5-?h(?:our)?\s+limit", re.I)),
+        ("week", re.compile(r"current\s+week|week(?:ly)?\s+limit", re.I)),
     ],
     "grok": [
-        ("week", re.compile(r"(?:credits?|usage).*?(\d+(?:\.\d+)?)\s*%", re.I | re.S), False),
+        ("week", re.compile(r"week(?:ly)?\s+limit|credits?|usage", re.I)),
     ],
 }
+
+_PANE_PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+
+
+def _pane_window_percent(
+    lines: list[str], keyword: re.Pattern[str]
+) -> float | None:
+    """Extract one window's used percentage from rendered pane lines.
+
+    Finds the first line matching ``keyword`` that carries a percentage (or
+    whose next line does — some TUIs wrap), and normalizes the direction:
+    modern CLIs render "NN% left" (e.g. Codex "5h limit: 99% left", Grok
+    "Weekly limit left: 0%"), older ones "NN% used". A line mentioning
+    "left" yields ``100 - NN``.
+    """
+    for index, line in enumerate(lines):
+        if not keyword.search(line):
+            continue
+        source_line = line
+        match = _PANE_PERCENT.search(line)
+        if not match and index + 1 < len(lines):
+            source_line = lines[index + 1]
+            match = _PANE_PERCENT.search(source_line)
+        if not match:
+            continue
+        percent = _to_percent(float(match.group(1)))
+        if percent is None:
+            continue
+        if re.search(r"\bleft\b", line + " " + source_line, re.I):
+            percent = 100.0 - percent
+        return percent
+    return None
 
 
 def parse_pane(cli_id: str, text: str, now: float | None = None) -> dict[str, Any]:
@@ -436,23 +468,19 @@ def parse_pane(cli_id: str, text: str, now: float | None = None) -> dict[str, An
     This is the best-effort fallback when no headless source is available:
     the pane shows the CLI's own ``/status`` / ``/usage`` rendering, whose
     wording can change between releases, so any percentage found per window
-    label is accepted.
+    label is accepted (with "left" percentages converted to used).
 
     Args:
         cli_id: One of ``codex``, ``claude_code``, ``grok``.
         text: The output of ``tmux capture-pane -p`` for that CLI's window.
         now: Current epoch override (tests).
     """
+    lines = text.splitlines()
     windows: list[dict[str, Any]] = []
-    for label, pattern, remaining in _PANE_PATTERNS.get(cli_id, []):
-        match = pattern.search(text)
-        if not match:
-            continue
-        percent = _to_percent(float(match.group(1)))
+    for label, keyword in _PANE_WINDOW_KEYWORDS.get(cli_id, []):
+        percent = _pane_window_percent(lines, keyword)
         if percent is None:
             continue
-        if remaining:
-            percent = 100.0 - percent
         windows.append({"label": label, "used_percent": percent, "resets_at": None})
     if not windows:
         return _snapshot("tmux_pane", error="no usage percentages found in pane")

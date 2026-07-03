@@ -201,7 +201,7 @@ class TestCollectClaude:
 
 
 class TestParsePane:
-    def test_codex_status_pane(self):
+    def test_codex_status_pane_used_variant(self):
         text = (
             "  /status\n"
             "  Token usage: 32,950 total\n"
@@ -213,6 +213,27 @@ class TestParsePane:
         assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
             ("5h", 57.0),
             ("week", 43.0),
+        ]
+
+    def test_codex_status_pane_left_variant(self):
+        # Real v0.142 rendering: percentages are what is LEFT, and the weekly
+        # reset wraps onto the next line.
+        text = (
+            "│  5h limit:             [████████████████████] 99% left (resets 20:12) │\n"
+            "│  Weekly limit:         [██████████░░░░░░░░░░] 49% left                │\n"
+            "│                        (resets 09:10 on 9 Jul)                        │\n"
+        )
+        result = collectors.parse_pane("codex", text, now=5.0)
+        assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
+            ("5h", 1.0),
+            ("week", 51.0),
+        ]
+
+    def test_grok_weekly_limit_left_pane(self):
+        text = "╰────────────────── Weekly limit left: 0% · Composer 2.5 ─╯\n"
+        result = collectors.parse_pane("grok", text, now=1.0)
+        assert result["windows"] == [
+            {"label": "week", "used_percent": 100.0, "resets_at": None}
         ]
 
     def test_claude_usage_pane(self):
