@@ -5,10 +5,12 @@ the three major agentic coding CLIs — **Codex**, **Claude Code**, and **Grok
 CLI** — polled in the background **without consuming plan limits**. Cline is
 deliberately not monitored: it has no `/usage`-style rate-limit surface yet.
 
-The top bar shows one compact colored segment per CLI (green &lt; 60% used,
-yellow &lt; 85%, red ≥ 85%; dimmed with a trailing `?` when the data is stale),
-e.g. `CX 57·43%  CC 12·40%  GK 100%`. Clicking the indicator opens a details
-menu with each window's usage, plan, and reset time.
+The top bar shows one compact colored segment per CLI with the percentage of
+each limit window **left** (remaining, matching the CLIs' own "limit left"
+phrasing): green when more than 40% is left, yellow at 16–40%, red at 15% or
+less, dimmed with a trailing `?` when the data is stale — e.g.
+`CX 43·57%  CC 88·60%  GK 12%`. Clicking the indicator opens a details menu
+with each window's remaining budget, plan, and reset time.
 
 ## How It Works
 
@@ -16,8 +18,11 @@ Two cooperating parts, connected only by a JSON file:
 
 1. **Poller** (`agentic_cli_status` Python package, systemd user service
    `agentic-cli-status.service`) collects each enabled CLI's rate limits on a
-   configurable interval and atomically writes
-   `~/.local/state/agentic-cli-status/status.json`.
+   configurable interval — expressed **in seconds**, default every 5 — and
+   atomically writes `~/.local/state/agentic-cli-status/status.json`. Slow
+   sources protect themselves independently of the tick rate: the Claude
+   endpoint is called at most every 180 s and tmux refreshes run at most once
+   per minute per CLI.
 2. **GNOME Shell extension** (`agentic-cli-status@local`) watches that file
    with a file monitor and renders the indicator. It never talks to a CLI or
    the network itself.
@@ -71,7 +76,7 @@ package, extension, default config) always runs; the components are:
 | `codex_monitor` | on | Codex monitoring; reconfigure source mode + staleness |
 | `claude_code_monitor` | on | Claude Code monitoring; same options |
 | `grok_monitor` | on | Grok CLI monitoring; same options |
-| `polling_rate` | on | How often limits are checked (60–3600 s, default 300) |
+| `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |
 | `tmux_console` | on | The background tmux debug console / refresher |
 | `startup_service` | on | Poller starts at login (`systemd --user`) and keeps running |
 
