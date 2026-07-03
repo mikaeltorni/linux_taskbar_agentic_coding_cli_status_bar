@@ -57,6 +57,11 @@ rendered pane as a fallback reading, and stores the capture under
 `~/.local/state/agentic-cli-status/panes/<cli>.txt` for debugging. Only slash
 commands are ever typed — never a prompt.
 
+Console windows are created with `ATTS_SUPPRESS_ANNOUNCEMENTS=1` and
+`CODEX_AGENT_SKIP_TRACKER=1` in their environment so the idle TUIs stay
+silent monitoring surfaces: their lifecycle hooks never speak TTS
+announcements and the codex launcher skips agent-tracker registration.
+
 ## Installation
 
 ```bash

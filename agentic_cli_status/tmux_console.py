@@ -35,6 +35,20 @@ CLI_COMMANDS = {
     "grok": "grok",
 }
 
+#: Environment exported into every console window (via ``tmux -e``) so the
+#: TUIs stay silent monitoring surfaces instead of announcing fake agent
+#: sessions at login: ATTS_SUPPRESS_ANNOUNCEMENTS mutes the TTS notification
+#: hooks (Claude Code / Grok / Cline), and CODEX_AGENT_SKIP_TRACKER makes the
+#: codex launcher run plain codex without ACC registration or its spoken
+#: launch announcement.
+WINDOW_ENV = (
+    "ATTS_SUPPRESS_ANNOUNCEMENTS=1",
+    "CODEX_AGENT_SKIP_TRACKER=1",
+)
+
+#: ``tmux new-session``/``new-window`` argument pairs for :data:`WINDOW_ENV`.
+_WINDOW_ENV_ARGS = [arg for var in WINDOW_ENV for arg in ("-e", var)]
+
 #: Install locations to try when the binary is not on PATH. The poller runs
 #: as a systemd user service whose PATH lacks per-app bin dirs (notably
 #: ~/.grok/bin), and a tmux window whose command cannot be resolved dies
@@ -108,7 +122,7 @@ def ensure_console(session: str, cli_ids: list[str]) -> bool:
             continue
         if not have_session:
             result = _tmux(
-                ["new-session", "-d", "-s", session, "-n", cli_id, binary]
+                ["new-session", "-d", *_WINDOW_ENV_ARGS, "-s", session, "-n", cli_id, binary]
             )
             have_session = created_any = result.returncode == 0
             if not have_session:
@@ -118,7 +132,7 @@ def ensure_console(session: str, cli_ids: list[str]) -> bool:
                 return False
         else:
             result = _tmux(
-                ["new-window", "-d", "-t", session, "-n", cli_id, binary]
+                ["new-window", "-d", *_WINDOW_ENV_ARGS, "-t", session, "-n", cli_id, binary]
             )
             if result.returncode != 0:
                 LOGGER.error(
