@@ -21,18 +21,42 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 from .acs_logging import LOGGER
 from .config import SLASH_COMMANDS
 
-#: Command each window runs. The TUIs are launched with their default
+#: Binary each window runs. The TUIs are launched with their default
 #: interactive mode; they idle between slash commands.
 CLI_COMMANDS = {
     "codex": "codex",
     "claude_code": "claude",
     "grok": "grok",
 }
+
+#: Install locations to try when the binary is not on PATH. The poller runs
+#: as a systemd user service whose PATH lacks per-app bin dirs (notably
+#: ~/.grok/bin), and a tmux window whose command cannot be resolved dies
+#: instantly — so windows are always created with an absolute path.
+_BINARY_FALLBACK_DIRS = (".local/bin", ".grok/bin", ".codex/bin")
+
+
+def resolve_cli_binary(cli_id: str) -> str | None:
+    """Return the absolute path of a CLI's binary, or None when missing.
+
+    Args:
+        cli_id: One of the :data:`CLI_COMMANDS` keys.
+    """
+    binary = CLI_COMMANDS[cli_id]
+    found = shutil.which(binary)
+    if found:
+        return found
+    for rel in _BINARY_FALLBACK_DIRS:
+        candidate = Path.home() / rel / binary
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 #: Seconds to wait after sending a slash command before capturing the pane so
 #: the TUI has time to render the usage panel.
@@ -76,15 +100,15 @@ def ensure_console(session: str, cli_ids: list[str]) -> bool:
         existing = set(listed.stdout.split())
     created_any = have_session
     for cli_id in cli_ids:
-        binary = CLI_COMMANDS[cli_id].split()[0]
         if cli_id in existing:
             continue
-        if shutil.which(binary) is None:
+        binary = resolve_cli_binary(cli_id)
+        if binary is None:
             LOGGER.info("cli %s not installed; skipping console window", cli_id)
             continue
         if not have_session:
             result = _tmux(
-                ["new-session", "-d", "-s", session, "-n", cli_id, CLI_COMMANDS[cli_id]]
+                ["new-session", "-d", "-s", session, "-n", cli_id, binary]
             )
             have_session = created_any = result.returncode == 0
             if not have_session:
@@ -94,7 +118,7 @@ def ensure_console(session: str, cli_ids: list[str]) -> bool:
                 return False
         else:
             result = _tmux(
-                ["new-window", "-d", "-t", session, "-n", cli_id, CLI_COMMANDS[cli_id]]
+                ["new-window", "-d", "-t", session, "-n", cli_id, binary]
             )
             if result.returncode != 0:
                 LOGGER.error(
