@@ -152,6 +152,57 @@ class TestCollectClaude:
         )
         assert result["windows"][0]["used_percent"] == 77.0
 
+    def test_fetches_fable_scoped_weekly_limit(self, sandbox_home):
+        """Claude's limits array should expose the model-scoped Fable usage."""
+        write_claude_credentials(sandbox_home)
+        payload = {
+            "five_hour": {"utilization": 12.5},
+            "seven_day": {"utilization": 40},
+            "limits": [
+                {
+                    "kind": "session",
+                    "percent": 12.5,
+                    "scope": None,
+                },
+                {
+                    "kind": "weekly_scoped",
+                    "percent": 62,
+                    "resets_at": "2026-07-05T14:00:00Z",
+                    "scope": {
+                        "model": {"display_name": "Fable", "id": None},
+                        "surface": None,
+                    },
+                },
+            ],
+        }
+        result = collectors.collect_claude(
+            sandbox_home, opener=self._opener_returning(payload, []), now=1.0
+        )
+        assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
+            ("5h", 12.5),
+            ("week", 40.0),
+            ("fable", 62.0),
+        ]
+        assert result["windows"][2]["resets_at"] == 1783260000
+
+    def test_ignores_unknown_or_duplicate_scoped_limits(self, sandbox_home):
+        """Scoped rows without a model and legacy duplicates are not rendered."""
+        write_claude_credentials(sandbox_home)
+        payload = {
+            "seven_day_opus": {"utilization": 25},
+            "limits": [
+                {"kind": "weekly_scoped", "percent": 25,
+                 "scope": {"model": {"display_name": "Opus"}}},
+                {"kind": "weekly_scoped", "percent": 10, "scope": None},
+            ],
+        }
+        result = collectors.collect_claude(
+            sandbox_home, opener=self._opener_returning(payload, []), now=1.0
+        )
+        assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
+            ("opus", 25.0),
+        ]
+
     def test_endpoint_throttled_by_min_interval(self, sandbox_home):
         write_claude_credentials(sandbox_home)
         calls = []
@@ -247,6 +298,22 @@ class TestParsePane:
         assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
             ("5h", 12.0),
             ("week", 40.0),
+        ]
+
+    def test_claude_usage_pane_includes_fable(self):
+        text = (
+            "Current session (5-hour limit)\n"
+            "  12% used · resets at 3pm\n"
+            "Current week (all models)\n"
+            "  40% used · resets Tuesday\n"
+            "Current week (Fable only)\n"
+            "  62% used · resets Tuesday\n"
+        )
+        result = collectors.parse_pane("claude_code", text, now=1.0)
+        assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
+            ("5h", 12.0),
+            ("week", 40.0),
+            ("fable", 62.0),
         ]
 
     def test_grok_usage_pane(self):

@@ -319,7 +319,8 @@ def _claude_windows(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     The response formats have varied across releases (top-level
     ``five_hour``/``seven_day`` objects with ``utilization`` or
-    ``used_percentage``), so parsing is defensive.
+    ``used_percentage``). Newer responses also expose model-specific weekly
+    limits, including Fable, in a ``limits`` array, so parsing is defensive.
     """
     labels = (("five_hour", "5h"), ("seven_day", "week"), ("seven_day_opus", "opus"))
     windows: list[dict[str, Any]] = []
@@ -341,6 +342,27 @@ def _claude_windows(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "resets_at": _to_epoch(window.get("resets_at")),
             }
         )
+    existing_labels = {window["label"] for window in windows}
+    for limit in payload.get("limits") or []:
+        if not isinstance(limit, dict) or limit.get("kind") != "weekly_scoped":
+            continue
+        scope = limit.get("scope") or {}
+        model = scope.get("model") or {}
+        display_name = model.get("display_name")
+        if not isinstance(display_name, str) or not display_name.strip():
+            continue
+        label = display_name.strip().lower()
+        used = _to_percent(limit.get("percent"))
+        if used is None or label in existing_labels:
+            continue
+        windows.append(
+            {
+                "label": label,
+                "used_percent": used,
+                "resets_at": _to_epoch(limit.get("resets_at")),
+            }
+        )
+        existing_labels.add(label)
     return windows
 
 
@@ -423,6 +445,7 @@ _PANE_WINDOW_KEYWORDS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "claude_code": [
         ("5h", re.compile(r"current\s+session|5-?h(?:our)?\s+limit", re.I)),
         ("week", re.compile(r"current\s+week|week(?:ly)?\s+limit", re.I)),
+        ("fable", re.compile(r"(?:current\s+week[^\n]*\b)?fable(?:\s+only)?", re.I)),
     ],
     "grok": [
         ("week", re.compile(r"week(?:ly)?\s+limit|credits?|usage", re.I)),

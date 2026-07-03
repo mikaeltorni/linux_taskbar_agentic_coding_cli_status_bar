@@ -9,7 +9,8 @@ The top bar shows one compact colored segment per CLI with the percentage of
 each limit window **left** (remaining, matching the CLIs' own "limit left"
 phrasing): green when more than 40% is left, yellow at 16–40%, red at 15% or
 less, dimmed with a trailing `?` when the data is stale — e.g.
-`CX 43·57%  CC 88·60%  GK 12%`. Clicking the indicator opens a details menu
+`CX 43·57%  CC 88·60·38%  GK 12%`. Claude's third value is its active
+model-scoped weekly limit (currently Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
 
 ## How It Works
@@ -34,7 +35,7 @@ Two cooperating parts, connected only by a JSON file:
 | CLI | Headless source | tmux slash command |
 |---|---|---|
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` `token_count` events (`rate_limits.primary/secondary`: 5h + weekly `used_percent`, `resets_at`, plan) | `/status` |
-| Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h/weekly windows as `/usage`. Self-throttled to ≥ 180 s regardless of polling rate | `/usage` |
+| Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h, weekly, and model-scoped weekly windows (including Fable) as `/usage`. Self-throttled to ≥ 180 s regardless of polling rate | `/usage` |
 | Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/*.log` (`creditUsagePercent` + weekly period + tier) | `/usage` |
 
 None of these send a prompt or start a model turn, so **monitoring never
