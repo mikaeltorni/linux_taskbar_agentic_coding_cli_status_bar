@@ -43,9 +43,14 @@ SLASH_COMMANDS = {
     "grok": "/usage",
 }
 
-#: Hard floor for polling to guarantee the poller can never hammer anything.
-MIN_POLL_INTERVAL_SECONDS = 60
+#: Polling rate bounds, in SECONDS. Local file reads are cheap, so the floor
+#: is low; slower sources protect themselves (the Claude endpoint keeps its
+#: own >=180s floor and tmux refreshes are rate-limited separately).
+MIN_POLL_INTERVAL_SECONDS = 5
 MAX_POLL_INTERVAL_SECONDS = 3600
+
+#: Floor for the per-CLI staleness threshold (independent of the poll rate).
+MIN_STALE_AFTER_SECONDS = 60
 
 #: The Claude OAuth usage endpoint rate-limits aggressively below ~3 minutes,
 #: so the collector never calls it more often than this regardless of the
@@ -53,7 +58,7 @@ MAX_POLL_INTERVAL_SECONDS = 3600
 CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS = 180
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "poll_interval_seconds": 300,
+    "poll_interval_seconds": 5,
     "tmux": {
         "enabled": True,
         "session": "agentic-cli-status",
@@ -164,7 +169,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
             )
             cli["source"] = defaults["source"]
         stale = cli.get("stale_after_seconds")
-        if not isinstance(stale, int) or stale < MIN_POLL_INTERVAL_SECONDS:
+        if not isinstance(stale, int) or stale < MIN_STALE_AFTER_SECONDS:
             cli["stale_after_seconds"] = defaults["stale_after_seconds"]
         cli["enabled"] = bool(cli.get("enabled", defaults["enabled"]))
     return config

@@ -10,7 +10,8 @@ from agentic_cli_status import config as acs_config
 class TestLoadConfig:
     def test_defaults_when_missing(self, sandbox_home):
         cfg = acs_config.load_config()
-        assert cfg["poll_interval_seconds"] == 300
+        # The polling rate is expressed in SECONDS and defaults to 5.
+        assert cfg["poll_interval_seconds"] == 5
         assert set(cfg["clis"]) == set(acs_config.CLI_IDS)
         for cli in acs_config.CLI_IDS:
             assert cfg["clis"][cli]["enabled"] is True
@@ -40,8 +41,8 @@ class TestLoadConfig:
     def test_out_of_range_interval_falls_back(self, sandbox_home):
         path = acs_config.config_path()
         path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"poll_interval_seconds": 5}), encoding="utf-8")
-        assert acs_config.load_config()["poll_interval_seconds"] == 300
+        path.write_text(json.dumps({"poll_interval_seconds": 2}), encoding="utf-8")
+        assert acs_config.load_config()["poll_interval_seconds"] == 5
 
     def test_invalid_source_falls_back(self, sandbox_home):
         path = acs_config.config_path()
@@ -56,7 +57,7 @@ class TestLoadConfig:
         path = acs_config.config_path()
         path.parent.mkdir(parents=True)
         path.write_text("{nope", encoding="utf-8")
-        assert acs_config.load_config()["poll_interval_seconds"] == 300
+        assert acs_config.load_config()["poll_interval_seconds"] == 5
 
 
 class TestSaveConfig:

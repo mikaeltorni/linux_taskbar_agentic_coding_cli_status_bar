@@ -117,8 +117,10 @@ for cli in codex claude_code grok; do
   assert_file_contains "$CONFIG_FILE" "\"$cli\"" "Config should have a $cli entry"
 done
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
-assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 300' \
-  "Default polling rate should be 300s"
+assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 5' \
+  "Default polling rate should be 5 seconds"
+assert_file_contains "$TMP_DIR/install-1.out" "seconds" \
+  "Install output should state the polling rate is in seconds"
 
 UNIT_FILE="$TARGET_HOME/.config/systemd/user/agentic-cli-status.service"
 assert_file_exists "$UNIT_FILE" "Should install the systemd user unit"

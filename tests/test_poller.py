@@ -36,7 +36,7 @@ class TestPollOnce:
         write_grok_log(sandbox_home, "grok.log", [grok_billing_record(88)])
         status = poller.poll_once(home=sandbox_home, now=NOW)
         assert status["generated_at"] == NOW
-        assert status["poll_interval_seconds"] == 300
+        assert status["poll_interval_seconds"] == 5
         codex = status["clis"]["codex"]
         assert codex["enabled"] and not codex["stale"]
         assert codex["windows"][0]["used_percent"] == 57.0

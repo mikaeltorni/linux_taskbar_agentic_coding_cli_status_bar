@@ -220,31 +220,34 @@ acs_grok_status()            { _acs_cli_status grok; }
 # install action simply ensures the key exists with a valid value.
 acs_apply_polling_rate() {
   acs_config_set "poll_interval_seconds" "$(acs_config_get poll_interval_seconds)"
-  msg "Polling rate: every $(acs_config_get poll_interval_seconds)s."
+  msg "Polling rate: every $(acs_config_get poll_interval_seconds) seconds."
 }
 
-# acs_configure_polling_rate - Prompt for how often the CLIs are checked.
-# Range matches the poller's own validation (60-3600 seconds); the Claude
-# endpoint additionally self-throttles to >=180s inside the collector.
+# acs_configure_polling_rate - Prompt for how often the CLIs are checked,
+# using the same prefilled typeable field as the other reconfigurable
+# components. The value is ALWAYS in seconds (default 5); the range matches
+# the poller's own validation (5-3600). Slow sources protect themselves: the
+# Claude endpoint keeps its >=180s floor and tmux refreshes are rate-limited
+# inside the poller regardless of this setting.
 acs_configure_polling_rate() {
   local current value
   current="$(acs_config_get poll_interval_seconds)"
   while true; do
     value=""
     read -r -e -i "$current" \
-      -p "Poll every N seconds (60-3600): " value </dev/tty || return 1
-    if [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 60 && value <= 3600 )); then
+      -p "Poll every N SECONDS (5-3600, default 5): " value </dev/tty || return 1
+    if [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 5 && value <= 3600 )); then
       acs_config_set "poll_interval_seconds" "$value"
-      msg "Polling rate saved: every ${value}s (applies on the next tick, no restart needed)."
+      msg "Polling rate saved: every ${value} seconds (applies on the next tick, no restart needed)."
       return 0
     fi
-    msg "Enter a whole number from 60 to 3600." >&2
+    msg "Enter a whole number of seconds from 5 to 3600." >&2
   done
 }
 
-# acs_polling_rate_status - Menu-friendly current polling rate.
+# acs_polling_rate_status - Menu-friendly current polling rate (in seconds).
 acs_polling_rate_status() {
-  printf 'every %ss\n' "$(acs_config_get poll_interval_seconds 2>/dev/null || echo 300)"
+  printf 'every %s seconds\n' "$(acs_config_get poll_interval_seconds 2>/dev/null || echo 5)"
 }
 
 # ---------------------------------------------------------------------------

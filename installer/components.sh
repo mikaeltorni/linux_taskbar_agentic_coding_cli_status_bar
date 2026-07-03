@@ -21,7 +21,7 @@ ISC_COMPONENTS=(
   "codex_monitor|Codex rate limits (5h + weekly, /status data)|on|acs_install_codex|acs_detect_codex|acs_uninstall_codex|Monitored CLIs||acs_configure_codex|acs_codex_status"
   "claude_code_monitor|Claude Code rate limits (5h + weekly, /usage data)|on|acs_install_claude_code|acs_detect_claude_code|acs_uninstall_claude_code|Monitored CLIs||acs_configure_claude_code|acs_claude_code_status"
   "grok_monitor|Grok CLI credit usage (weekly, /usage data)|on|acs_install_grok|acs_detect_grok|acs_uninstall_grok|Monitored CLIs||acs_configure_grok|acs_grok_status"
-  "polling_rate|Polling rate (how often limits are checked)|on|acs_apply_polling_rate|||Poller||acs_configure_polling_rate|acs_polling_rate_status"
+  "polling_rate|Polling rate in seconds (how often limits are checked)|on|acs_apply_polling_rate|||Poller||acs_configure_polling_rate|acs_polling_rate_status"
   "tmux_console|Background tmux debug console (slash-command refresh)|on|acs_install_tmux_console|acs_detect_tmux_console|acs_uninstall_tmux_console|Poller"
   "startup_service|Start poller at login (systemd user service)|on|acs_install_startup_service|acs_detect_startup_service|acs_uninstall_startup_service|Poller"
 )
