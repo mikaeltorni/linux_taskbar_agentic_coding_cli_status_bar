@@ -48,6 +48,23 @@ class TestPollOnce:
         on_disk = json.loads(poller.status_path(sandbox_home).read_text())
         assert on_disk["clis"]["codex"]["windows"][0]["used_percent"] == 57.0
 
+    def test_claude_endpoint_interval_reaches_collector(
+        self, sandbox_home, monkeypatch
+    ):
+        """The configured endpoint interval is passed to collect_claude."""
+        cfg = _configure(sandbox_home)
+        cfg["clis"]["claude_code"]["endpoint_min_interval_seconds"] = 90
+        acs_config.save_config(cfg)
+        seen = {}
+
+        def fake_collect_claude(home, last, min_interval=None):
+            seen["min_interval"] = min_interval
+            return {"windows": [], "error": "mocked"}
+
+        monkeypatch.setattr(poller, "collect_claude", fake_collect_claude)
+        poller.poll_once(home=sandbox_home, now=NOW)
+        assert seen["min_interval"] == 90
+
     def test_disabled_cli_is_skipped(self, sandbox_home):
         cfg = _configure(sandbox_home)
         cfg["clis"]["codex"]["enabled"] = False
@@ -102,6 +119,49 @@ class TestPollOnce:
         assert ("agentic-cli-status", "codex") in captured
         pane_file = poller.state_dir(sandbox_home) / "panes" / "codex.txt"
         assert pane_file.read_text() == pane_text
+
+    def test_pane_fallback_keeps_endpoint_throttle_fields(
+        self, sandbox_home, monkeypatch
+    ):
+        """A pane replacement must not discard the endpoint throttle marks.
+
+        If checked_at/retry_after_until were dropped with the replaced
+        snapshot, the next tick would call the Claude endpoint again — every
+        poll tick — guaranteeing a 429 lockout at second-scale polling rates.
+        """
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        claude_calls = []
+
+        def fake_collect_claude(home, last, min_interval=None):
+            claude_calls.append(NOW)
+            return {
+                "source": "claude_oauth_endpoint",
+                "observed_at": None,
+                "plan": None,
+                "windows": [],
+                "error": "HTTP 429",
+                "checked_at": NOW,
+                "retry_after_until": NOW + 300,
+            }
+
+        monkeypatch.setattr(poller, "collect_claude", fake_collect_claude)
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        monkeypatch.setattr(
+            poller,
+            "refresh_and_capture",
+            lambda session, cli_id: (
+                "Current session: 8% used\nCurrent week: 39% used\n"
+                if cli_id == "claude_code"
+                else None
+            ),
+        )
+        status = poller.poll_once(home=sandbox_home, now=NOW)
+        claude = status["clis"]["claude_code"]
+        assert claude["source"] == "tmux_pane"
+        assert claude["checked_at"] == NOW
+        assert claude["retry_after_until"] == NOW + 300
 
     def test_tmux_refresh_is_throttled_between_ticks(self, sandbox_home, monkeypatch):
         cfg = _configure(sandbox_home)

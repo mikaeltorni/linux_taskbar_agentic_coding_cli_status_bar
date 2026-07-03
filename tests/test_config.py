@@ -44,6 +44,41 @@ class TestLoadConfig:
         path.write_text(json.dumps({"poll_interval_seconds": 2}), encoding="utf-8")
         assert acs_config.load_config()["poll_interval_seconds"] == 5
 
+    def test_claude_endpoint_interval_defaults_and_floor(self, sandbox_home):
+        """The Claude endpoint interval defaults to 180 s and floors at 60 s."""
+        assert (
+            acs_config.load_config()["clis"]["claude_code"][
+                "endpoint_min_interval_seconds"
+            ]
+            == 180
+        )
+        path = acs_config.config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {"clis": {"claude_code": {"endpoint_min_interval_seconds": 5}}}
+            ),
+            encoding="utf-8",
+        )
+        assert (
+            acs_config.load_config()["clis"]["claude_code"][
+                "endpoint_min_interval_seconds"
+            ]
+            == 180
+        )
+        path.write_text(
+            json.dumps(
+                {"clis": {"claude_code": {"endpoint_min_interval_seconds": 60}}}
+            ),
+            encoding="utf-8",
+        )
+        assert (
+            acs_config.load_config()["clis"]["claude_code"][
+                "endpoint_min_interval_seconds"
+            ]
+            == 60
+        )
+
     def test_invalid_source_falls_back(self, sandbox_home):
         path = acs_config.config_path()
         path.parent.mkdir(parents=True)

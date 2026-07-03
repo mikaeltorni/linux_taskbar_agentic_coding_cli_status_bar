@@ -15,6 +15,11 @@ reconfigurable:
   ``headless`` (never touch tmux), or ``tmux`` (pane capture only).
 - ``stale_after_seconds``: age after which headless data counts as stale and,
   in ``auto`` mode, a tmux slash-command refresh is attempted.
+
+``claude_code`` additionally supports ``endpoint_min_interval_seconds`` — how
+often the OAuth usage endpoint may be called (60-3600 s, default 180): the
+endpoint enforces its own small call budget with 429 lockouts, so it cannot
+follow second-scale polling rates.
 """
 
 from __future__ import annotations
@@ -52,10 +57,14 @@ MAX_POLL_INTERVAL_SECONDS = 3600
 #: Floor for the per-CLI staleness threshold (independent of the poll rate).
 MIN_STALE_AFTER_SECONDS = 60
 
-#: The Claude OAuth usage endpoint rate-limits aggressively below ~3 minutes,
-#: so the collector never calls it more often than this regardless of the
-#: configured polling rate.
+#: The Claude OAuth usage endpoint enforces a small call budget (measured
+#: 2026-07-03: a short burst is allowed, then HTTP 429 with a ~300 s
+#: Retry-After lockout), so its check interval is bounded independently of
+#: the polling rate. The default is the proven-safe 180 s; the floor is the
+#: lowest value that stays near the observed budget. The effective value is
+#: the install-configurable ``clis.claude_code.endpoint_min_interval_seconds``.
 CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS = 180
+MIN_CLAUDE_ENDPOINT_INTERVAL_SECONDS = 60
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "poll_interval_seconds": 5,
@@ -73,6 +82,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": True,
             "source": "auto",
             "stale_after_seconds": 1800,
+            "endpoint_min_interval_seconds": CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS,
         },
         "grok": {
             "enabled": True,
@@ -172,6 +182,25 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
         if not isinstance(stale, int) or stale < MIN_STALE_AFTER_SECONDS:
             cli["stale_after_seconds"] = defaults["stale_after_seconds"]
         cli["enabled"] = bool(cli.get("enabled", defaults["enabled"]))
+
+    claude = config["clis"]["claude_code"]
+    endpoint_interval = claude.get("endpoint_min_interval_seconds")
+    if not isinstance(endpoint_interval, int) or not (
+        MIN_CLAUDE_ENDPOINT_INTERVAL_SECONDS
+        <= endpoint_interval
+        <= MAX_POLL_INTERVAL_SECONDS
+    ):
+        LOGGER.warning(
+            "claude endpoint_min_interval_seconds %r out of range [%d, %d]; "
+            "using default %d",
+            endpoint_interval,
+            MIN_CLAUDE_ENDPOINT_INTERVAL_SECONDS,
+            MAX_POLL_INTERVAL_SECONDS,
+            CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS,
+        )
+        claude["endpoint_min_interval_seconds"] = (
+            CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS
+        )
     return config
 
 

@@ -241,38 +241,75 @@ def _claude_access_token(home: Path) -> tuple[str | None, str | None, str | None
     return token, oauth.get("subscriptionType"), None
 
 
+def _carry_last_reading(
+    snapshot: dict[str, Any], last_result: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Fill an empty error snapshot with the previous good reading.
+
+    A failed endpoint attempt must never blank the indicator (that would also
+    wrongly trigger the stale/tmux fallback), so the last known windows, their
+    observation time, and the plan are carried forward alongside the error.
+    """
+    if last_result and last_result.get("windows") and not snapshot["windows"]:
+        snapshot["windows"] = last_result["windows"]
+        snapshot["observed_at"] = last_result.get("observed_at")
+        snapshot["plan"] = snapshot["plan"] or last_result.get("plan")
+    return snapshot
+
+
+def _retry_after_seconds(exc: urllib.error.HTTPError, fallback: float) -> float:
+    """Parse a Retry-After header (integer seconds) with a safe fallback."""
+    value = (exc.headers.get("Retry-After") or "").strip()
+    if value.isdigit():
+        return float(value)
+    return fallback
+
+
 def collect_claude(
     home: Path,
     last_result: dict[str, Any] | None = None,
     now: float | None = None,
     opener: Any = None,
+    min_interval: float | None = None,
 ) -> dict[str, Any]:
     """Collect Claude Code rate limits from the OAuth usage endpoint.
 
     Enforces a minimum interval between endpoint *attempts* (the endpoint
-    429s aggressive pollers, and short poll ticks must not turn failures into
-    a retry storm); within the window the previous result is returned
-    unchanged. Every attempted snapshot carries ``checked_at``.
+    grants only a small call budget and 429-locks aggressive pollers for
+    minutes, so short poll ticks must not turn failures into a retry storm);
+    within the window the previous result is returned unchanged. A 429's
+    Retry-After lockout is honored on top of the interval, and failed
+    attempts keep the last good reading (see :func:`_carry_last_reading`).
+    Every attempted snapshot carries ``checked_at``.
 
     Args:
         home: The user's home directory.
         last_result: The previous snapshot for this CLI, if any.
         now: Current epoch override (tests).
         opener: ``urllib.request.urlopen``-compatible callable (tests).
+        min_interval: Configured seconds between endpoint attempts
+            (``clis.claude_code.endpoint_min_interval_seconds``); defaults to
+            :data:`CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS`.
     """
     now = now if now is not None else time.time()
+    if min_interval is None:
+        min_interval = CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS
+    # checked_at is only ever written by this collector (and carried across
+    # pane replacements by the poller), so its presence alone gates attempts.
     if (
         last_result
-        and last_result.get("source") == "claude_oauth_endpoint"
         and last_result.get("checked_at")
-        and now - last_result["checked_at"] < CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS
+        and (
+            now - last_result["checked_at"] < min_interval
+            or now < last_result.get("retry_after_until", 0)
+        )
     ):
         return last_result
     token, subscription, error = _claude_access_token(home)
     if token is None:
         snapshot = _snapshot("claude_oauth_endpoint", plan=subscription, error=error)
         snapshot["checked_at"] = now
-        return snapshot
+        return _carry_last_reading(snapshot, last_result)
     request = urllib.request.Request(
         CLAUDE_USAGE_URL,
         headers={
@@ -293,12 +330,19 @@ def collect_claude(
             "claude_oauth_endpoint", plan=subscription, error=f"HTTP {exc.code}"
         )
         snapshot["checked_at"] = now
-        return snapshot
+        if exc.code == 429:
+            retry_after = _retry_after_seconds(exc, min_interval)
+            snapshot["retry_after_until"] = now + retry_after
+            LOGGER.warning(
+                "claude usage endpoint locked out; retrying after %.0f s",
+                retry_after,
+            )
+        return _carry_last_reading(snapshot, last_result)
     except (urllib.error.URLError, OSError, ValueError) as exc:
         LOGGER.error("claude usage endpoint failed: %s", exc)
         snapshot = _snapshot("claude_oauth_endpoint", plan=subscription, error=str(exc))
         snapshot["checked_at"] = now
-        return snapshot
+        return _carry_last_reading(snapshot, last_result)
     windows = _claude_windows(payload)
     if not windows:
         snapshot = _snapshot(
@@ -306,10 +350,11 @@ def collect_claude(
             plan=subscription,
             error="no rate-limit windows in endpoint response",
         )
-    else:
-        snapshot = _snapshot(
-            "claude_oauth_endpoint", observed_at=now, plan=subscription, windows=windows
-        )
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    snapshot = _snapshot(
+        "claude_oauth_endpoint", observed_at=now, plan=subscription, windows=windows
+    )
     snapshot["checked_at"] = now
     return snapshot
 

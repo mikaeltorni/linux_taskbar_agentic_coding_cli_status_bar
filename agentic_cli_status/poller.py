@@ -36,10 +36,14 @@ PANE_DIR_NAME = "panes"
 #: second-scale poll ticks cannot spam the console windows.
 TMUX_REFRESH_MIN_INTERVAL_SECONDS = 60
 
+# Headless collector dispatch. Each entry receives the CLI's config dict so
+# per-CLI knobs (like Claude's endpoint interval) reach the collector.
 _HEADLESS_COLLECTORS = {
-    "codex": lambda home, last: collect_codex(home),
-    "claude_code": lambda home, last: collect_claude(home, last),
-    "grok": lambda home, last: collect_grok(home),
+    "codex": lambda home, last, cli_config: collect_codex(home),
+    "claude_code": lambda home, last, cli_config: collect_claude(
+        home, last, min_interval=cli_config.get("endpoint_min_interval_seconds")
+    ),
+    "grok": lambda home, last, cli_config: collect_grok(home),
 }
 
 
@@ -74,7 +78,7 @@ def _collect_cli(
     stale_after = cli_config["stale_after_seconds"]
     snapshot: dict[str, Any] = {"windows": []}
     if source_mode in ("auto", "headless"):
-        snapshot = _HEADLESS_COLLECTORS[cli_id](home, last)
+        snapshot = _HEADLESS_COLLECTORS[cli_id](home, last, cli_config)
     last_tmux_attempt = (last or {}).get("tmux_attempt_at")
     tmux_wanted = (
         tmux_config.get("enabled", True)
@@ -85,6 +89,14 @@ def _collect_cli(
             or now - last_tmux_attempt >= TMUX_REFRESH_MIN_INTERVAL_SECONDS
         )
     )
+    # Endpoint throttle bookkeeping (Claude's checked_at / retry_after_until)
+    # must survive a pane replacement below, or the next tick would attempt
+    # the endpoint again on every poll tick and 429-lock the account.
+    endpoint_marks = {
+        key: snapshot[key]
+        for key in ("checked_at", "retry_after_until")
+        if key in snapshot
+    }
     if tmux_wanted:
         last_tmux_attempt = now
         pane_text = refresh_and_capture(tmux_config["session"], cli_id)
@@ -98,6 +110,7 @@ def _collect_cli(
                     snapshot = pane_snapshot
             elif not snapshot.get("windows"):
                 snapshot = pane_snapshot
+    snapshot.update(endpoint_marks)
     if last_tmux_attempt is not None:
         # Carry the throttle timestamp across ticks (and pane replacements).
         snapshot["tmux_attempt_at"] = last_tmux_attempt

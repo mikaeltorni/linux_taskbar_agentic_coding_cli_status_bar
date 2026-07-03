@@ -121,6 +121,8 @@ done
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
 assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 5' \
   "Default polling rate should be 5 seconds"
+assert_file_contains "$CONFIG_FILE" '"endpoint_min_interval_seconds": 180' \
+  "Claude endpoint interval should be seeded configurable at 180 seconds"
 assert_file_contains "$TMP_DIR/install-1.out" "seconds" \
   "Install output should state the polling rate is in seconds"
 

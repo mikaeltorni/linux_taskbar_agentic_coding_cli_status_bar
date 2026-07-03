@@ -35,7 +35,7 @@ Two cooperating parts, connected only by a JSON file:
 | CLI | Headless source | tmux slash command |
 |---|---|---|
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` `token_count` events (`rate_limits.primary/secondary`: 5h + weekly `used_percent`, `resets_at`, plan) | `/status` |
-| Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h, weekly, and model-scoped weekly windows (including Fable) as `/usage`. Self-throttled to ≥ 180 s regardless of polling rate | `/usage` |
+| Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h, weekly, and model-scoped weekly windows (including Fable) as `/usage`. Self-throttled to a configurable interval (60–3600 s, default 180) regardless of polling rate; 429 `Retry-After` lockouts are honored and the last good reading is kept on errors | `/usage` |
 | Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/*.log` (`creditUsagePercent` + weekly period + tier) | `/usage` |
 
 None of these send a prompt or start a model turn, so **monitoring never
@@ -94,6 +94,13 @@ action or `bash install.sh --configure-component <id>`):
 - **source** — `auto` (headless first, tmux pane fallback when stale),
   `headless` (never touch tmux), or `tmux` (pane capture only).
 - **stale_after_seconds** — age after which headless data counts as stale.
+
+`claude_code_monitor` additionally exposes **endpoint_min_interval_seconds**
+(60–3600, default 180) — how often the OAuth usage endpoint may be checked.
+The endpoint enforces its own small call budget (HTTP 429 with a multi-minute
+`Retry-After` lockout when polled aggressively — measured 2026-07-03), so the
+Claude reading cannot follow second-scale polling rates; on endpoint errors
+the poller honors `Retry-After` and keeps showing the last good reading.
 
 All options live in `~/.config/agentic-cli-status/config.json`; the poller
 re-reads it every tick, so changes apply without a service restart.

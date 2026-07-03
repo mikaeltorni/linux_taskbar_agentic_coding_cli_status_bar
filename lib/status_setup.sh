@@ -203,8 +203,40 @@ acs_codex_status()           { _acs_cli_status codex; }
 acs_install_claude_code()    { _acs_enable_cli claude_code; }
 acs_uninstall_claude_code()  { _acs_disable_cli claude_code; }
 acs_detect_claude_code()     { _acs_detect_cli claude_code; }
-acs_configure_claude_code()  { _acs_configure_cli claude_code; }
-acs_claude_code_status()     { _acs_cli_status claude_code; }
+
+# acs_configure_claude_code - Claude options: the generic per-CLI set plus the
+# usage-endpoint check interval. The endpoint grants only a small call budget
+# (429 + multi-minute lockout when polled aggressively), so its interval is
+# bounded to 60-3600 seconds independently of the main polling rate.
+acs_configure_claude_code() {
+  _acs_configure_cli claude_code || return 1
+  local current value
+  current="$(acs_config_get clis.claude_code.endpoint_min_interval_seconds)"
+  while true; do
+    value=""
+    read -r -e -i "$current" \
+      -p "Claude usage-endpoint check interval in SECONDS (60-3600, default 180; lower risks 429 lockouts): " \
+      value </dev/tty || return 1
+    if [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 60 && value <= 3600 )); then
+      acs_config_set "clis.claude_code.endpoint_min_interval_seconds" "$value"
+      msg "Claude endpoint interval saved: every ${value}s (applies on the next tick)."
+      return 0
+    fi
+    msg "Enter a whole number of seconds from 60 to 3600." >&2
+  done
+}
+
+# acs_claude_code_status - Generic per-CLI summary plus the endpoint interval.
+acs_claude_code_status() {
+  local base interval
+  base="$(_acs_cli_status claude_code)"
+  interval="$(acs_config_get clis.claude_code.endpoint_min_interval_seconds 2>/dev/null || true)"
+  if [ -n "$interval" ]; then
+    printf '%s, endpoint %ss\n' "$base" "$interval"
+  else
+    printf '%s\n' "$base"
+  fi
+}
 
 acs_install_grok()           { _acs_enable_cli grok; }
 acs_uninstall_grok()         { _acs_disable_cli grok; }

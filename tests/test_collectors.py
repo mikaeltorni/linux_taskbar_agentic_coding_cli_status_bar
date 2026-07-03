@@ -236,6 +236,103 @@ class TestCollectClaude:
         assert second is first
         assert len(calls) == 1
 
+    def _http_error(self, code, headers=None):
+        import email.message
+
+        message = email.message.Message()
+        for key, value in (headers or {}).items():
+            message[key] = value
+        return collectors.urllib.error.HTTPError(
+            collectors.CLAUDE_USAGE_URL, code, "err", message, io.BytesIO(b"")
+        )
+
+    def test_error_preserves_previous_windows(self, sandbox_home):
+        """A failed refresh must keep showing the last good reading."""
+        write_claude_credentials(sandbox_home)
+        good = collectors.collect_claude(
+            sandbox_home,
+            opener=self._opener_returning({"five_hour": {"utilization": 5}}, []),
+            now=1000.0,
+        )
+
+        def failing_opener(request, timeout):
+            raise collectors.urllib.error.URLError("offline")
+
+        result = collectors.collect_claude(
+            sandbox_home, last_result=good, opener=failing_opener, now=1200.0
+        )
+        assert result["error"]
+        assert result["windows"] == good["windows"]
+        assert result["observed_at"] == 1000.0
+        assert result["checked_at"] == 1200.0
+
+    def test_429_preserves_windows_and_honors_retry_after(self, sandbox_home):
+        """A 429 keeps the last reading and blocks retries for Retry-After."""
+        write_claude_credentials(sandbox_home)
+        calls = []
+        good = collectors.collect_claude(
+            sandbox_home,
+            opener=self._opener_returning({"five_hour": {"utilization": 5}}, []),
+            now=1000.0,
+        )
+
+        def limited_opener(request, timeout):
+            calls.append(request)
+            raise self._http_error(429, {"Retry-After": "300"})
+
+        limited = collectors.collect_claude(
+            sandbox_home, last_result=good, opener=limited_opener, now=1200.0
+        )
+        assert limited["error"] == "HTTP 429"
+        assert limited["windows"] == good["windows"]
+        assert limited["retry_after_until"] == 1500.0
+        # Past the min interval but inside the Retry-After lockout: no attempt.
+        blocked = collectors.collect_claude(
+            sandbox_home, last_result=limited, opener=limited_opener, now=1450.0
+        )
+        assert blocked is limited
+        assert len(calls) == 1
+        # After the lockout expires the endpoint is attempted again.
+        collectors.collect_claude(
+            sandbox_home, last_result=limited, opener=limited_opener, now=1501.0
+        )
+        assert len(calls) == 2
+
+    def test_throttle_applies_to_pane_replaced_snapshot(self, sandbox_home):
+        """checked_at carried on a pane snapshot still blocks endpoint calls."""
+        write_claude_credentials(sandbox_home)
+        calls = []
+        opener = self._opener_returning({"five_hour": {"utilization": 5}}, calls)
+        pane_last = {
+            "source": "tmux_pane",
+            "windows": [{"label": "5h", "used_percent": 8.0, "resets_at": None}],
+            "checked_at": 1000.0,
+        }
+        blocked = collectors.collect_claude(
+            sandbox_home, last_result=pane_last, opener=opener, now=1100.0
+        )
+        assert blocked is pane_last
+        assert calls == []
+
+    def test_custom_min_interval_is_honored(self, sandbox_home):
+        """The configured endpoint interval overrides the 180 s default."""
+        write_claude_credentials(sandbox_home)
+        calls = []
+        opener = self._opener_returning({"five_hour": {"utilization": 5}}, calls)
+        first = collectors.collect_claude(
+            sandbox_home, opener=opener, now=1000.0, min_interval=60
+        )
+        blocked = collectors.collect_claude(
+            sandbox_home, last_result=first, opener=opener, now=1059.0,
+            min_interval=60,
+        )
+        collectors.collect_claude(
+            sandbox_home, last_result=first, opener=opener, now=1061.0,
+            min_interval=60,
+        )
+        assert blocked is first
+        assert len(calls) == 2
+
     def test_missing_credentials_reports_error(self, sandbox_home):
         result = collectors.collect_claude(sandbox_home, now=1.0)
         assert result["windows"] == []
