@@ -32,7 +32,8 @@ const CLI_TAGS = [
   ['grok', 'GK'],
 ];
 
-// Usage bands mapped to stylesheet classes.
+// Usage bands mapped to stylesheet classes (thresholds are in percent USED;
+// the rendered numbers are percent LEFT, so crit = 15% or less left).
 const WARN_PERCENT = 60;
 const CRIT_PERCENT = 85;
 
@@ -86,7 +87,10 @@ function severityClass(snapshot) {
 }
 
 /**
- * Format the compact taskbar text for one CLI, e.g. "CX 57·43%".
+ * Format the compact taskbar text for one CLI, e.g. "CX 43·57%".
+ *
+ * Percentages shown are the limits LEFT (remaining), matching how the CLIs
+ * themselves phrase it ("Weekly limit left"), not the used share.
  *
  * @param {string} tag - Short CLI tag.
  * @param {object} snapshot - One CLI entry from status.json.
@@ -96,7 +100,9 @@ function segmentText(tag, snapshot) {
   const windows = snapshot?.windows ?? [];
   if (!windows.length)
     return `${tag} –`;
-  const parts = windows.map(w => `${Math.round(w.used_percent ?? 0)}`).join('·');
+  const parts = windows
+    .map(w => `${Math.round(100 - (w.used_percent ?? 0))}`)
+    .join('·');
   return `${tag} ${parts}%${snapshot.stale ? '?' : ''}`;
 }
 
@@ -182,7 +188,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       `${name}${plan}`, { reactive: false }));
     for (const window of snapshot.windows ?? []) {
       this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-        `   ${window.label}: ${Math.round(window.used_percent ?? 0)}% used` +
+        `   ${window.label}: ${Math.round(100 - (window.used_percent ?? 0))}% left` +
         resetsText(window.resets_at),
         { reactive: false }));
     }
