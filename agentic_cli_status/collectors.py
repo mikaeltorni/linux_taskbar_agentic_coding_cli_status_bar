@@ -48,6 +48,11 @@ from .config import CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS
 #: How many days of Codex session directories to scan backwards.
 CODEX_SCAN_DAYS = 7
 
+#: How much of the end of a large session/log file to read per tick. The
+#: newest rate-limit record lives at the end, so a bounded tail keeps
+#: second-scale polling cheap even for multi-megabyte files.
+TAIL_READ_BYTES = 262144
+
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CLAUDE_OAUTH_BETA = "oauth-2025-04-20"
 #: Fallback User-Agent version when ``claude --version`` is unavailable. The
@@ -94,6 +99,25 @@ def _to_percent(value: Any) -> float | None:
     return None
 
 
+def _tail_lines(path: Path, max_bytes: int = TAIL_READ_BYTES) -> list[str]:
+    """Return the last complete lines of a file, reading at most ``max_bytes``.
+
+    Args:
+        path: File to read.
+        max_bytes: Byte budget for the tail read.
+
+    Raises:
+        OSError: Propagated so callers keep their existing error handling.
+    """
+    size = path.stat().st_size
+    with path.open("rb") as fh:
+        if size > max_bytes:
+            fh.seek(size - max_bytes)
+            fh.readline()  # drop the (likely) partial first line
+        data = fh.read()
+    return data.decode("utf-8", errors="replace").splitlines()
+
+
 # ---------------------------------------------------------------------------
 # Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
 # ---------------------------------------------------------------------------
@@ -126,19 +150,18 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
     last: dict[str, Any] | None = None
     last_ts: float | None = None
     try:
-        with rollout.open(encoding="utf-8") as fh:
-            for line in fh:
-                if '"rate_limits"' not in line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                payload = event.get("payload") or {}
-                limits = payload.get("rate_limits")
-                if isinstance(limits, dict):
-                    last = limits
-                    last_ts = _to_epoch(event.get("timestamp"))
+        for line in _tail_lines(rollout):
+            if '"rate_limits"' not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            payload = event.get("payload") or {}
+            limits = payload.get("rate_limits")
+            if isinstance(limits, dict):
+                last = limits
+                last_ts = _to_epoch(event.get("timestamp"))
     except OSError as exc:
         LOGGER.error("cannot read codex rollout %s: %s", rollout, exc)
         return None
@@ -226,9 +249,10 @@ def collect_claude(
 ) -> dict[str, Any]:
     """Collect Claude Code rate limits from the OAuth usage endpoint.
 
-    Enforces a minimum interval between endpoint calls (the endpoint 429s
-    aggressive pollers); within the window the previous result is returned
-    unchanged.
+    Enforces a minimum interval between endpoint *attempts* (the endpoint
+    429s aggressive pollers, and short poll ticks must not turn failures into
+    a retry storm); within the window the previous result is returned
+    unchanged. Every attempted snapshot carries ``checked_at``.
 
     Args:
         home: The user's home directory.
@@ -240,13 +264,15 @@ def collect_claude(
     if (
         last_result
         and last_result.get("source") == "claude_oauth_endpoint"
-        and last_result.get("observed_at")
-        and now - last_result["observed_at"] < CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS
+        and last_result.get("checked_at")
+        and now - last_result["checked_at"] < CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS
     ):
         return last_result
     token, subscription, error = _claude_access_token(home)
     if token is None:
-        return _snapshot("claude_oauth_endpoint", plan=subscription, error=error)
+        snapshot = _snapshot("claude_oauth_endpoint", plan=subscription, error=error)
+        snapshot["checked_at"] = now
+        return snapshot
     request = urllib.request.Request(
         CLAUDE_USAGE_URL,
         headers={
@@ -257,27 +283,35 @@ def collect_claude(
         },
     )
     opener = opener or urllib.request.urlopen
+    snapshot: dict[str, Any]
     try:
         with opener(request, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         LOGGER.error("claude usage endpoint HTTP %s", exc.code)
-        return _snapshot(
+        snapshot = _snapshot(
             "claude_oauth_endpoint", plan=subscription, error=f"HTTP {exc.code}"
         )
+        snapshot["checked_at"] = now
+        return snapshot
     except (urllib.error.URLError, OSError, ValueError) as exc:
         LOGGER.error("claude usage endpoint failed: %s", exc)
-        return _snapshot("claude_oauth_endpoint", plan=subscription, error=str(exc))
+        snapshot = _snapshot("claude_oauth_endpoint", plan=subscription, error=str(exc))
+        snapshot["checked_at"] = now
+        return snapshot
     windows = _claude_windows(payload)
     if not windows:
-        return _snapshot(
+        snapshot = _snapshot(
             "claude_oauth_endpoint",
             plan=subscription,
             error="no rate-limit windows in endpoint response",
         )
-    return _snapshot(
-        "claude_oauth_endpoint", observed_at=now, plan=subscription, windows=windows
-    )
+    else:
+        snapshot = _snapshot(
+            "claude_oauth_endpoint", observed_at=now, plan=subscription, windows=windows
+        )
+    snapshot["checked_at"] = now
+    return snapshot
 
 
 def _claude_windows(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -344,18 +378,17 @@ def _grok_last_billing(log_file: Path) -> dict[str, Any] | None:
     last: dict[str, Any] | None = None
     last_ts: float | None = None
     try:
-        with log_file.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if "fetched credits config" not in line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except ValueError:
-                    continue
-                ctx = record.get("ctx") or {}
-                if isinstance(ctx.get("config"), dict):
-                    last = ctx
-                    last_ts = _to_epoch(record.get("ts"))
+        for line in _tail_lines(log_file):
+            if "fetched credits config" not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            ctx = record.get("ctx") or {}
+            if isinstance(ctx.get("config"), dict):
+                last = ctx
+                last_ts = _to_epoch(record.get("ts"))
     except OSError as exc:
         LOGGER.error("cannot read grok log %s: %s", log_file, exc)
         return None

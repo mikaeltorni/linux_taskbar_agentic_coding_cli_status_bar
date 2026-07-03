@@ -167,6 +167,24 @@ class TestCollectClaude:
         assert len(calls) == 2
         assert third["observed_at"] == 1181.0
 
+    def test_failed_attempts_are_also_throttled(self, sandbox_home):
+        write_claude_credentials(sandbox_home)
+        calls = []
+
+        def failing_opener(request, timeout):
+            calls.append(request)
+            raise collectors.urllib.error.URLError("offline")
+
+        first = collectors.collect_claude(
+            sandbox_home, opener=failing_opener, now=1000.0
+        )
+        second = collectors.collect_claude(
+            sandbox_home, last_result=first, opener=failing_opener, now=1005.0
+        )
+        assert first["error"] and first["checked_at"] == 1000.0
+        assert second is first
+        assert len(calls) == 1
+
     def test_missing_credentials_reports_error(self, sandbox_home):
         result = collectors.collect_claude(sandbox_home, now=1.0)
         assert result["windows"] == []
@@ -221,3 +239,26 @@ class TestParsePane:
         result = collectors.parse_pane("codex", "welcome to codex\n", now=1.0)
         assert result["windows"] == []
         assert result["error"]
+
+
+class TestTailLines:
+    def test_small_file_returns_all_lines(self, tmp_path):
+        target = tmp_path / "small.log"
+        target.write_text("one\ntwo\nthree\n", encoding="utf-8")
+        assert collectors._tail_lines(target) == ["one", "two", "three"]
+
+    def test_large_file_reads_only_complete_tail_lines(self, tmp_path):
+        target = tmp_path / "big.log"
+        lines = [f"line-{i:06d}" for i in range(1000)]
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tail = collectors._tail_lines(target, max_bytes=200)
+        assert tail == lines[-len(tail):]
+        assert 0 < len(tail) < 1000
+        assert all(line.startswith("line-") for line in tail)
+
+    def test_grok_collector_finds_record_in_large_log(self, sandbox_home):
+        records = [{"msg": f"noise-{i}"} for i in range(50)]
+        records.append(grok_billing_record(66))
+        write_grok_log(sandbox_home, "grok.log", records)
+        result = collectors.collect_grok(sandbox_home)
+        assert result["windows"][0]["used_percent"] == 66.0

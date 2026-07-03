@@ -102,3 +102,27 @@ class TestPollOnce:
         assert ("agentic-cli-status", "codex") in captured
         pane_file = poller.state_dir(sandbox_home) / "panes" / "codex.txt"
         assert pane_file.read_text() == pane_text
+
+    def test_tmux_refresh_is_throttled_between_ticks(self, sandbox_home, monkeypatch):
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        attempts = []
+
+        def _fake_capture(session, cli_id):
+            attempts.append(cli_id)
+            return None
+
+        monkeypatch.setattr(poller, "refresh_and_capture", _fake_capture)
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        first = poller.poll_once(home=sandbox_home, now=NOW)
+        codex_attempts = attempts.count("codex")
+        assert codex_attempts == 1
+        assert first["clis"]["codex"]["tmux_attempt_at"] == NOW
+        # A second tick 5 seconds later must not re-attempt the refresh.
+        second = poller.poll_once(home=sandbox_home, previous=first, now=NOW + 5)
+        assert attempts.count("codex") == codex_attempts
+        assert second["clis"]["codex"]["tmux_attempt_at"] == NOW
+        # After the throttle window it attempts again.
+        poller.poll_once(home=sandbox_home, previous=second, now=NOW + 61)
+        assert attempts.count("codex") == codex_attempts + 1

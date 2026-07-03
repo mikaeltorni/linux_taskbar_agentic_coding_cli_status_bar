@@ -32,6 +32,10 @@ from .tmux_console import ensure_console, refresh_and_capture
 STATUS_FILE_NAME = "status.json"
 PANE_DIR_NAME = "panes"
 
+#: Minimum seconds between tmux slash-command refreshes per CLI, so
+#: second-scale poll ticks cannot spam the console windows.
+TMUX_REFRESH_MIN_INTERVAL_SECONDS = 60
+
 _HEADLESS_COLLECTORS = {
     "codex": lambda home, last: collect_codex(home),
     "claude_code": lambda home, last: collect_claude(home, last),
@@ -71,12 +75,18 @@ def _collect_cli(
     snapshot: dict[str, Any] = {"windows": []}
     if source_mode in ("auto", "headless"):
         snapshot = _HEADLESS_COLLECTORS[cli_id](home, last)
+    last_tmux_attempt = (last or {}).get("tmux_attempt_at")
     tmux_wanted = (
         tmux_config.get("enabled", True)
         and source_mode in ("auto", "tmux")
         and (source_mode == "tmux" or _is_stale(snapshot, stale_after, now))
+        and (
+            last_tmux_attempt is None
+            or now - last_tmux_attempt >= TMUX_REFRESH_MIN_INTERVAL_SECONDS
+        )
     )
     if tmux_wanted:
+        last_tmux_attempt = now
         pane_text = refresh_and_capture(tmux_config["session"], cli_id)
         if pane_text is not None:
             _save_pane_capture(home, cli_id, pane_text)
@@ -88,6 +98,9 @@ def _collect_cli(
                     snapshot = pane_snapshot
             elif not snapshot.get("windows"):
                 snapshot = pane_snapshot
+    if last_tmux_attempt is not None:
+        # Carry the throttle timestamp across ticks (and pane replacements).
+        snapshot["tmux_attempt_at"] = last_tmux_attempt
     snapshot["stale"] = _is_stale(snapshot, stale_after, now)
     return snapshot
 
