@@ -14,15 +14,23 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 // CLIs (Codex, Claude Code, Grok CLI). The extension renders ONLY: all data
 // collection happens in the agentic-cli-status poller service, which writes
 // ~/.local/state/agentic-cli-status/status.json. The extension watches that
-// file with a Gio file monitor (plus a slow fallback timer) and never talks
-// to any CLI or network itself, so it can never consume plan limits.
+// file with a Gio file monitor plus a fallback timer paced at the poller's
+// own configured rate (poll_interval_seconds, set by the installer's
+// polling_rate component and echoed into status.json), and never talks to
+// any CLI or network itself, so it can never consume plan limits.
 //
 // Components:
 //   - log()                  Centralized, level-aware journal logging helper.
 //   - AgenticCliStatusButton Panel button: per-CLI colored segments + details menu.
 //   - AgenticCliStatusExtension  Lifecycle: enable/disable, file monitor, timer.
 
-const FALLBACK_REFRESH_SECONDS = 60;
+// Fallback-timer bounds mirror the poller's poll_interval_seconds validation
+// (5-3600 s); the default matches the poller's default rate so the bar keeps
+// the configured cadence even when file-monitor events are missed or the
+// status file does not exist yet.
+const MIN_REFRESH_SECONDS = 5;
+const MAX_REFRESH_SECONDS = 3600;
+const DEFAULT_REFRESH_SECONDS = 5;
 const LOG_PREFIX = '[agentic-cli-status]';
 
 // Short taskbar tags per CLI id, in display order.
@@ -213,13 +221,8 @@ export default class AgenticCliStatusExtension extends Extension {
       log('warn', `file monitor unavailable, timer only: ${error}`);
       this._monitor = null;
     }
-    // Slow fallback timer: catches missed monitor events and recomputes
-    // staleness display even when the file does not change.
-    this._timerId = GLib.timeout_add_seconds(
-      GLib.PRIORITY_DEFAULT, FALLBACK_REFRESH_SECONDS, () => {
-        this._refresh();
-        return GLib.SOURCE_CONTINUE;
-      });
+    this._timerId = null;
+    this._timerSeconds = 0;
     this._refresh();
   }
 
@@ -240,7 +243,8 @@ export default class AgenticCliStatusExtension extends Extension {
   }
 
   /**
-   * Read status.json and re-render the indicator (best-effort).
+   * Read status.json, re-render the indicator, and re-arm the fallback
+   * timer at the poller's configured rate (best-effort).
    *
    * @returns {void}
    */
@@ -258,5 +262,39 @@ export default class AgenticCliStatusExtension extends Extension {
     } catch (error) {
       log('error', `render failed: ${error}`);
     }
+    this._scheduleRefresh(status);
+  }
+
+  /**
+   * (Re)arm the one-shot fallback refresh timer.
+   *
+   * The delay follows the poller's configured rate: status.json carries the
+   * installer-configurable poll_interval_seconds, clamped here to the same
+   * 5-3600 s range the poller validates. Every refresh (file-monitor event
+   * or timer firing) pushes the timer back, so it only actually fires when
+   * a status write was missed — guaranteeing the bar is never more than one
+   * configured interval behind.
+   *
+   * @param {?object} status - Parsed status.json content, or null.
+   * @returns {void}
+   */
+  _scheduleRefresh(status) {
+    const configured = Number(status?.poll_interval_seconds);
+    const seconds = Number.isFinite(configured)
+      ? Math.min(MAX_REFRESH_SECONDS,
+        Math.max(MIN_REFRESH_SECONDS, Math.round(configured)))
+      : DEFAULT_REFRESH_SECONDS;
+    if (seconds !== this._timerSeconds) {
+      log('info', `fallback refresh timer set to ${seconds}s`);
+      this._timerSeconds = seconds;
+    }
+    if (this._timerId)
+      GLib.source_remove(this._timerId);
+    this._timerId = GLib.timeout_add_seconds(
+      GLib.PRIORITY_DEFAULT, seconds, () => {
+        this._timerId = null;
+        this._refresh();
+        return GLib.SOURCE_REMOVE;
+      });
   }
 }

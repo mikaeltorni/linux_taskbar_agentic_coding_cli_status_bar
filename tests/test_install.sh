@@ -110,6 +110,8 @@ for asset in extension.js metadata.json stylesheet.css; do
 done
 assert_file_contains "$EXT_DIR/metadata.json" "\"uuid\": \"$EXTENSION_UUID\"" \
   "metadata.json should carry the right uuid"
+assert_file_contains "$EXT_DIR/extension.js" "poll_interval_seconds" \
+  "Extension refresh timer should follow the configured polling rate"
 
 CONFIG_FILE="$TARGET_HOME/.config/agentic-cli-status/config.json"
 assert_file_exists "$CONFIG_FILE" "Should seed the default config"

@@ -24,8 +24,10 @@ Two cooperating parts, connected only by a JSON file:
    endpoint is called at most every 180 s and tmux refreshes run at most once
    per minute per CLI.
 2. **GNOME Shell extension** (`agentic-cli-status@local`) watches that file
-   with a file monitor and renders the indicator. It never talks to a CLI or
-   the network itself.
+   with a file monitor plus a fallback timer paced at the same configured
+   polling rate (`poll_interval_seconds` is echoed into `status.json`), so
+   the indicator refreshes at the installed rate even if a monitor event is
+   missed. It never talks to a CLI or the network itself.
 
 ### Data sources (headless first — zero token cost)
 
@@ -119,7 +121,7 @@ agentic_cli_status/          Python poller package (deployed to ~/.local/share/a
   collectors.py              Headless collectors (codex/claude_code/grok) + tmux pane parser
   tmux_console.py            Debug console: session/window management, slash-command refresh
   poller.py                  Aggregating tick loop; writes status.json atomically
-agentic-cli-status@local/    GNOME Shell extension (file-monitor + renderer only)
+agentic-cli-status@local/    GNOME Shell extension (file-monitor + poll-rate-paced timer + renderer only)
 installer/components.sh      Component manifest (shared installer framework)
 lib/status_setup.sh          Install functions (core deploy, per-CLI config, service, tmux)
 systemd/agentic-cli-status.service  User unit template (WantedBy=default.target)
