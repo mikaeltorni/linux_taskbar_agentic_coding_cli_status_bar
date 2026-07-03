@@ -1,0 +1,75 @@
+"""Tests for config defaults, validation, and round-tripping."""
+
+from __future__ import annotations
+
+import json
+
+from agentic_cli_status import config as acs_config
+
+
+class TestLoadConfig:
+    def test_defaults_when_missing(self, sandbox_home):
+        cfg = acs_config.load_config()
+        assert cfg["poll_interval_seconds"] == 300
+        assert set(cfg["clis"]) == set(acs_config.CLI_IDS)
+        for cli in acs_config.CLI_IDS:
+            assert cfg["clis"][cli]["enabled"] is True
+            assert cfg["clis"][cli]["source"] == "auto"
+
+    def test_cline_is_not_monitored(self):
+        assert "cline" not in acs_config.CLI_IDS
+
+    def test_partial_config_merges_over_defaults(self, sandbox_home):
+        path = acs_config.config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "poll_interval_seconds": 120,
+                    "clis": {"grok": {"enabled": False}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        cfg = acs_config.load_config()
+        assert cfg["poll_interval_seconds"] == 120
+        assert cfg["clis"]["grok"]["enabled"] is False
+        assert cfg["clis"]["grok"]["source"] == "auto"
+        assert cfg["clis"]["codex"]["enabled"] is True
+
+    def test_out_of_range_interval_falls_back(self, sandbox_home):
+        path = acs_config.config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"poll_interval_seconds": 5}), encoding="utf-8")
+        assert acs_config.load_config()["poll_interval_seconds"] == 300
+
+    def test_invalid_source_falls_back(self, sandbox_home):
+        path = acs_config.config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps({"clis": {"codex": {"source": "carrier-pigeon"}}}),
+            encoding="utf-8",
+        )
+        assert acs_config.load_config()["clis"]["codex"]["source"] == "auto"
+
+    def test_corrupt_file_yields_defaults(self, sandbox_home):
+        path = acs_config.config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text("{nope", encoding="utf-8")
+        assert acs_config.load_config()["poll_interval_seconds"] == 300
+
+
+class TestSaveConfig:
+    def test_round_trip(self, sandbox_home):
+        cfg = acs_config.load_config()
+        cfg["poll_interval_seconds"] = 240
+        cfg["clis"]["claude_code"]["source"] = "headless"
+        acs_config.save_config(cfg)
+        loaded = acs_config.load_config()
+        assert loaded["poll_interval_seconds"] == 240
+        assert loaded["clis"]["claude_code"]["source"] == "headless"
+
+    def test_write_is_atomic(self, sandbox_home):
+        acs_config.save_config(acs_config.load_config())
+        leftovers = list(acs_config.config_path().parent.glob("*.tmp"))
+        assert leftovers == []
