@@ -35,7 +35,7 @@ class TestCollectCodex:
         result = collectors.collect_codex(sandbox_home)
         assert result["error"] is None
         assert result["plan"] == "plus"
-        assert result["resets_available"] == 1
+        assert "resets_available" not in result
         assert [w["used_percent"] for w in result["windows"]] == [57.0, 43.0]
         assert result["windows"][0] == {
             "label": "5h",
@@ -88,11 +88,18 @@ class TestParseCodexPane:
         result = collectors.parse_pane("codex", pane, now=1000.0)
         assert result["resets_available"] == 1
 
-    def test_defaults_reset_count_when_usage_does_not_show_it(self):
+    def test_reports_no_available_resets_when_usage_does_not_show_one(self):
         result = collectors.parse_pane(
             "codex", "5h limit: 61% used\nWeekly limit: 22% used\n", now=1000.0
         )
-        assert result["resets_available"] == 1
+        assert result["resets_available"] == 0
+
+    def test_reads_reset_count_even_when_usage_breakdown_is_missing(self):
+        result = collectors.parse_pane(
+            "codex", "You have 2 usage limit resets available.\n", now=1000.0
+        )
+        assert result["windows"] == []
+        assert result["resets_available"] == 2
 
 
 class TestCollectGrok:

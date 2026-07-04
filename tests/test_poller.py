@@ -40,7 +40,7 @@ class TestPollOnce:
         codex = status["clis"]["codex"]
         assert codex["enabled"] and not codex["stale"]
         assert codex["windows"][0]["used_percent"] == 57.0
-        assert codex["resets_available"] == 1
+        assert "resets_available" not in codex
         grok = status["clis"]["grok"]
         assert grok["windows"][0]["used_percent"] == 88.0
         # claude has no credentials in the sandbox: enabled but stale + error.
@@ -121,6 +121,58 @@ class TestPollOnce:
         assert ("agentic-cli-status", "codex") in captured
         pane_file = poller.state_dir(sandbox_home) / "panes" / "codex.txt"
         assert pane_file.read_text() == pane_text
+
+    def test_fresh_codex_headless_data_merges_periodic_reset_allowance(
+        self, sandbox_home, monkeypatch
+    ):
+        """Auto mode polls /usage metadata without replacing fresher windows."""
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        write_codex_rollout(
+            sandbox_home,
+            "2026/07/03",
+            "rollout-new.jsonl",
+            [codex_token_count_event(57, 43)],
+        )
+        captures = []
+
+        def _capture(session, cli_id):
+            captures.append(cli_id)
+            if cli_id == "codex":
+                return "5h limit: 1% used\nWeekly limit: 2% used\n1 reset available\n"
+            return None
+
+        monkeypatch.setattr(poller, "refresh_and_capture", _capture)
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        first = poller.poll_once(home=sandbox_home, now=NOW)
+        codex = first["clis"]["codex"]
+        assert codex["source"] == "codex_sessions"
+        assert codex["windows"][0]["used_percent"] == 57.0
+        assert codex["resets_available"] == 1
+        assert codex["resets_checked_at"] == NOW
+        assert captures.count("codex") == 1
+
+        # Headless ticks do not contain reset metadata, so retain the latest
+        # authoritative /usage result until the next metadata refresh.
+        second = poller.poll_once(home=sandbox_home, previous=first, now=NOW + 5)
+        assert second["clis"]["codex"]["resets_available"] == 1
+        assert captures.count("codex") == 1
+
+        # A later /usage response with no allowance explicitly clears it.
+        third = poller.poll_once(home=sandbox_home, previous=second, now=NOW + 61)
+        assert third["clis"]["codex"]["resets_available"] == 1
+
+        def _capture_without_reset(session, cli_id):
+            return (
+                "5h limit: 57% used\nWeekly limit: 43% used\n"
+                if cli_id == "codex" else None
+            )
+
+        monkeypatch.setattr(poller, "refresh_and_capture", _capture_without_reset)
+        fourth = poller.poll_once(home=sandbox_home, previous=third, now=NOW + 122)
+        assert "resets_available" not in fourth["clis"]["codex"]
+        assert fourth["clis"]["codex"]["resets_checked_at"] == NOW + 122
 
     def test_pane_fallback_keeps_endpoint_throttle_fields(
         self, sandbox_home, monkeypatch

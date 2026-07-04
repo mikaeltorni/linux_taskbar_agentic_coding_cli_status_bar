@@ -87,6 +87,29 @@ def _carry_fresher_reading(
     return carried
 
 
+def _carry_codex_reset_metadata(
+    snapshot: dict[str, Any], last: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Retain the last authoritative Codex /usage reset allowance.
+
+    Codex rollout events contain rate-limit windows but not the separately
+    earned manual-reset allowance. Preserve the latest tmux /usage result
+    across ordinary headless ticks until the next periodic /usage refresh
+    explicitly updates it.
+
+    Args:
+        snapshot: Current headless or pane snapshot.
+        last: Previous poll snapshot, if any.
+    """
+    if not last or "resets_available" in snapshot:
+        return snapshot
+    carried = dict(snapshot)
+    for key in ("resets_available", "resets_checked_at"):
+        if key in last:
+            carried[key] = last[key]
+    return carried
+
+
 def _collect_cli(
     cli_id: str,
     cli_config: dict[str, Any],
@@ -109,11 +132,20 @@ def _collect_cli(
     if source_mode in ("auto", "headless"):
         snapshot = _HEADLESS_COLLECTORS[cli_id](home, last, cli_config)
     snapshot = _carry_fresher_reading(snapshot, last)
+    if cli_id == "codex":
+        snapshot = _carry_codex_reset_metadata(snapshot, last)
     last_tmux_attempt = (last or {}).get("tmux_attempt_at")
     tmux_wanted = (
         tmux_config.get("enabled", True)
         and source_mode in ("auto", "tmux")
-        and (source_mode == "tmux" or _is_stale(snapshot, stale_after, now))
+        and (
+            source_mode == "tmux"
+            or _is_stale(snapshot, stale_after, now)
+            # Reset availability is absent from rollout files, so Codex auto
+            # mode must refresh that read-only /usage metadata periodically
+            # even while its headless rate-limit windows are fresh.
+            or (cli_id == "codex" and source_mode == "auto")
+        )
         and (
             last_tmux_attempt is None
             or now - last_tmux_attempt >= TMUX_REFRESH_MIN_INTERVAL_SECONDS
@@ -143,6 +175,23 @@ def _collect_cli(
                     snapshot = pane_snapshot
             elif not snapshot.get("windows"):
                 snapshot = pane_snapshot
+            if cli_id == "codex" and "resets_available" in pane_snapshot:
+                previous_count = (last or {}).get("resets_available", 0)
+                current_count = pane_snapshot["resets_available"]
+                if current_count > 0:
+                    snapshot["resets_available"] = current_count
+                else:
+                    # Omit zero from the public status shape. This lets both
+                    # old and new extension versions hide a spent allowance
+                    # immediately, without requiring a Shell code reload.
+                    snapshot.pop("resets_available", None)
+                snapshot["resets_checked_at"] = now
+                if previous_count != current_count:
+                    LOGGER.info(
+                        "codex reset allowance changed from %s to %s",
+                        previous_count,
+                        current_count,
+                    )
     snapshot.update(endpoint_marks)
     if last_tmux_attempt is not None:
         # Carry the throttle timestamp across ticks (and pane replacements).

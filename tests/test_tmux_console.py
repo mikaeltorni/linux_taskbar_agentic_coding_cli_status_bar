@@ -74,3 +74,38 @@ class TestResolveCliBinary:
         monkeypatch.setattr(tmux_console.shutil, "which", lambda name: None)
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: sandbox_home))
         assert tmux_console.resolve_cli_binary("claude_code") is None
+
+
+class TestRefreshAndCapture:
+    def test_codex_combines_usage_allowance_with_status_breakdown(
+        self, monkeypatch
+    ):
+        """Capture /usage metadata, then obtain rate limits from /status."""
+        calls = []
+        captures = iter([
+            "Usage\n› 1. Show usage\n  2. Redeem usage limit reset\n"
+            "You have 1 usage limit reset available.\n",
+            "5h limit: 99% left\nWeekly limit: 9% left\n",
+        ])
+
+        def fake_tmux(args):
+            calls.append(args)
+            stdout = next(captures) if args[0] == "capture-pane" else ""
+            return subprocess.CompletedProcess(["tmux", *args], 0, stdout, "")
+
+        monkeypatch.setattr(tmux_console, "_tmux", fake_tmux)
+        text = tmux_console.refresh_and_capture("acs", "codex", sleeper=lambda _: None)
+
+        assert "1 usage limit reset available" in text
+        assert "Weekly limit: 9% left" in text
+        send_keys = [args for args in calls if args[0] == "send-keys"]
+        assert ["send-keys", "-t", "acs:codex", "/status"] in send_keys
+        status_index = send_keys.index(
+            ["send-keys", "-t", "acs:codex", "/status"]
+        )
+        assert send_keys[status_index - 2:status_index + 2] == [
+            ["send-keys", "-t", "acs:codex", "Escape"],
+            ["send-keys", "-t", "acs:codex", "C-u"],
+            ["send-keys", "-t", "acs:codex", "/status"],
+            ["send-keys", "-t", "acs:codex", "Enter"],
+        ]

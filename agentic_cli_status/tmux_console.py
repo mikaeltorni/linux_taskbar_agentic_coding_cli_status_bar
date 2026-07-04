@@ -18,6 +18,7 @@ console cannot consume plan tokens or start model turns.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import time
@@ -75,6 +76,13 @@ def resolve_cli_binary(cli_id: str) -> str | None:
 #: Seconds to wait after sending a slash command before capturing the pane so
 #: the TUI has time to render the usage panel.
 CAPTURE_DELAY_SECONDS = 4.0
+
+#: Codex /usage opens a chooser that contains reset availability but no
+#: rate-limit windows. Detect it so the collector can follow with /status;
+#: never navigate to the adjacent reset-redemption action.
+_CODEX_USAGE_MENU = re.compile(
+    r"^[›>]\s*1\.\s*Show usage\b", re.I | re.M
+)
 
 
 def _tmux(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -177,6 +185,33 @@ def refresh_and_capture(
     if captured.returncode != 0:
         LOGGER.warning("capture-pane %s failed: %s", target, captured.stderr.strip())
         return None
+    text = captured.stdout
+    if cli_id == "codex" and _CODEX_USAGE_MENU.search(text):
+        # Codex 0.142+ changed /usage into a menu. It carries the earned-reset
+        # allowance, while /status remains the authoritative rate-limit
+        # breakdown. Capture both and never select the reset-redemption row.
+        LOGGER.debug("captured Codex /usage menu; requesting /status in %s", target)
+        for keys in (["Escape"], ["C-u"], ["/status"], ["Enter"]):
+            sent = _tmux(["send-keys", "-t", target, *keys])
+            if sent.returncode != 0:
+                LOGGER.warning(
+                    "cannot request Codex /status in %s: %s",
+                    target,
+                    sent.stderr.strip(),
+                )
+                return None
+            if keys == ["/status"]:
+                sleeper(0.3)
+        sleeper(CAPTURE_DELAY_SECONDS)
+        breakdown = _tmux(["capture-pane", "-p", "-t", target])
+        if breakdown.returncode != 0:
+            LOGGER.warning(
+                "capture Codex usage breakdown %s failed: %s",
+                target,
+                breakdown.stderr.strip(),
+            )
+            return None
+        text = f"{text.rstrip()}\n{breakdown.stdout}"
     # Close the usage popup so the pane returns to its idle state.
     _tmux(["send-keys", "-t", target, "Escape"])
-    return captured.stdout
+    return text

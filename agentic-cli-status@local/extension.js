@@ -248,7 +248,7 @@ function resetsText(epoch) {
 
 /** Format Codex's optional manual-reset allowance for the details heading. */
 function resetAvailabilityText(count) {
-  return Number.isInteger(count)
+  return Number.isInteger(count) && count > 0
     ? ` — ${count} reset${count === 1 ? '' : 's'} available`
     : '';
 }

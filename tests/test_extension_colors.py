@@ -112,6 +112,7 @@ const results = {
   one_reset_available: resetAvailabilityText(1),
   multiple_resets_available: resetAvailabilityText(2),
   missing_resets_available: resetAvailabilityText(undefined),
+  zero_resets_available: resetAvailabilityText(0),
   fable_exhausted: segmentMarkup('CC', {windows: [
     {label: '5h', used_percent: 100, resets_at: NOW + 3300},
     {label: 'week', used_percent: 59, resets_at: 1783617000},
@@ -272,3 +273,4 @@ def test_reset_availability_wording(js_results):
     assert js_results["one_reset_available"] == " — 1 reset available"
     assert js_results["multiple_resets_available"] == " — 2 resets available"
     assert js_results["missing_resets_available"] == ""
+    assert js_results["zero_resets_available"] == ""

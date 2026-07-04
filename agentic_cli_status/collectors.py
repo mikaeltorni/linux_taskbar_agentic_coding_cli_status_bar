@@ -59,10 +59,6 @@ CLAUDE_OAUTH_BETA = "oauth-2025-04-20"
 #: endpoint requires a ``claude-code/<version>`` agent to stay in the normally
 #: rate-limited bucket.
 CLAUDE_UA_FALLBACK_VERSION = "2.0.0"
-#: Temporary Codex allowance when neither rollout data nor /usage states it.
-DEFAULT_CODEX_RESETS_AVAILABLE = 1
-
-
 def _snapshot(
     source: str,
     observed_at: float | None = None,
@@ -184,14 +180,12 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
     if not windows:
         return None
     observed = float(last_ts) if last_ts is not None else rollout.stat().st_mtime
-    snapshot = _snapshot(
+    return _snapshot(
         "codex_sessions",
         observed_at=observed,
         plan=last.get("plan_type"),
         windows=windows,
     )
-    snapshot["resets_available"] = DEFAULT_CODEX_RESETS_AVAILABLE
-    return snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +498,7 @@ _PANE_WINDOW_KEYWORDS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
 _PANE_PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 #: Codex /usage allowance for manually resetting a rolling limit.
 _CODEX_RESETS_AVAILABLE = re.compile(
-    r"\b(\d+)\s+resets?\s+available\b", re.I
+    r"\b(\d+)\s+(?:usage\s+limit\s+)?resets?\s+available\b", re.I
 )
 
 #: A rendered "resets …" phrase and everything after it on the line. The reset
@@ -658,12 +652,16 @@ def parse_pane(cli_id: str, text: str, now: float | None = None) -> dict[str, An
             "used_percent": percent,
             "resets_at": _pane_window_reset(lines, keyword, others, now),
         })
-    if not windows:
-        return _snapshot("tmux_pane", error="no usage percentages found in pane")
-    snapshot = _snapshot("tmux_pane", observed_at=now, windows=windows)
+    snapshot = _snapshot(
+        "tmux_pane",
+        observed_at=now if windows else None,
+        windows=windows,
+        error=None if windows else "no usage percentages found in pane",
+    )
     if cli_id == "codex":
         resets = _CODEX_RESETS_AVAILABLE.search(text)
-        snapshot["resets_available"] = (
-            int(resets.group(1)) if resets else DEFAULT_CODEX_RESETS_AVAILABLE
-        )
+        # A completed /usage capture is authoritative: when it does not offer
+        # a reset, the account currently has none. Keep zero explicit so the
+        # poller can clear an older positive allowance.
+        snapshot["resets_available"] = int(resets.group(1)) if resets else 0
     return snapshot
