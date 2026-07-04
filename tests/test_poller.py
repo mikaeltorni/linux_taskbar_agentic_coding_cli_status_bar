@@ -40,6 +40,7 @@ class TestPollOnce:
         codex = status["clis"]["codex"]
         assert codex["enabled"] and not codex["stale"]
         assert codex["windows"][0]["used_percent"] == 57.0
+        assert codex["resets_available"] == 1
         grok = status["clis"]["grok"]
         assert grok["windows"][0]["used_percent"] == 88.0
         # claude has no credentials in the sandbox: enabled but stale + error.
@@ -103,7 +104,7 @@ class TestPollOnce:
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
-        pane_text = "5h limit: 61% used\nWeekly limit: 22% used\n"
+        pane_text = "5h limit: 61% used\nWeekly limit: 22% used\n1 reset available\n"
         captured = []
 
         def _fake_capture(session, cli_id):
@@ -116,6 +117,7 @@ class TestPollOnce:
         codex = status["clis"]["codex"]
         assert codex["source"] == "tmux_pane"
         assert codex["windows"][0]["used_percent"] == 61.0
+        assert codex["resets_available"] == 1
         assert ("agentic-cli-status", "codex") in captured
         pane_file = poller.state_dir(sandbox_home) / "panes" / "codex.txt"
         assert pane_file.read_text() == pane_text
@@ -193,7 +195,7 @@ class TestPollOnce:
         """A fresh pane capture must not flap back to older headless data.
 
         Codex only appends rate_limits events when a prompt runs, so after a
-        /status pane refresh the headless rollout reading stays older until
+        /usage pane refresh the headless rollout reading stays older until
         real usage resumes. The next ticks must keep the newer pane reading
         (and the headless plan) instead of reverting for ~60 s at a time.
         """

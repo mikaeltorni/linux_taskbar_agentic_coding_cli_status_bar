@@ -237,6 +237,13 @@ function resetsText(epoch) {
   return ` — resets ${resetClock(epoch)}`;
 }
 
+/** Format Codex's optional manual-reset allowance for the details heading. */
+function resetAvailabilityText(count) {
+  return Number.isInteger(count)
+    ? ` — ${count} reset${count === 1 ? '' : 's'} available`
+    : '';
+}
+
 const AgenticCliStatusButton = GObject.registerClass(
 class AgenticCliStatusButton extends PanelMenu.Button {
   _init() {
@@ -303,8 +310,9 @@ class AgenticCliStatusButton extends PanelMenu.Button {
    */
   _appendMenuSection(name, snapshot) {
     const plan = snapshot.plan ? ` (${snapshot.plan})` : '';
+    const resetCount = resetAvailabilityText(snapshot.resets_available);
     this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-      `${name}${plan}`, { reactive: false }));
+      `${name}${plan}${resetCount}`, { reactive: false }));
     const nowEpoch = GLib.get_real_time() / 1000000;
     for (const window of snapshot.windows ?? []) {
       const left = percentLeft(window, nowEpoch);

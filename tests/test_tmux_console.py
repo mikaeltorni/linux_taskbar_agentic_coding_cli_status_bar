@@ -11,6 +11,12 @@ import subprocess
 from pathlib import Path
 
 from agentic_cli_status import tmux_console
+from agentic_cli_status.config import SLASH_COMMANDS
+
+
+def test_codex_monitor_uses_usage_command():
+    """Codex reset availability is exposed by /usage, not /status."""
+    assert SLASH_COMMANDS["codex"] == "/usage"
 
 
 class TestEnsureConsole:

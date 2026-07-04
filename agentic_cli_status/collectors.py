@@ -59,6 +59,8 @@ CLAUDE_OAUTH_BETA = "oauth-2025-04-20"
 #: endpoint requires a ``claude-code/<version>`` agent to stay in the normally
 #: rate-limited bucket.
 CLAUDE_UA_FALLBACK_VERSION = "2.0.0"
+#: Temporary Codex allowance when neither rollout data nor /usage states it.
+DEFAULT_CODEX_RESETS_AVAILABLE = 1
 
 
 def _snapshot(
@@ -182,12 +184,14 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
     if not windows:
         return None
     observed = float(last_ts) if last_ts is not None else rollout.stat().st_mtime
-    return _snapshot(
+    snapshot = _snapshot(
         "codex_sessions",
         observed_at=observed,
         plan=last.get("plan_type"),
         windows=windows,
     )
+    snapshot["resets_available"] = DEFAULT_CODEX_RESETS_AVAILABLE
+    return snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -498,6 +502,10 @@ _PANE_WINDOW_KEYWORDS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
 }
 
 _PANE_PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+#: Codex /usage allowance for manually resetting a rolling limit.
+_CODEX_RESETS_AVAILABLE = re.compile(
+    r"\b(\d+)\s+resets?\s+available\b", re.I
+)
 
 #: A rendered "resets …" phrase and everything after it on the line. The reset
 #: descriptor (clock, optional day) is pulled out of the trailing text.
@@ -652,4 +660,10 @@ def parse_pane(cli_id: str, text: str, now: float | None = None) -> dict[str, An
         })
     if not windows:
         return _snapshot("tmux_pane", error="no usage percentages found in pane")
-    return _snapshot("tmux_pane", observed_at=now, windows=windows)
+    snapshot = _snapshot("tmux_pane", observed_at=now, windows=windows)
+    if cli_id == "codex":
+        resets = _CODEX_RESETS_AVAILABLE.search(text)
+        snapshot["resets_available"] = (
+            int(resets.group(1)) if resets else DEFAULT_CODEX_RESETS_AVAILABLE
+        )
+    return snapshot

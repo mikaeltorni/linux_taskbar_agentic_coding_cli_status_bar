@@ -9,8 +9,8 @@ serves two purposes:
    time and see exactly what each CLI reports.
 2. **Refresh + fallback** — when a CLI's headless data is stale (``auto``
    mode) or headless sources are disabled (``tmux`` mode), the poller sends
-   that CLI's rate-limit slash command (``/status`` for Codex, ``/usage`` for
-   Claude Code and Grok) into its window and captures the rendered pane text.
+   that CLI's ``/usage`` rate-limit command into its window and captures the
+   rendered pane text.
 
 Only slash commands are ever typed into the panes — never a prompt — so the
 console cannot consume plan tokens or start model turns.

@@ -47,7 +47,7 @@ Two cooperating parts, connected only by a JSON file:
 
 | CLI | Headless source | tmux slash command |
 |---|---|---|
-| Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` `token_count` events (`rate_limits.primary/secondary`: 5h + weekly `used_percent`, `resets_at`, plan) | `/status` |
+| Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` `token_count` events (`rate_limits.primary/secondary`: 5h + weekly `used_percent`, `resets_at`, plan) | `/usage` (including available resets) |
 | Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h, weekly, and model-scoped weekly windows (including Fable) as `/usage`. Self-throttled to a configurable interval (60–3600 s, default 180) regardless of polling rate; 429 `Retry-After` lockouts are honored and the last good reading is kept on errors | `/usage` |
 | Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/*.log` (`creditUsagePercent` + weekly period + tier) | `/usage` |
 

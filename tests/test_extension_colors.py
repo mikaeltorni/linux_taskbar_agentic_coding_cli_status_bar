@@ -30,6 +30,7 @@ HELPER_FUNCTIONS = (
     "resetClock",
     "resetCountdown",
     "resetsText",
+    "resetAvailabilityText",
     "segmentMarkup",
 )
 
@@ -106,6 +107,9 @@ const results = {
   countdown_60m: resetCountdown(NOW + 3600, NOW),
   rounded_reset_clock: resetClock(1783259999),
   rounded_details_reset: resetsText(1783259999),
+  one_reset_available: resetAvailabilityText(1),
+  multiple_resets_available: resetAvailabilityText(2),
+  missing_resets_available: resetAvailabilityText(undefined),
   fable_exhausted: segmentMarkup('CC', {windows: [
     {label: '5h', used_percent: 100, resets_at: NOW + 3300},
     {label: 'week', used_percent: 59, resets_at: 1783617000},
@@ -255,3 +259,9 @@ def test_exhausted_fable_shows_rounded_red_reset_clock_inline(js_results):
         + separator
         + '<span foreground="#ff0000">Sun 14:00</span>'
     )
+
+
+def test_reset_availability_wording(js_results):
+    assert js_results["one_reset_available"] == " — 1 reset available"
+    assert js_results["multiple_resets_available"] == " — 2 resets available"
+    assert js_results["missing_resets_available"] == ""

@@ -43,7 +43,7 @@ CLI_IDS = ("codex", "claude_code", "grok")
 
 #: The slash command each CLI's TUI uses to display its rate limits/usage.
 SLASH_COMMANDS = {
-    "codex": "/status",
+    "codex": "/usage",
     "claude_code": "/usage",
     "grok": "/usage",
 }

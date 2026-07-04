@@ -66,7 +66,7 @@ def _carry_fresher_reading(
     """Keep the previous tick's reading when it is newer than this one.
 
     Codex only appends ``rate_limits`` events when a prompt actually runs, so
-    after a tmux ``/status`` refresh the captured pane reading stays newer
+    after a tmux ``/usage`` refresh the captured pane reading stays newer
     than anything the headless collector can produce until real usage
     resumes. Without this carry the pane reading would be shown for a single
     tick and then replaced by the older headless data again, flapping the
@@ -80,6 +80,8 @@ def _carry_fresher_reading(
     carried = dict(snapshot)
     for key in ("source", "observed_at", "windows"):
         carried[key] = last.get(key)
+    if "resets_available" in last:
+        carried["resets_available"] = last["resets_available"]
     if not carried.get("plan"):
         carried["plan"] = last.get("plan")
     return carried
