@@ -40,11 +40,14 @@ const CLI_TAGS = [
   ['grok', 'GK'],
 ];
 
-// Percent-LEFT gradient endpoints. Every rendered percentage gets its own
-// color: 100% left is green, 1% left is orange, and everything between is
-// linearly interpolated per RGB channel (full 8-bit precision). 0% left
-// snaps to pure red. Dashes and separators use the neutral gray.
+// Percent-LEFT gradient stops. Every rendered percentage gets its own
+// color: 100% left is green, ~50% left is yellow, 1% left is orange.
+// Interpolation is linear per RGB channel (full 8-bit precision) within each
+// half, routed through the yellow midpoint so mid values read as a warm
+// yellow instead of the washed-out near-white a straight green→orange lerp
+// produces. 0% left snaps to pure red. Dashes/separators use neutral gray.
 const GRADIENT_FULL_RGB = [0x8f, 0xf0, 0xa4];
+const GRADIENT_MID_RGB = [0xf8, 0xe4, 0x5c];
 const GRADIENT_LOW_RGB = [0xff, 0x7b, 0x63];
 const EMPTY_COLOR = '#ff0000';
 const NEUTRAL_COLOR = '#9a9996';
@@ -116,9 +119,11 @@ function percentLeft(window, nowEpoch = GLib.get_real_time() / 1000000) {
 /**
  * Map a percent-LEFT value to its gradient color.
  *
- * 100% left is green (GRADIENT_FULL_RGB), 1% left is orange
- * (GRADIENT_LOW_RGB), values between interpolate linearly per RGB channel,
- * and 0% left is pure red (EMPTY_COLOR).
+ * 100% left is green (GRADIENT_FULL_RGB), the midpoint is yellow
+ * (GRADIENT_MID_RGB), 1% left is orange (GRADIENT_LOW_RGB). Each half
+ * interpolates linearly per RGB channel; routing through yellow keeps mid
+ * values vivid instead of collapsing toward white. 0% left is pure red
+ * (EMPTY_COLOR).
  *
  * @param {number} left - Percent remaining, 0-100.
  * @returns {string} "#rrggbb" hex color.
@@ -126,9 +131,13 @@ function percentLeft(window, nowEpoch = GLib.get_real_time() / 1000000) {
 function percentColor(left) {
   if (left < 1)
     return EMPTY_COLOR;
-  const t = (Math.min(left, 100) - 1) / 99;
-  const hex = GRADIENT_LOW_RGB.map((low, i) => {
-    const channel = Math.round(low + (GRADIENT_FULL_RGB[i] - low) * t);
+  const clamped = Math.min(left, 100);
+  const mid = (1 + 100) / 2;
+  const [from, to, t] = clamped <= mid
+    ? [GRADIENT_LOW_RGB, GRADIENT_MID_RGB, (clamped - 1) / (mid - 1)]
+    : [GRADIENT_MID_RGB, GRADIENT_FULL_RGB, (clamped - mid) / (100 - mid)];
+  const hex = from.map((start, i) => {
+    const channel = Math.round(start + (to[i] - start) * t);
     return channel.toString(16).padStart(2, '0');
   }).join('');
   return `#${hex}`;

@@ -1,8 +1,9 @@
 """Color-gradient contract for the GNOME extension's percent coloring.
 
 The extension colors every rendered percentage individually: 100% left is
-green, 1% left is orange, everything between is linearly interpolated per RGB
-channel (full 8-bit precision), and 0% left snaps to pure red. The pure
+green, the midpoint is yellow, 1% left is orange; each half is linearly
+interpolated per RGB channel (full 8-bit precision) so mid values stay vivid
+instead of collapsing toward white, and 0% left snaps to pure red. The pure
 helpers live in extension.js, which cannot be imported outside GNOME Shell,
 so this test extracts the helper functions plus their constants and executes
 them under gjs. Skips when gjs is unavailable (e.g. headless CI).
@@ -37,6 +38,7 @@ HELPER_FUNCTIONS = (
 #: Top-level constants those helpers close over.
 HELPER_CONSTANTS = (
     "GRADIENT_FULL_RGB",
+    "GRADIENT_MID_RGB",
     "GRADIENT_LOW_RGB",
     "EMPTY_COLOR",
     "NEUTRAL_COLOR",
@@ -142,11 +144,16 @@ print(JSON.stringify(results));
 
 
 def _lerp_color(left: int) -> str:
-    """Reference implementation of the 8-bit gradient (100→green, 1→orange)."""
+    """Reference gradient: 100→green, midpoint→yellow, 1→orange."""
     full = (0x8F, 0xF0, 0xA4)
+    mid = (0xF8, 0xE4, 0x5C)
     low = (0xFF, 0x7B, 0x63)
-    t = (left - 1) / 99
-    channels = (round(l + (f - l) * t) for f, l in zip(full, low))
+    midpoint = (1 + 100) / 2
+    if left <= midpoint:
+        start, end, t = low, mid, (left - 1) / (midpoint - 1)
+    else:
+        start, end, t = mid, full, (left - midpoint) / (100 - midpoint)
+    channels = (round(s + (e - s) * t) for s, e in zip(start, end))
     return "#" + "".join(f"{c:02x}" for c in channels)
 
 
@@ -200,7 +207,7 @@ def test_exhausted_weekly_shows_only_red_reset_clock(js_results):
 def test_exhausted_five_hour_shows_red_countdown_then_weekly_values(js_results):
     red_countdown = '<span foreground="#ff0000">4h59m</span>'
     separator = '<span foreground="#9a9996">-</span>'
-    weekly = '<span foreground="#d2aa7d">41</span>'
+    weekly = '<span foreground="#f9d05d">41</span>'
     assert js_results["five_hour_exhausted_codex"] == (
         '<span foreground="#ff0000">CX </span>'
         + red_countdown + separator + weekly
@@ -231,7 +238,7 @@ def test_boot_stale_five_hour_flips_from_dead_countdown_to_available(js_results)
         '<span foreground="#8ff0a4">CX </span>'
         '<span foreground="#8ff0a4">100</span>'
         '<span foreground="#9a9996">·</span>'
-        '<span foreground="#ec8f6e">18</span>'
+        '<span foreground="#fd9f61">18</span>'
     )
     assert '0m' not in segment
     assert '#ff0000' not in segment  # nothing exhausted/red
@@ -255,7 +262,7 @@ def test_exhausted_fable_shows_rounded_red_reset_clock_inline(js_results):
         '<span foreground="#ff0000">CC </span>'
         '<span foreground="#ff0000">55m</span>'
         + separator
-        + '<span foreground="#d2aa7d">41</span>'
+        + '<span foreground="#f9d05d">41</span>'
         + separator
         + '<span foreground="#ff0000">Sun 14:00</span>'
     )
