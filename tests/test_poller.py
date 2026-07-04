@@ -187,6 +187,61 @@ class TestPollOnce:
         ]
         assert len(warnings) == 1
 
+    def test_pane_reading_survives_later_stale_headless_ticks(
+        self, sandbox_home, monkeypatch
+    ):
+        """A fresh pane capture must not flap back to older headless data.
+
+        Codex only appends rate_limits events when a prompt runs, so after a
+        /status pane refresh the headless rollout reading stays older until
+        real usage resumes. The next ticks must keep the newer pane reading
+        (and the headless plan) instead of reverting for ~60 s at a time.
+        """
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        # Day-old rollout: stale at NOW, triggers the pane refresh.
+        write_codex_rollout(
+            sandbox_home,
+            "2026/07/02",
+            "rollout-old.jsonl",
+            [codex_token_count_event(55, 65, timestamp="2026-07-02T10:41:25Z")],
+        )
+        monkeypatch.setattr(
+            poller,
+            "refresh_and_capture",
+            lambda session, cli_id: (
+                "5h limit: 99% left\nWeekly limit: 34% left\n"
+                if cli_id == "codex"
+                else None
+            ),
+        )
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        first = poller.poll_once(home=sandbox_home, now=NOW)
+        codex = first["clis"]["codex"]
+        assert codex["source"] == "tmux_pane"
+        assert codex["windows"][0]["used_percent"] == 1.0
+        assert codex["plan"] == "plus"
+        # Next tick: headless still returns the old rollout, no tmux refresh
+        # (throttled) — the newer pane reading must be carried forward.
+        second = poller.poll_once(home=sandbox_home, previous=first, now=NOW + 5)
+        codex = second["clis"]["codex"]
+        assert codex["source"] == "tmux_pane"
+        assert codex["windows"][0]["used_percent"] == 1.0
+        assert codex["plan"] == "plus"
+        assert codex["stale"] is False
+        # Once real usage writes a newer rollout event, headless wins again.
+        write_codex_rollout(
+            sandbox_home,
+            "2026/07/03",
+            "rollout-new.jsonl",
+            [codex_token_count_event(12, 40, timestamp="2026-07-03T10:41:35Z")],
+        )
+        third = poller.poll_once(home=sandbox_home, previous=second, now=NOW + 10)
+        codex = third["clis"]["codex"]
+        assert codex["source"] == "codex_sessions"
+        assert codex["windows"][0]["used_percent"] == 12.0
+
     def test_tmux_refresh_is_throttled_between_ticks(self, sandbox_home, monkeypatch):
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True

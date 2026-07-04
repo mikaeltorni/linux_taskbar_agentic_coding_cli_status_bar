@@ -60,6 +60,31 @@ def _is_stale(snapshot: dict[str, Any], stale_after: int, now: float) -> bool:
     return (now - observed) > stale_after
 
 
+def _carry_fresher_reading(
+    snapshot: dict[str, Any], last: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Keep the previous tick's reading when it is newer than this one.
+
+    Codex only appends ``rate_limits`` events when a prompt actually runs, so
+    after a tmux ``/status`` refresh the captured pane reading stays newer
+    than anything the headless collector can produce until real usage
+    resumes. Without this carry the pane reading would be shown for a single
+    tick and then replaced by the older headless data again, flapping the
+    indicator once per refresh. It also keeps the last pane reading visible
+    between throttled refreshes in ``tmux`` source mode.
+    """
+    if not last or not last.get("windows"):
+        return snapshot
+    if (last.get("observed_at") or 0) <= (snapshot.get("observed_at") or 0):
+        return snapshot
+    carried = dict(snapshot)
+    for key in ("source", "observed_at", "windows"):
+        carried[key] = last.get(key)
+    if not carried.get("plan"):
+        carried["plan"] = last.get("plan")
+    return carried
+
+
 def _collect_cli(
     cli_id: str,
     cli_config: dict[str, Any],
@@ -72,13 +97,16 @@ def _collect_cli(
 
     ``headless``/``auto`` try the local-data collector first; ``auto`` and
     ``tmux`` fall back to (or rely on) a slash-command refresh in the tmux
-    console window followed by a pane capture.
+    console window followed by a pane capture. Whichever reading is newest —
+    this tick's or the previous one's — wins (see
+    :func:`_carry_fresher_reading`).
     """
     source_mode = cli_config["source"]
     stale_after = cli_config["stale_after_seconds"]
     snapshot: dict[str, Any] = {"windows": []}
     if source_mode in ("auto", "headless"):
         snapshot = _HEADLESS_COLLECTORS[cli_id](home, last, cli_config)
+    snapshot = _carry_fresher_reading(snapshot, last)
     last_tmux_attempt = (last or {}).get("tmux_attempt_at")
     tmux_wanted = (
         tmux_config.get("enabled", True)
@@ -107,6 +135,9 @@ def _collect_cli(
                 # In auto mode the pane refresh also nudges the CLI to update
                 # its local data, so the next tick's headless read is fresh.
                 if _is_stale(snapshot, stale_after, now):
+                    # The pane rendering carries no plan name; keep the one
+                    # the headless source reported.
+                    pane_snapshot["plan"] = snapshot.get("plan")
                     snapshot = pane_snapshot
             elif not snapshot.get("windows"):
                 snapshot = pane_snapshot
