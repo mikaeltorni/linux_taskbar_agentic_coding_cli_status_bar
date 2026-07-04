@@ -127,3 +127,5 @@ def test_segment_colors_each_window_and_tag_follows_first_window(js_results):
     assert '<span foreground="#ff0000">0</span>' in segment
     # Separators between numbers are neutral.
     assert '<span foreground="#9a9996">·</span>' in segment
+    # The "%" sign is omitted to reduce clutter.
+    assert '%' not in segment

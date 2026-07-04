@@ -117,9 +117,9 @@ function percentColor(left) {
  *
  * Percentages shown are the limits LEFT (remaining), matching how the CLIs
  * themselves phrase it ("Weekly limit left"), not the used share. Each
- * window's number is colored by its own gradient value; the tag and the "%"
- * follow the first window (the 5h window, or Grok's weekly one); separators
- * and the no-data dash are neutral.
+ * window's number is colored by its own gradient value; the tag follows the
+ * first window (the 5h window, or Grok's weekly one); separators and the
+ * no-data dash are neutral. The "%" sign is omitted to reduce clutter.
  *
  * @param {string} tag - Short CLI tag.
  * @param {object} snapshot - One CLI entry from status.json.
@@ -136,8 +136,10 @@ function segmentMarkup(tag, snapshot) {
       return `<span foreground="${percentColor(left)}">${left}</span>`;
     })
     .join(`<span foreground="${NEUTRAL_COLOR}">·</span>`);
-  return `<span foreground="${tagColor}">${tag} </span>${parts}` +
-    `<span foreground="${tagColor}">%${snapshot.stale ? '?' : ''}</span>`;
+  const staleMark = snapshot.stale
+    ? `<span foreground="${tagColor}">?</span>`
+    : '';
+  return `<span foreground="${tagColor}">${tag} </span>${parts}${staleMark}`;
 }
 
 /**

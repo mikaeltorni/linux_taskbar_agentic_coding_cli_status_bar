@@ -11,7 +11,7 @@ phrasing). Every percentage is colored individually on a smooth full-RGB
 gradient: green at 100% left, fading to orange at 1% left, and snapping to
 pure red at 0%; the CLI tag takes the color of its 5h window (Grok: its
 weekly window), dashes and separators stay neutral gray, and stale data is
-dimmed with a trailing `?` — e.g. `CX 43·57%  CC 88·60·38%  GK 12%`.
+dimmed with a trailing `?` — e.g. `CX 43·57  CC 88·60·38  GK 12`.
 Claude's third value is its active model-scoped weekly limit (currently
 Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
