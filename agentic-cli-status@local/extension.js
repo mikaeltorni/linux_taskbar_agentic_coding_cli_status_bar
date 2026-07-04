@@ -40,10 +40,14 @@ const CLI_TAGS = [
   ['grok', 'GK'],
 ];
 
-// Usage bands mapped to stylesheet classes (thresholds are in percent USED;
-// the rendered numbers are percent LEFT, so crit = 15% or less left).
-const WARN_PERCENT = 60;
-const CRIT_PERCENT = 85;
+// Percent-LEFT gradient endpoints. Every rendered percentage gets its own
+// color: 100% left is green, 1% left is orange, and everything between is
+// linearly interpolated per RGB channel (full 8-bit precision). 0% left
+// snaps to pure red. Dashes and separators use the neutral gray.
+const GRADIENT_FULL_RGB = [0x8f, 0xf0, 0xa4];
+const GRADIENT_LOW_RGB = [0xff, 0x7b, 0x63];
+const EMPTY_COLOR = '#ff0000';
+const NEUTRAL_COLOR = '#9a9996';
 
 // Ordered log levels; everything at or above ACTIVE_LOG_LEVEL is emitted.
 const LOG_LEVELS = { verbose: 0, debug: 1, info: 2, warn: 3, error: 4 };
@@ -77,41 +81,63 @@ function statusFilePath() {
 }
 
 /**
- * Pick the stylesheet severity class for a CLI snapshot.
+ * Compute the whole percent LEFT for one rate-limit window, clamped 0-100.
  *
- * @param {object} snapshot - One CLI entry from status.json.
- * @returns {string} One of the acs-* style classes.
+ * @param {object} window - One window entry ({used_percent, ...}).
+ * @returns {number} Remaining budget in percent, rounded to an integer.
  */
-function severityClass(snapshot) {
-  const windows = snapshot?.windows ?? [];
-  if (!windows.length)
-    return 'acs-off';
-  const worst = Math.max(...windows.map(w => w.used_percent ?? 0));
-  if (worst >= CRIT_PERCENT)
-    return 'acs-crit';
-  if (worst >= WARN_PERCENT)
-    return 'acs-warn';
-  return 'acs-ok';
+function percentLeft(window) {
+  const used = window?.used_percent ?? 0;
+  return Math.round(Math.min(100, Math.max(0, 100 - used)));
 }
 
 /**
- * Format the compact taskbar text for one CLI, e.g. "CX 43·57%".
+ * Map a percent-LEFT value to its gradient color.
+ *
+ * 100% left is green (GRADIENT_FULL_RGB), 1% left is orange
+ * (GRADIENT_LOW_RGB), values between interpolate linearly per RGB channel,
+ * and 0% left is pure red (EMPTY_COLOR).
+ *
+ * @param {number} left - Percent remaining, 0-100.
+ * @returns {string} "#rrggbb" hex color.
+ */
+function percentColor(left) {
+  if (left < 1)
+    return EMPTY_COLOR;
+  const t = (Math.min(left, 100) - 1) / 99;
+  const hex = GRADIENT_LOW_RGB.map((low, i) => {
+    const channel = Math.round(low + (GRADIENT_FULL_RGB[i] - low) * t);
+    return channel.toString(16).padStart(2, '0');
+  }).join('');
+  return `#${hex}`;
+}
+
+/**
+ * Format the compact taskbar Pango markup for one CLI, e.g. "CX 43·57%".
  *
  * Percentages shown are the limits LEFT (remaining), matching how the CLIs
- * themselves phrase it ("Weekly limit left"), not the used share.
+ * themselves phrase it ("Weekly limit left"), not the used share. Each
+ * window's number is colored by its own gradient value; the tag and the "%"
+ * follow the first window (the 5h window, or Grok's weekly one); separators
+ * and the no-data dash are neutral.
  *
  * @param {string} tag - Short CLI tag.
  * @param {object} snapshot - One CLI entry from status.json.
- * @returns {string} Segment text; a trailing "?" marks stale data.
+ * @returns {string} Segment markup; a trailing "?" marks stale data.
  */
-function segmentText(tag, snapshot) {
+function segmentMarkup(tag, snapshot) {
   const windows = snapshot?.windows ?? [];
   if (!windows.length)
-    return `${tag} –`;
+    return `<span foreground="${NEUTRAL_COLOR}">${tag} –</span>`;
+  const tagColor = percentColor(percentLeft(windows[0]));
   const parts = windows
-    .map(w => `${Math.round(100 - (w.used_percent ?? 0))}`)
-    .join('·');
-  return `${tag} ${parts}%${snapshot.stale ? '?' : ''}`;
+    .map(w => {
+      const left = percentLeft(w);
+      return `<span foreground="${percentColor(left)}">${left}</span>`;
+    })
+    .join(`<span foreground="${NEUTRAL_COLOR}">·</span>`);
+  return `<span foreground="${tagColor}">${tag} </span>${parts}` +
+    `<span foreground="${tagColor}">%${snapshot.stale ? '?' : ''}</span>`;
 }
 
 /**
@@ -174,11 +200,10 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         continue;
       }
       label.visible = true;
-      label.text = segmentText(tag, snapshot);
-      const classes = ['acs-segment', severityClass(snapshot)];
-      if (snapshot.stale)
-        classes.push('acs-stale');
-      label.style_class = classes.join(' ');
+      label.clutter_text.set_markup(segmentMarkup(tag, snapshot));
+      label.style_class = snapshot.stale
+        ? 'acs-segment acs-stale'
+        : 'acs-segment';
       if (!this.menu.isEmpty())
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
       this._appendMenuSection(names[cliId], snapshot);
@@ -197,10 +222,13 @@ class AgenticCliStatusButton extends PanelMenu.Button {
     this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
       `${name}${plan}`, { reactive: false }));
     for (const window of snapshot.windows ?? []) {
-      this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-        `   ${window.label}: ${Math.round(100 - (window.used_percent ?? 0))}% left` +
-        resetsText(window.resets_at),
-        { reactive: false }));
+      const left = percentLeft(window);
+      const item = new PopupMenu.PopupMenuItem('', { reactive: false });
+      item.label.clutter_text.set_markup(
+        `   ${GLib.markup_escape_text(String(window.label ?? ''), -1)}: ` +
+        `<span foreground="${percentColor(left)}">${left}% left</span>` +
+        GLib.markup_escape_text(resetsText(window.resets_at), -1));
+      this.menu.addMenuItem(item);
     }
     if (snapshot.error) {
       this.menu.addMenuItem(new PopupMenu.PopupMenuItem(

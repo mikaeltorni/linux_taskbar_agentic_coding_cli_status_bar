@@ -1,29 +1,18 @@
 /* stylesheet.css — agentic-cli-status@local
  *
- * Per-CLI severity coloring for the taskbar indicator segments. The indicator
- * displays percent LEFT; these classes map the remaining budget to colors:
- *   acs-ok    more than 40% left  (< 60% used)
- *   acs-warn  16–40% left         (60–84% used)
- *   acs-crit  15% or less left    (>= 85% used)
- *   acs-stale data older than the configured staleness threshold
- *   acs-off   no data available for the CLI
+ * Layout and state styling for the taskbar indicator segments. Percentage
+ * colors are NOT set here: extension.js paints every rendered number with an
+ * inline Pango-markup gradient (100% left = green #8ff0a4, 1% left = orange
+ * #ff7b63, linear per-channel interpolation between, 0% left = red #ff0000).
+ *   acs-segment  spacing/weight shared by all segments
+ *   acs-stale    data older than the configured staleness threshold
+ *   acs-off      no data available for the CLI (neutral gray, matches the
+ *                NEUTRAL_COLOR used for dashes and separators in markup)
  */
 
 .acs-segment {
   margin: 0 3px;
   font-weight: bold;
-}
-
-.acs-ok {
-  color: #8ff0a4;
-}
-
-.acs-warn {
-  color: #f8e45c;
-}
-
-.acs-crit {
-  color: #ff7b63;
 }
 
 .acs-stale {
