@@ -14,8 +14,11 @@ pure red at 0%. An exhausted weekly limit shows only its red local reset time
 exhausted, its red reset countdown replaces zero and the weekly values remain
 visible (`CC 4h59m-41-14`); below one hour the countdown omits zero hours
 (`CC 55m-41-14`). An exhausted model-scoped weekly limit stays inline as its
-red reset clock (`CC 55m-41-Sun 17:00`). Reset clocks are rounded to the nearest
-minute to avoid endpoint timestamp jitter. Otherwise the CLI tag takes the
+red reset clock (`CC 55m-41-Sun 17:00`). Once a window's reset moment passes it
+has rolled over — with no fresh usage yet recorded it reads as fully available
+(`100`) again rather than a stuck `0m`, so an exhausted window flips back on its
+own the instant its countdown reaches zero. Reset clocks are rounded to the
+nearest minute to avoid endpoint timestamp jitter. Otherwise the CLI tag takes the
 color of its 5h window (Grok: its weekly window), dashes and separators stay
 neutral gray, and stale data is dimmed with a trailing `?` — e.g.
 `CX 43·57  CC 88·60·38  GK 12`.

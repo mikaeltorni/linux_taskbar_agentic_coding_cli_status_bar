@@ -81,12 +81,34 @@ function statusFilePath() {
 }
 
 /**
+ * Whether a window's reset moment has already elapsed.
+ *
+ * The poller only sees usage the CLIs record locally, so after a boot with no
+ * fresh activity the newest reading can be hours old and still name a reset
+ * that has since passed. Such a window has rolled over.
+ *
+ * @param {object} window - One window entry ({resets_at, ...}).
+ * @param {number} nowEpoch - Current epoch seconds.
+ * @returns {boolean} True when resets_at is present and no longer in the future.
+ */
+function resetPassed(window, nowEpoch) {
+  return Boolean(window?.resets_at) && Number(window.resets_at) <= nowEpoch;
+}
+
+/**
  * Compute the whole percent LEFT for one rate-limit window, clamped 0-100.
  *
+ * A window whose reset has already passed has replenished: the CLI resets it
+ * at resets_at, so with no newer usage recorded it is fully available again.
+ * Report it as 100% left rather than echoing the stale pre-reset exhaustion.
+ *
  * @param {object} window - One window entry ({used_percent, ...}).
+ * @param {number} [nowEpoch] - Current epoch seconds; injectable for tests.
  * @returns {number} Remaining budget in percent, rounded to an integer.
  */
-function percentLeft(window) {
+function percentLeft(window, nowEpoch = GLib.get_real_time() / 1000000) {
+  if (resetPassed(window, nowEpoch))
+    return 100;
   const used = window?.used_percent ?? 0;
   return Math.round(Math.min(100, Math.max(0, 100 - used)));
 }
@@ -155,7 +177,9 @@ function resetCountdown(epoch, nowEpoch) {
  * its red local reset weekday/time. When only the 5h limit is exhausted, its
  * red reset countdown replaces zero and the remaining weekly values follow
  * with hyphen separators. Normal separators and the no-data dash are neutral.
- * The "%" sign is omitted to reduce clutter.
+ * The "%" sign is omitted to reduce clutter. A window whose reset moment has
+ * already passed counts as replenished (see :func:`percentLeft`), so a stale
+ * boot reading flips from a dead "0m"/reset clock back to its full value.
  *
  * @param {string} tag - Short CLI tag.
  * @param {object} snapshot - One CLI entry from status.json.
@@ -168,7 +192,7 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
     return `<span foreground="${NEUTRAL_COLOR}">${tag} –</span>`;
 
   const weekly = windows.find(w => w.label === 'week');
-  if (weekly && percentLeft(weekly) === 0) {
+  if (weekly && percentLeft(weekly, nowEpoch) === 0) {
     const staleMark = snapshot.stale ? '?' : '';
     return `<span foreground="${EMPTY_COLOR}">${tag} </span>` +
       `<span foreground="${EMPTY_COLOR}">` +
@@ -176,14 +200,14 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
   }
 
   const fiveHour = windows.find(w => w.label === '5h');
-  const fiveHourExhausted = fiveHour && percentLeft(fiveHour) === 0;
+  const fiveHourExhausted = fiveHour && percentLeft(fiveHour, nowEpoch) === 0;
   const tagColor = fiveHourExhausted
     ? EMPTY_COLOR
-    : percentColor(percentLeft(windows[0]));
+    : percentColor(percentLeft(windows[0], nowEpoch));
   const separator = fiveHourExhausted ? '-' : '·';
   const parts = windows
     .map(w => {
-      const left = percentLeft(w);
+      const left = percentLeft(w, nowEpoch);
       if (w === fiveHour && fiveHourExhausted) {
         return `<span foreground="${EMPTY_COLOR}">` +
           `${resetCountdown(w.resets_at, nowEpoch)}</span>`;
@@ -281,13 +305,18 @@ class AgenticCliStatusButton extends PanelMenu.Button {
     const plan = snapshot.plan ? ` (${snapshot.plan})` : '';
     this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
       `${name}${plan}`, { reactive: false }));
+    const nowEpoch = GLib.get_real_time() / 1000000;
     for (const window of snapshot.windows ?? []) {
-      const left = percentLeft(window);
+      const left = percentLeft(window, nowEpoch);
+      // A window that has already rolled over reads as full; its old reset
+      // time is history, so don't dangle it as if still upcoming.
+      const reset = resetPassed(window, nowEpoch)
+        ? '' : resetsText(window.resets_at);
       const item = new PopupMenu.PopupMenuItem('', { reactive: false });
       item.label.clutter_text.set_markup(
         `   ${GLib.markup_escape_text(String(window.label ?? ''), -1)}: ` +
         `<span foreground="${percentColor(left)}">${left}% left</span>` +
-        GLib.markup_escape_text(resetsText(window.resets_at), -1));
+        GLib.markup_escape_text(reset, -1));
       this.menu.addMenuItem(item);
     }
     if (snapshot.error) {

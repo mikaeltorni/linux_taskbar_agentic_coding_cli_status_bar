@@ -24,6 +24,7 @@ EXTENSION_JS = REPO_ROOT / "agentic-cli-status@local" / "extension.js"
 
 #: Top-level `function name(...) {...}` helpers the gradient logic lives in.
 HELPER_FUNCTIONS = (
+    "resetPassed",
     "percentLeft",
     "percentColor",
     "resetClock",
@@ -109,6 +110,18 @@ const results = {
     {label: '5h', used_percent: 100, resets_at: NOW + 3300},
     {label: 'week', used_percent: 59, resets_at: 1783617000},
     {label: 'fable', used_percent: 100, resets_at: 1783259999}]
+  }, NOW),
+  reset_passed_left_full: percentLeft(
+    {used_percent: 100, resets_at: NOW - 60}, NOW),
+  reset_future_left_exhausted: percentLeft(
+    {used_percent: 100, resets_at: NOW + 60}, NOW),
+  boot_stale_five_hour_replenished: segmentMarkup('CX', {windows: [
+    {label: '5h', used_percent: 100, resets_at: NOW - 3600},
+    {label: 'week', used_percent: 82, resets_at: NOW + 100000}]
+  }, NOW),
+  boot_stale_weekly_replenished: segmentMarkup('CX', {windows: [
+    {label: '5h', used_percent: 40, resets_at: NOW + 3600},
+    {label: 'week', used_percent: 100, resets_at: NOW - 60}]
   }, NOW),
 };
 print(JSON.stringify(results));
@@ -197,6 +210,37 @@ def test_exhausted_five_hour_shows_red_countdown_then_weekly_values(js_results):
 def test_countdown_hides_zero_hours_below_one_hour(js_results):
     assert js_results["countdown_59m"] == "59m"
     assert js_results["countdown_60m"] == "1h00m"
+
+
+def test_window_whose_reset_passed_reads_as_replenished(js_results):
+    # A window whose reset moment has elapsed has rolled over to full, so it
+    # must not keep echoing the stale pre-reset exhaustion.
+    assert js_results["reset_passed_left_full"] == 100
+    assert js_results["reset_future_left_exhausted"] == 0
+
+
+def test_boot_stale_five_hour_flips_from_dead_countdown_to_available(js_results):
+    # On a fresh boot the newest reading can name a 5h reset that already
+    # passed; instead of a stuck red "0m" the segment shows it replenished.
+    segment = js_results["boot_stale_five_hour_replenished"]
+    assert segment == (
+        '<span foreground="#8ff0a4">CX </span>'
+        '<span foreground="#8ff0a4">100</span>'
+        '<span foreground="#9a9996">·</span>'
+        '<span foreground="#ec8f6e">18</span>'
+    )
+    assert '0m' not in segment
+    assert '#ff0000' not in segment  # nothing exhausted/red
+
+
+def test_boot_stale_weekly_flips_from_reset_clock_to_available(js_results):
+    # A weekly limit whose reset already passed is full again, not exhausted,
+    # so it renders its percentages rather than the red reset clock.
+    segment = js_results["boot_stale_weekly_replenished"]
+    assert segment.startswith('<span foreground="#')
+    assert '<span foreground="#8ff0a4">100</span>' in segment  # weekly replenished
+    assert '>60<' in segment   # 5h at 40% used -> 60% left, still normal
+    assert '#ff0000' not in segment  # no red reset clock
 
 
 def test_exhausted_fable_shows_rounded_red_reset_clock_inline(js_results):
