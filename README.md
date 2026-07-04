@@ -9,9 +9,12 @@ The top bar shows one compact colored segment per CLI with the percentage of
 each limit window **left** (remaining, matching the CLIs' own "limit left"
 phrasing). Every percentage is colored individually on a smooth full-RGB
 gradient: green at 100% left, fading to orange at 1% left, and snapping to
-pure red at 0%; the CLI tag takes the color of its 5h window (Grok: its
-weekly window), dashes and separators stay neutral gray, and stale data is
-dimmed with a trailing `?` — e.g. `CX 43·57  CC 88·60·38  GK 12`.
+pure red at 0%. An exhausted weekly limit shows only its red local reset time
+(`GK Thu 09:04`), hiding the irrelevant 5h value. If only a 5h limit is
+exhausted, its red reset countdown replaces zero and the weekly values remain
+visible (`CC 4h59m-41-14`). Otherwise the CLI tag takes the color of its 5h
+window (Grok: its weekly window), dashes and separators stay neutral gray, and
+stale data is dimmed with a trailing `?` — e.g. `CX 43·57  CC 88·60·38  GK 12`.
 Claude's third value is its active model-scoped weekly limit (currently
 Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.

@@ -11,6 +11,7 @@ them under gjs. Skips when gjs is unavailable (e.g. headless CI).
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -22,7 +23,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTENSION_JS = REPO_ROOT / "agentic-cli-status@local" / "extension.js"
 
 #: Top-level `function name(...) {...}` helpers the gradient logic lives in.
-HELPER_FUNCTIONS = ("percentLeft", "percentColor", "segmentMarkup")
+HELPER_FUNCTIONS = (
+    "percentLeft",
+    "percentColor",
+    "resetClock",
+    "resetCountdown",
+    "segmentMarkup",
+)
 
 #: Top-level constants those helpers close over.
 HELPER_CONSTANTS = (
@@ -64,6 +71,8 @@ def js_results() -> dict:
     snippets = [_extract_constant(source, name) for name in HELPER_CONSTANTS]
     snippets += [_extract_function(source, name) for name in HELPER_FUNCTIONS]
     probe = """
+const GLib = imports.gi.GLib;
+const NOW = 1783158600;
 const results = {
   color_100: percentColor(100),
   color_1: percentColor(1),
@@ -75,12 +84,32 @@ const results = {
   dash: segmentMarkup('CX', {windows: []}),
   segment: segmentMarkup('CC', {windows: [
     {used_percent: 0}, {used_percent: 99}, {used_percent: 100}]}),
+  weekly_exhausted_grok: segmentMarkup('GK', {windows: [
+    {label: 'week', used_percent: 100, resets_at: 1783617000}]
+  }, NOW),
+  weekly_exhausted_codex: segmentMarkup('CX', {windows: [
+    {label: '5h', used_percent: 100, resets_at: NOW + 17940},
+    {label: 'week', used_percent: 100, resets_at: 1783617000}]
+  }, NOW),
+  five_hour_exhausted_codex: segmentMarkup('CX', {windows: [
+    {label: '5h', used_percent: 100, resets_at: NOW + 17940},
+    {label: 'week', used_percent: 59, resets_at: 1783617000}]
+  }, NOW),
+  five_hour_exhausted_claude: segmentMarkup('CC', {windows: [
+    {label: '5h', used_percent: 100, resets_at: NOW + 17940},
+    {label: 'week', used_percent: 59, resets_at: 1783617000},
+    {label: 'fable', used_percent: 59, resets_at: 1783617000}]
+  }, NOW),
 };
 print(JSON.stringify(results));
 """
     script = "\n".join(snippets) + probe
     completed = subprocess.run(
-        ["gjs", "-c", script], capture_output=True, text=True, check=True
+        ["gjs", "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "TZ": "UTC"},
     )
     return json.loads(completed.stdout)
 
@@ -129,3 +158,27 @@ def test_segment_colors_each_window_and_tag_follows_first_window(js_results):
     assert '<span foreground="#9a9996">·</span>' in segment
     # The "%" sign is omitted to reduce clutter.
     assert '%' not in segment
+
+
+def test_exhausted_weekly_shows_only_red_reset_clock(js_results):
+    expected = (
+        '<span foreground="#ff0000">GK </span>'
+        '<span foreground="#ff0000">Thu 17:10</span>'
+    )
+    assert js_results["weekly_exhausted_grok"] == expected
+    assert js_results["weekly_exhausted_codex"] == expected.replace("GK", "CX")
+    assert "5h" not in js_results["weekly_exhausted_codex"]
+
+
+def test_exhausted_five_hour_shows_red_countdown_then_weekly_values(js_results):
+    red_countdown = '<span foreground="#ff0000">4h59m</span>'
+    separator = '<span foreground="#9a9996">-</span>'
+    weekly = '<span foreground="#d2aa7d">41</span>'
+    assert js_results["five_hour_exhausted_codex"] == (
+        '<span foreground="#ff0000">CX </span>'
+        + red_countdown + separator + weekly
+    )
+    assert js_results["five_hour_exhausted_claude"] == (
+        '<span foreground="#ff0000">CC </span>'
+        + red_countdown + separator + weekly + separator + weekly
+    )

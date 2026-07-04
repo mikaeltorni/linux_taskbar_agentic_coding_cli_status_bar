@@ -113,29 +113,78 @@ function percentColor(left) {
 }
 
 /**
- * Format the compact taskbar Pango markup for one CLI, e.g. "CX 43·57%".
+ * Format an exhausted weekly window's reset as a local weekday and clock.
+ *
+ * @param {?number} epoch - Reset time in epoch seconds.
+ * @returns {string} Localized reset such as "Mon 14:30", or "0" when absent.
+ */
+function resetClock(epoch) {
+  if (!epoch)
+    return '0';
+  return GLib.DateTime.new_from_unix_local(epoch).format('%a %H:%M');
+}
+
+/**
+ * Format the time remaining until a rolling-window reset as hours/minutes.
+ *
+ * @param {?number} epoch - Reset time in epoch seconds.
+ * @param {number} nowEpoch - Current epoch seconds.
+ * @returns {string} Compact duration such as "4h59m", clamped at "0h00m".
+ */
+function resetCountdown(epoch, nowEpoch) {
+  if (!epoch)
+    return '0';
+  const minutes = Math.max(0, Math.ceil((epoch - nowEpoch) / 60));
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h${String(minutes % 60).padStart(2, '0')}m`;
+}
+
+/**
+ * Format the compact taskbar Pango markup for one CLI, e.g. "CX 43·57".
  *
  * Percentages shown are the limits LEFT (remaining), matching how the CLIs
  * themselves phrase it ("Weekly limit left"), not the used share. Each
  * window's number is colored by its own gradient value; the tag follows the
- * first window (the 5h window, or Grok's weekly one); separators and the
- * no-data dash are neutral. The "%" sign is omitted to reduce clutter.
+ * first displayed window. An exhausted weekly limit replaces all values with
+ * its red local reset weekday/time. When only the 5h limit is exhausted, its
+ * red reset countdown replaces zero and the remaining weekly values follow
+ * with hyphen separators. Normal separators and the no-data dash are neutral.
+ * The "%" sign is omitted to reduce clutter.
  *
  * @param {string} tag - Short CLI tag.
  * @param {object} snapshot - One CLI entry from status.json.
+ * @param {number} [nowEpoch] - Current epoch seconds; injectable for tests.
  * @returns {string} Segment markup; a trailing "?" marks stale data.
  */
-function segmentMarkup(tag, snapshot) {
+function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000) {
   const windows = snapshot?.windows ?? [];
   if (!windows.length)
     return `<span foreground="${NEUTRAL_COLOR}">${tag} –</span>`;
-  const tagColor = percentColor(percentLeft(windows[0]));
+
+  const weekly = windows.find(w => w.label === 'week');
+  if (weekly && percentLeft(weekly) === 0) {
+    const staleMark = snapshot.stale ? '?' : '';
+    return `<span foreground="${EMPTY_COLOR}">${tag} </span>` +
+      `<span foreground="${EMPTY_COLOR}">` +
+      `${resetClock(weekly.resets_at)}${staleMark}</span>`;
+  }
+
+  const fiveHour = windows.find(w => w.label === '5h');
+  const fiveHourExhausted = fiveHour && percentLeft(fiveHour) === 0;
+  const tagColor = fiveHourExhausted
+    ? EMPTY_COLOR
+    : percentColor(percentLeft(windows[0]));
+  const separator = fiveHourExhausted ? '-' : '·';
   const parts = windows
     .map(w => {
       const left = percentLeft(w);
+      if (w === fiveHour && fiveHourExhausted) {
+        return `<span foreground="${EMPTY_COLOR}">` +
+          `${resetCountdown(w.resets_at, nowEpoch)}</span>`;
+      }
       return `<span foreground="${percentColor(left)}">${left}</span>`;
     })
-    .join(`<span foreground="${NEUTRAL_COLOR}">·</span>`);
+    .join(`<span foreground="${NEUTRAL_COLOR}">${separator}</span>`);
   const staleMark = snapshot.stale
     ? `<span foreground="${tagColor}">?</span>`
     : '';
