@@ -116,12 +116,16 @@ function percentColor(left) {
  * Format an exhausted weekly window's reset as a local weekday and clock.
  *
  * @param {?number} epoch - Reset time in epoch seconds.
+ * Endpoint reset timestamps can jitter by a fraction of a minute, so rounding
+ * to the nearest minute keeps both panel and menu clocks stable.
+ *
  * @returns {string} Localized reset such as "Mon 14:30", or "0" when absent.
  */
 function resetClock(epoch) {
   if (!epoch)
     return '0';
-  return GLib.DateTime.new_from_unix_local(epoch).format('%a %H:%M');
+  const roundedEpoch = Math.round(Number(epoch) / 60) * 60;
+  return GLib.DateTime.new_from_unix_local(roundedEpoch).format('%a %H:%M');
 }
 
 /**
@@ -136,6 +140,8 @@ function resetCountdown(epoch, nowEpoch) {
     return '0';
   const minutes = Math.max(0, Math.ceil((epoch - nowEpoch) / 60));
   const hours = Math.floor(minutes / 60);
+  if (hours === 0)
+    return `${minutes}m`;
   return `${hours}h${String(minutes % 60).padStart(2, '0')}m`;
 }
 
@@ -182,6 +188,10 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
         return `<span foreground="${EMPTY_COLOR}">` +
           `${resetCountdown(w.resets_at, nowEpoch)}</span>`;
       }
+      if (w !== weekly && left === 0) {
+        return `<span foreground="${EMPTY_COLOR}">` +
+          `${resetClock(w.resets_at)}</span>`;
+      }
       return `<span foreground="${percentColor(left)}">${left}</span>`;
     })
     .join(`<span foreground="${NEUTRAL_COLOR}">${separator}</span>`);
@@ -200,8 +210,7 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
 function resetsText(epoch) {
   if (!epoch)
     return '';
-  const date = GLib.DateTime.new_from_unix_local(epoch);
-  return ` — resets ${date.format('%a %H:%M')}`;
+  return ` — resets ${resetClock(epoch)}`;
 }
 
 const AgenticCliStatusButton = GObject.registerClass(

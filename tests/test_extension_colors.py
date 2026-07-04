@@ -28,6 +28,7 @@ HELPER_FUNCTIONS = (
     "percentColor",
     "resetClock",
     "resetCountdown",
+    "resetsText",
     "segmentMarkup",
 )
 
@@ -99,6 +100,15 @@ const results = {
     {label: '5h', used_percent: 100, resets_at: NOW + 17940},
     {label: 'week', used_percent: 59, resets_at: 1783617000},
     {label: 'fable', used_percent: 59, resets_at: 1783617000}]
+  }, NOW),
+  countdown_59m: resetCountdown(NOW + 3540, NOW),
+  countdown_60m: resetCountdown(NOW + 3600, NOW),
+  rounded_reset_clock: resetClock(1783259999),
+  rounded_details_reset: resetsText(1783259999),
+  fable_exhausted: segmentMarkup('CC', {windows: [
+    {label: '5h', used_percent: 100, resets_at: NOW + 3300},
+    {label: 'week', used_percent: 59, resets_at: 1783617000},
+    {label: 'fable', used_percent: 100, resets_at: 1783259999}]
   }, NOW),
 };
 print(JSON.stringify(results));
@@ -181,4 +191,23 @@ def test_exhausted_five_hour_shows_red_countdown_then_weekly_values(js_results):
     assert js_results["five_hour_exhausted_claude"] == (
         '<span foreground="#ff0000">CC </span>'
         + red_countdown + separator + weekly + separator + weekly
+    )
+
+
+def test_countdown_hides_zero_hours_below_one_hour(js_results):
+    assert js_results["countdown_59m"] == "59m"
+    assert js_results["countdown_60m"] == "1h00m"
+
+
+def test_exhausted_fable_shows_rounded_red_reset_clock_inline(js_results):
+    separator = '<span foreground="#9a9996">-</span>'
+    assert js_results["rounded_reset_clock"] == "Sun 14:00"
+    assert js_results["rounded_details_reset"] == " — resets Sun 14:00"
+    assert js_results["fable_exhausted"] == (
+        '<span foreground="#ff0000">CC </span>'
+        '<span foreground="#ff0000">55m</span>'
+        + separator
+        + '<span foreground="#d2aa7d">41</span>'
+        + separator
+        + '<span foreground="#ff0000">Sun 14:00</span>'
     )
