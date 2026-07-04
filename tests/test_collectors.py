@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import io
 import json
 
@@ -376,6 +377,39 @@ class TestParsePane:
             ("5h", 1.0),
             ("week", 51.0),
         ]
+
+    def test_codex_pane_parses_reset_times_into_epochs(self):
+        # On boot the tmux /status fallback is the only Codex source, so its
+        # reset phrases must survive as real epochs (not be dropped to null).
+        now = dt.datetime(2026, 7, 4, 17, 25).astimezone().timestamp()
+        text = (
+            "│  5h limit:      [████████████████████] 99% left (resets 20:12) │\n"
+            "│  Weekly limit:  [██████████░░░░░░░░░░] 49% left                │\n"
+            "│                 (resets 09:10 on 9 Jul)                        │\n"
+        )
+        result = collectors.parse_pane("codex", text, now=now)
+        by_label = {w["label"]: w["resets_at"] for w in result["windows"]}
+        # 5h clock-only reset resolves to today at 20:12 (still ahead of now).
+        assert by_label["5h"] == int(
+            dt.datetime(2026, 7, 4, 20, 12).astimezone().timestamp())
+        # Weekly reset carries its explicit calendar day.
+        assert by_label["week"] == int(
+            dt.datetime(2026, 7, 9, 9, 10).astimezone().timestamp())
+
+    def test_codex_pane_clock_already_past_rolls_to_tomorrow(self):
+        # A bare rolling-window clock that already passed today names tomorrow.
+        now = dt.datetime(2026, 7, 4, 21, 0).astimezone().timestamp()
+        text = "  5h limit: [########  ] 57% used (resets 20:12)\n"
+        result = collectors.parse_pane("codex", text, now=now)
+        assert result["windows"][0]["resets_at"] == int(
+            dt.datetime(2026, 7, 5, 20, 12).astimezone().timestamp())
+
+    def test_codex_pane_day_only_reset_stays_null(self):
+        # "resets Mon" carries no clock, so guessing a time would be wrong.
+        now = dt.datetime(2026, 7, 4, 17, 25).astimezone().timestamp()
+        text = "  Weekly limit: [####      ] 43% used (resets Mon)\n"
+        result = collectors.parse_pane("codex", text, now=now)
+        assert result["windows"][0]["resets_at"] is None
 
     def test_grok_weekly_limit_left_pane(self):
         text = "╰────────────────── Weekly limit left: 0% · Composer 2.5 ─╯\n"

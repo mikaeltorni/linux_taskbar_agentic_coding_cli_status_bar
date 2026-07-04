@@ -499,6 +499,99 @@ _PANE_WINDOW_KEYWORDS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
 
 _PANE_PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
+#: A rendered "resets …" phrase and everything after it on the line. The reset
+#: descriptor (clock, optional day) is pulled out of the trailing text.
+_PANE_RESET = re.compile(r"\bresets?\b\s*(?:at\s+)?(.+)$", re.I)
+#: A "HH:MM" 24-hour clock inside a reset descriptor.
+_PANE_RESET_CLOCK = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+#: A "D Mon" calendar day inside a reset descriptor (e.g. "9 Jul").
+_PANE_RESET_DATE = re.compile(r"\b(\d{1,2})\s+([A-Za-z]{3})", re.I)
+#: Three-letter month abbreviation -> month number (1-12).
+_MONTH_ABBR = {
+    name.lower(): number
+    for number, name in enumerate(
+        ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+        start=1,
+    )
+}
+
+
+def _pane_reset_epoch(line: str, now: float) -> int | None:
+    """Convert a rendered "resets …" phrase into an absolute epoch.
+
+    Codex renders reset times relative to the reader's clock — ``(resets
+    20:12)`` for the rolling 5h window and ``(resets 09:10 on 9 Jul)`` for the
+    weekly one — never as timestamps. A bare ``HH:MM`` is resolved to its next
+    occurrence (today, or tomorrow if already past); a ``HH:MM on D Mon`` is
+    resolved to that calendar day this year (or next if it has passed). Returns
+    ``None`` when the phrase carries no parseable clock, so day-only wordings
+    like "resets Mon" stay ``None`` rather than guessing a time.
+    """
+    reset = _PANE_RESET.search(line)
+    if not reset:
+        return None
+    descriptor = reset.group(1)
+    clock = _PANE_RESET_CLOCK.search(descriptor)
+    if not clock:
+        return None
+    hour, minute = int(clock.group(1)), int(clock.group(2))
+    base = _dt.datetime.fromtimestamp(now).astimezone()
+    day = _PANE_RESET_DATE.search(descriptor)
+    if day:
+        month = _MONTH_ABBR.get(day.group(2).lower())
+        if month is None:
+            return None
+        try:
+            candidate = base.replace(
+                month=month, day=int(day.group(1)),
+                hour=hour, minute=minute, second=0, microsecond=0,
+            )
+        except ValueError:
+            return None
+        # A day/month already well behind us names next year's occurrence; the
+        # one-day slack absorbs timezone skew around the boundary.
+        if candidate.timestamp() < now - 86400:
+            try:
+                candidate = candidate.replace(year=candidate.year + 1)
+            except ValueError:
+                return None
+        return int(candidate.timestamp())
+    candidate = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate.timestamp() <= now:
+        candidate += _dt.timedelta(days=1)
+    return int(candidate.timestamp())
+
+
+def _pane_window_reset(
+    lines: list[str],
+    keyword: re.Pattern[str],
+    stop_keywords: list[re.Pattern[str]],
+    now: float,
+) -> int | None:
+    """Find one window's reset epoch near its keyword line.
+
+    The reset phrase sits on the window's own line or wraps onto the next
+    (Codex prints the weekly reset on a continuation line). Scans the keyword
+    line and up to two following lines, stopping early if another window's
+    label begins, so a wrapped reset is captured without stealing the next
+    window's.
+    """
+    for index, line in enumerate(lines):
+        if not keyword.search(line):
+            continue
+        for offset in range(3):
+            probe = index + offset
+            if probe >= len(lines):
+                break
+            if offset and any(k.search(lines[probe]) for k in stop_keywords):
+                break
+            epoch = _pane_reset_epoch(lines[probe], now)
+            if epoch is not None:
+                return epoch
+        return None
+    return None
+
 
 def _pane_window_percent(
     lines: list[str], keyword: re.Pattern[str]
@@ -544,16 +637,19 @@ def parse_pane(cli_id: str, text: str, now: float | None = None) -> dict[str, An
         now: Current epoch override (tests).
     """
     lines = text.splitlines()
+    now = now if now is not None else time.time()
+    keywords = _PANE_WINDOW_KEYWORDS.get(cli_id, [])
     windows: list[dict[str, Any]] = []
-    for label, keyword in _PANE_WINDOW_KEYWORDS.get(cli_id, []):
+    for label, keyword in keywords:
         percent = _pane_window_percent(lines, keyword)
         if percent is None:
             continue
-        windows.append({"label": label, "used_percent": percent, "resets_at": None})
+        others = [other for other_label, other in keywords if other is not keyword]
+        windows.append({
+            "label": label,
+            "used_percent": percent,
+            "resets_at": _pane_window_reset(lines, keyword, others, now),
+        })
     if not windows:
         return _snapshot("tmux_pane", error="no usage percentages found in pane")
-    return _snapshot(
-        "tmux_pane",
-        observed_at=now if now is not None else time.time(),
-        windows=windows,
-    )
+    return _snapshot("tmux_pane", observed_at=now, windows=windows)
