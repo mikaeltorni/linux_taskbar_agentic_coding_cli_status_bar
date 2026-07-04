@@ -179,6 +179,8 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       if (snapshot.stale)
         classes.push('acs-stale');
       label.style_class = classes.join(' ');
+      if (!this.menu.isEmpty())
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
       this._appendMenuSection(names[cliId], snapshot);
     }
   }
@@ -204,7 +206,6 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
         `   ⚠ ${snapshot.error}`, { reactive: false }));
     }
-    this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
   }
 });
 
