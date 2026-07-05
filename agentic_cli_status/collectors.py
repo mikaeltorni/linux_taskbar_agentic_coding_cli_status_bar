@@ -307,7 +307,16 @@ def collect_claude(
     if token is None:
         snapshot = _snapshot("claude_oauth_endpoint", plan=subscription, error=error)
         snapshot["checked_at"] = now
-        return _carry_last_reading(snapshot, last_result)
+        snapshot = _carry_last_reading(snapshot, last_result)
+        if error == "access token expired" and snapshot["windows"]:
+            # Claude Code refreshes this token itself on its next use, so an
+            # expired token is a transient we recover from within a tick or
+            # two. While a recent reading is still carried, suppress the error
+            # rather than flashing "access token expired" in the popup; if the
+            # token really stays expired, the carried reading ages into the
+            # ordinary stale marker on its own.
+            snapshot["error"] = None
+        return snapshot
     request = urllib.request.Request(
         CLAUDE_USAGE_URL,
         headers={

@@ -373,6 +373,21 @@ class TestCollectClaude:
         assert calls == []
         assert "expired" in result["error"]
 
+    def test_expired_token_keeps_last_reading_without_alarming(self, sandbox_home):
+        """A briefly expired token self-heals; don't flash an error over data."""
+        write_claude_credentials(sandbox_home, expires_in_ms=-1000)
+        last = {
+            "windows": [{"label": "5h", "used_percent": 20.0, "resets_at": None}],
+            "observed_at": 0.5,
+            "plan": "pro",
+        }
+        result = collectors.collect_claude(
+            sandbox_home, last_result=last, opener=self._opener_returning({}, []),
+            now=1.0,
+        )
+        assert result["error"] is None
+        assert result["windows"] == last["windows"]
+
 
 class TestParsePane:
     def test_codex_status_pane_used_variant(self):
