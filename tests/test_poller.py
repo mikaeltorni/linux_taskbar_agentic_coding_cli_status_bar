@@ -319,3 +319,72 @@ class TestPollOnce:
         # After the throttle window it attempts again.
         poller.poll_once(home=sandbox_home, previous=second, now=NOW + 61)
         assert attempts.count("codex") == codex_attempts + 1
+
+    def test_grok_reset_survives_pane_fallback_without_a_clock(
+        self, sandbox_home, monkeypatch
+    ):
+        """The Grok /usage pane has no reset clock; keep the billing-log epoch.
+
+        When the billing log is stale the poller falls back to the pane, whose
+        "Weekly limit left: 0%" carries the fresh percentage but no reset. The
+        exhausted weekly window must still publish its reset date rather than a
+        bare "0".
+        """
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        # A billing record well past stale_after triggers the pane fallback.
+        write_grok_log(
+            sandbox_home,
+            "grok.log",
+            [grok_billing_record(72, ts="2026-07-03T09:00:00.000Z")],
+        )
+        monkeypatch.setattr(
+            poller,
+            "refresh_and_capture",
+            lambda session, cli_id: (
+                "Weekly limit left: 0%\n" if cli_id == "grok" else None
+            ),
+        )
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        status = poller.poll_once(home=sandbox_home, now=NOW)
+        grok = status["clis"]["grok"]
+        assert grok["source"] == "tmux_pane"
+        assert grok["windows"][0]["used_percent"] == 100.0
+        assert grok["windows"][0]["resets_at"] == 1783577040
+
+
+class TestCarryWindowResets:
+    def test_fills_missing_reset_from_first_fallback(self):
+        snap = {"windows": [
+            {"label": "week", "used_percent": 100.0, "resets_at": None},
+        ]}
+        headless = {"windows": [
+            {"label": "week", "used_percent": 90.0, "resets_at": 4242},
+        ]}
+        result = poller._carry_window_resets(snap, headless, None)
+        assert result["windows"][0]["resets_at"] == 4242
+        # The input snapshot is not mutated in place.
+        assert snap["windows"][0]["resets_at"] is None
+
+    def test_own_reset_wins_and_earlier_fallback_is_preferred(self):
+        snap = {"windows": [
+            {"label": "5h", "used_percent": 50.0, "resets_at": 111},
+            {"label": "week", "used_percent": 100.0, "resets_at": None},
+        ]}
+        headless = {"windows": [
+            {"label": "week", "used_percent": 100.0, "resets_at": 999},
+        ]}
+        last = {"windows": [
+            {"label": "week", "used_percent": 100.0, "resets_at": 555},
+        ]}
+        result = poller._carry_window_resets(snap, headless, last)
+        assert result["windows"][0]["resets_at"] == 111  # own reset kept
+        assert result["windows"][1]["resets_at"] == 999  # headless beats last
+
+    def test_no_fallback_reset_leaves_snapshot_object_unchanged(self):
+        snap = {"windows": [
+            {"label": "week", "used_percent": 100.0, "resets_at": None},
+        ]}
+        result = poller._carry_window_resets(snap, None, {"windows": []})
+        assert result is snap

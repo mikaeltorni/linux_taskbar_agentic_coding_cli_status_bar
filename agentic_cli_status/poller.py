@@ -110,6 +110,49 @@ def _carry_codex_reset_metadata(
     return carried
 
 
+def _carry_window_resets(
+    snapshot: dict[str, Any], *fallbacks: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Fill each window's missing reset epoch from a fallback reading.
+
+    A window's reset time only changes when it actually rolls over, but not
+    every source renders it: the Grok /usage pane shows a bare
+    ``Weekly limit left: 0%`` with no reset clock, and some Codex captures drop
+    a weekly reset that wrapped onto a continuation line. When the reading
+    about to be published names a window but leaves its ``resets_at`` empty,
+    inherit the most recent epoch seen for that label — this tick's headless
+    read first, then the previous poll — so an exhausted window keeps showing
+    its reset date instead of momentarily collapsing to a bare "0". A source
+    that reports its own reset always wins, and a carried epoch that has since
+    passed replenishes through the extension's normal roll-over handling.
+
+    Args:
+        snapshot: The reading whose windows are about to be published.
+        fallbacks: Prior readings to source reset epochs from, most trusted
+            first.
+    """
+    windows = snapshot.get("windows")
+    if not windows:
+        return snapshot
+    known: dict[str, Any] = {}
+    for source in fallbacks:
+        for window in (source or {}).get("windows", []):
+            label = window.get("label")
+            reset = window.get("resets_at")
+            if label is not None and reset is not None and label not in known:
+                known[label] = reset
+    filled: list[dict[str, Any]] = []
+    changed = False
+    for window in windows:
+        if window.get("resets_at") is None and known.get(window.get("label")) is not None:
+            window = {**window, "resets_at": known[window["label"]]}
+            changed = True
+        filled.append(window)
+    if not changed:
+        return snapshot
+    return {**snapshot, "windows": filled}
+
+
 def _collect_cli(
     cli_id: str,
     cli_config: dict[str, Any],
@@ -134,6 +177,10 @@ def _collect_cli(
     snapshot = _carry_fresher_reading(snapshot, last)
     if cli_id == "codex":
         snapshot = _carry_codex_reset_metadata(snapshot, last)
+    # A tmux pane reading can carry fresh percentages but no reset clock (the
+    # Grok pane never shows one); remember this tick's headless reset epochs so
+    # they survive a pane replacement below.
+    headless_snapshot = snapshot
     last_tmux_attempt = (last or {}).get("tmux_attempt_at")
     tmux_wanted = (
         tmux_config.get("enabled", True)
@@ -192,6 +239,7 @@ def _collect_cli(
                         previous_count,
                         current_count,
                     )
+    snapshot = _carry_window_resets(snapshot, headless_snapshot, last)
     snapshot.update(endpoint_marks)
     if last_tmux_attempt is not None:
         # Carry the throttle timestamp across ticks (and pane replacements).
