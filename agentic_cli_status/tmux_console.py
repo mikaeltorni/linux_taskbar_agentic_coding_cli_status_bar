@@ -77,12 +77,15 @@ def resolve_cli_binary(cli_id: str) -> str | None:
 #: the TUI has time to render the usage panel.
 CAPTURE_DELAY_SECONDS = 4.0
 
-#: Codex /usage opens a chooser that contains reset availability but no
-#: rate-limit windows. Detect it so the collector can follow with /status;
-#: never navigate to the adjacent reset-redemption action.
-_CODEX_USAGE_MENU = re.compile(
-    r"^[›>]\s*1\.\s*Show usage\b", re.I | re.M
-)
+#: A rendered Codex rate-limit line ("5h limit: … 99% left", "Weekly limit:
+#: … 7% left"). Its presence means the async /status panel has finished
+#: rendering, so the retry loop can stop re-requesting it.
+_CODEX_RATE_LIMIT_LINE = re.compile(r"\blimit\b[^\n]*\d+\s*%", re.I)
+
+#: How many times to (re)request Codex /status while its async refresh settles.
+#: The first call on a cold process only answers "refresh requested; run
+#: /status again shortly", so a warm render can need a couple of retries.
+_CODEX_STATUS_ATTEMPTS = 3
 
 
 def _tmux(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -153,6 +156,59 @@ def ensure_console(session: str, cli_ids: list[str]) -> bool:
     return created_any
 
 
+def _send_slash(target: str, command: str, sleeper: Any) -> bool:
+    """Type one slash command into a pane, clearing any half-typed input first.
+
+    "Escape" backs out of transient TUI popups without side effects in all
+    three CLIs; "C-u" clears the input line so a stray keystroke cannot
+    concatenate with the command (e.g. "/status" + leftover -> "/statusfoo").
+
+    Returns:
+        True when every keystroke was delivered, False on the first failure.
+    """
+    for keys in (["Escape"], ["C-u"], [command], ["Enter"]):
+        result = _tmux(["send-keys", "-t", target, *keys])
+        if result.returncode != 0:
+            LOGGER.warning(
+                "send-keys to %s failed: %s", target, result.stderr.strip()
+            )
+            return False
+        if keys == [command]:
+            sleeper(0.3)
+    return True
+
+
+def _capture_pane(target: str) -> str | None:
+    """Capture a pane's rendered text, or None when tmux fails."""
+    captured = _tmux(["capture-pane", "-p", "-t", target])
+    if captured.returncode != 0:
+        LOGGER.warning("capture-pane %s failed: %s", target, captured.stderr.strip())
+        return None
+    return captured.stdout
+
+
+def _capture_codex_status(target: str, sleeper: Any) -> str | None:
+    """Request Codex /status until its rate-limit panel renders, and capture it.
+
+    /status is authoritative for the 5h and weekly windows but is async on a
+    cold process: the first call only answers "refresh requested; run /status
+    again shortly". Resend up to :data:`_CODEX_STATUS_ATTEMPTS` times, stopping
+    as soon as a rate-limit line appears, and return the last capture either
+    way so a slow render still contributes whatever it has.
+    """
+    captured: str | None = None
+    for _ in range(_CODEX_STATUS_ATTEMPTS):
+        if not _send_slash(target, "/status", sleeper):
+            return captured
+        sleeper(CAPTURE_DELAY_SECONDS)
+        captured = _capture_pane(target)
+        if captured is None:
+            return None
+        if _CODEX_RATE_LIMIT_LINE.search(captured):
+            break
+    return captured
+
+
 def refresh_and_capture(
     session: str, cli_id: str, sleeper: Any = time.sleep
 ) -> str | None:
@@ -165,53 +221,24 @@ def refresh_and_capture(
 
     Returns:
         The captured pane text, or None when the window is missing or tmux
-        fails. Only the documented slash command plus Enter is ever sent.
+        fails. Only the documented rate-limit slash commands are ever sent.
     """
     target = f"{session}:{cli_id}"
-    command = SLASH_COMMANDS[cli_id]
-    # Clear any half-typed input, then type the slash command. "Escape" backs
-    # out of transient TUI popups without side effects in all three CLIs.
-    for keys in (["Escape"], ["C-u"], [command], ["Enter"]):
-        result = _tmux(["send-keys", "-t", target, *keys])
-        if result.returncode != 0:
-            LOGGER.warning(
-                "send-keys to %s failed: %s", target, result.stderr.strip()
-            )
-            return None
-        if keys == [command]:
-            sleeper(0.3)
-    sleeper(CAPTURE_DELAY_SECONDS)
-    captured = _tmux(["capture-pane", "-p", "-t", target])
-    if captured.returncode != 0:
-        LOGGER.warning("capture-pane %s failed: %s", target, captured.stderr.strip())
+    if not _send_slash(target, SLASH_COMMANDS[cli_id], sleeper):
         return None
-    text = captured.stdout
-    if cli_id == "codex" and _CODEX_USAGE_MENU.search(text):
-        # Codex 0.142+ changed /usage into a menu. It carries the earned-reset
-        # allowance, while /status remains the authoritative rate-limit
-        # breakdown. Capture both and never select the reset-redemption row.
-        LOGGER.debug("captured Codex /usage menu; requesting /status in %s", target)
-        for keys in (["Escape"], ["C-u"], ["/status"], ["Enter"]):
-            sent = _tmux(["send-keys", "-t", target, *keys])
-            if sent.returncode != 0:
-                LOGGER.warning(
-                    "cannot request Codex /status in %s: %s",
-                    target,
-                    sent.stderr.strip(),
-                )
-                return None
-            if keys == ["/status"]:
-                sleeper(0.3)
-        sleeper(CAPTURE_DELAY_SECONDS)
-        breakdown = _tmux(["capture-pane", "-p", "-t", target])
-        if breakdown.returncode != 0:
-            LOGGER.warning(
-                "capture Codex usage breakdown %s failed: %s",
-                target,
-                breakdown.stderr.strip(),
-            )
-            return None
-        text = f"{text.rstrip()}\n{breakdown.stdout}"
+    sleeper(CAPTURE_DELAY_SECONDS)
+    text = _capture_pane(target)
+    if text is None:
+        return None
+    if cli_id == "codex":
+        # Across Codex versions /usage renders either a reset-redemption menu
+        # or a daily-activity heatmap — it carries the earned-reset allowance
+        # but not reliably the rate-limit windows. /status is the authoritative
+        # 5h + weekly breakdown, so always capture it too and parse the union;
+        # never navigate into the reset-redemption action.
+        status_text = _capture_codex_status(target, sleeper)
+        if status_text:
+            text = f"{text.rstrip()}\n{status_text}"
     # Close the usage popup so the pane returns to its idle state.
     _tmux(["send-keys", "-t", target, "Escape"])
     return text

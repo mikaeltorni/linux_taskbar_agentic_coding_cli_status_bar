@@ -109,3 +109,58 @@ class TestRefreshAndCapture:
             ["send-keys", "-t", "acs:codex", "/status"],
             ["send-keys", "-t", "acs:codex", "Enter"],
         ]
+
+    def test_codex_captures_status_even_when_usage_is_a_heatmap(
+        self, monkeypatch
+    ):
+        """Newer Codex /usage shows an activity heatmap, not a reset menu.
+
+        The rate-limit windows live only in /status, so it must be captured
+        regardless of what /usage rendered.
+        """
+        calls = []
+        captures = iter([
+            "Token activity   last 12 months\n daily · weekly · cumulative\n",
+            "5h limit: [####] 92% left (resets 17:19)\n"
+            "Weekly limit: [#] 7% left\n",
+        ])
+
+        def fake_tmux(args):
+            calls.append(args)
+            stdout = next(captures) if args[0] == "capture-pane" else ""
+            return subprocess.CompletedProcess(["tmux", *args], 0, stdout, "")
+
+        monkeypatch.setattr(tmux_console, "_tmux", fake_tmux)
+        text = tmux_console.refresh_and_capture("acs", "codex", sleeper=lambda _: None)
+
+        assert "5h limit" in text and "Weekly limit" in text
+        status_sends = [
+            args for args in calls
+            if args == ["send-keys", "-t", "acs:codex", "/status"]
+        ]
+        assert len(status_sends) == 1
+
+    def test_codex_retries_status_until_rate_limits_render(self, monkeypatch):
+        """A cold /status first answers "refresh requested"; retry until it renders."""
+        calls = []
+        captures = iter([
+            "Usage\n› 1. Show usage\nYou have 2 usage limit resets available.\n",
+            "Refresh requested; run /status again shortly.\n",
+            "5h limit: 99% left (resets 20:12)\nWeekly limit: 9% left\n",
+        ])
+
+        def fake_tmux(args):
+            calls.append(args)
+            stdout = next(captures) if args[0] == "capture-pane" else ""
+            return subprocess.CompletedProcess(["tmux", *args], 0, stdout, "")
+
+        monkeypatch.setattr(tmux_console, "_tmux", fake_tmux)
+        text = tmux_console.refresh_and_capture("acs", "codex", sleeper=lambda _: None)
+
+        assert "2 usage limit resets available" in text
+        assert "5h limit: 99% left" in text
+        status_sends = [
+            args for args in calls
+            if args == ["send-keys", "-t", "acs:codex", "/status"]
+        ]
+        assert len(status_sends) == 2
