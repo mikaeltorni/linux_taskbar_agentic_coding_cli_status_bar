@@ -669,8 +669,10 @@ def parse_pane(cli_id: str, text: str, now: float | None = None) -> dict[str, An
     )
     if cli_id == "codex":
         resets = _CODEX_RESETS_AVAILABLE.search(text)
-        # A completed /usage capture is authoritative: when it does not offer
-        # a reset, the account currently has none. Keep zero explicit so the
-        # poller can clear an older positive allowance.
-        snapshot["resets_available"] = int(resets.group(1)) if resets else 0
+        # Codex 0.142 changed /usage from the reset menu to an activity
+        # heatmap, which carries no allowance metadata. Absence is therefore
+        # unknown, not an authoritative zero; publish only an explicit count
+        # so the poller can retain the last observed allowance.
+        if resets:
+            snapshot["resets_available"] = int(resets.group(1))
     return snapshot

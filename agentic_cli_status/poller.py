@@ -315,6 +315,30 @@ def _write_status(status: dict[str, Any], home: Path) -> None:
     LOGGER.debug("status written to %s", target)
 
 
+def _load_previous_status(home: Path) -> dict[str, Any] | None:
+    """Load the last status snapshot so restart-only metadata survives.
+
+    Args:
+        home: Home directory containing the poller's state directory.
+
+    Returns:
+        The prior aggregate snapshot, or ``None`` when it is absent or invalid.
+    """
+    target = status_path(home)
+    try:
+        previous = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        LOGGER.warning("cannot reload previous status from %s: %s", target, exc)
+        return None
+    if not isinstance(previous, dict) or not isinstance(previous.get("clis"), dict):
+        LOGGER.warning("ignoring invalid previous status shape in %s", target)
+        return None
+    LOGGER.info("reloaded previous status from %s", target)
+    return previous
+
+
 def run_daemon(home: Path | None = None) -> None:
     """Poll forever at the configured rate until SIGTERM/SIGINT.
 
@@ -330,7 +354,7 @@ def run_daemon(home: Path | None = None) -> None:
 
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
-    previous: dict[str, Any] | None = None
+    previous = _load_previous_status(home or Path.home())
     while not stop["requested"]:
         try:
             previous = poll_once(home=home, previous=previous)

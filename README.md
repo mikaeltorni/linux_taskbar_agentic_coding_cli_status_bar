@@ -25,6 +25,9 @@ neutral gray, and stale data is dimmed with a trailing `?` — e.g.
 Claude's third value is its active model-scoped weekly limit (currently
 Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
+Codex's manual-reset allowance remains visible from the last explicit
+`/usage` report when newer Codex versions replace that report with an activity
+heatmap that does not expose reset metadata.
 
 ## How It Works
 

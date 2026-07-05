@@ -88,11 +88,14 @@ class TestParseCodexPane:
         result = collectors.parse_pane("codex", pane, now=1000.0)
         assert result["resets_available"] == 1
 
-    def test_reports_no_available_resets_when_usage_does_not_show_one(self):
+    def test_heatmap_without_reset_count_is_not_authoritative(self):
         result = collectors.parse_pane(
-            "codex", "5h limit: 61% used\nWeekly limit: 22% used\n", now=1000.0
+            "codex",
+            "Token activity   last 12 months\n"
+            "5h limit: 61% used\nWeekly limit: 22% used\n",
+            now=1000.0,
         )
-        assert result["resets_available"] == 0
+        assert "resets_available" not in result
 
     def test_reads_reset_count_even_when_usage_breakdown_is_missing(self):
         result = collectors.parse_pane(

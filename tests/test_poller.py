@@ -49,6 +49,20 @@ class TestPollOnce:
         on_disk = json.loads(poller.status_path(sandbox_home).read_text())
         assert on_disk["clis"]["codex"]["windows"][0]["used_percent"] == 57.0
 
+    def test_previous_status_survives_daemon_restart(self, sandbox_home):
+        """Daemon startup reloads metadata that is unavailable headlessly."""
+        target = poller.status_path(sandbox_home)
+        target.parent.mkdir(parents=True)
+        target.write_text(json.dumps({
+            "generated_at": NOW,
+            "poll_interval_seconds": 5,
+            "clis": {"codex": {"resets_available": 1}},
+        }))
+
+        previous = poller._load_previous_status(sandbox_home)
+
+        assert previous["clis"]["codex"]["resets_available"] == 1
+
     def test_claude_endpoint_interval_reaches_collector(
         self, sandbox_home, monkeypatch
     ):
@@ -159,7 +173,8 @@ class TestPollOnce:
         assert second["clis"]["codex"]["resets_available"] == 1
         assert captures.count("codex") == 1
 
-        # A later /usage response with no allowance explicitly clears it.
+        # A later /usage heatmap has no allowance metadata, so retain the last
+        # authoritative count rather than treating the missing text as zero.
         third = poller.poll_once(home=sandbox_home, previous=second, now=NOW + 61)
         assert third["clis"]["codex"]["resets_available"] == 1
 
@@ -171,8 +186,8 @@ class TestPollOnce:
 
         monkeypatch.setattr(poller, "refresh_and_capture", _capture_without_reset)
         fourth = poller.poll_once(home=sandbox_home, previous=third, now=NOW + 122)
-        assert "resets_available" not in fourth["clis"]["codex"]
-        assert fourth["clis"]["codex"]["resets_checked_at"] == NOW + 122
+        assert fourth["clis"]["codex"]["resets_available"] == 1
+        assert fourth["clis"]["codex"]["resets_checked_at"] == NOW + 61
 
     def test_pane_fallback_keeps_endpoint_throttle_fields(
         self, sandbox_home, monkeypatch
