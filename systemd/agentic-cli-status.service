@@ -11,6 +11,7 @@ Description=Agentic coding CLI rate-limit status poller
 Type=simple
 ExecStart=/usr/bin/env python3 -m agentic_cli_status.poller --daemon
 Environment=PYTHONPATH=%h/.local/share/agentic-cli-status
+EnvironmentFile=-%h/.config/agentic-cli-status/.env
 Restart=on-failure
 RestartSec=30
 

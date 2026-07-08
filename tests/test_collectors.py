@@ -17,7 +17,7 @@ from tests.conftest import (
     write_codex_rollout,
     write_grok_log,
     write_opencode_go_credentials,
-    write_openrouter_session,
+    write_openrouter_env,
 )
 
 
@@ -657,16 +657,24 @@ class TestCollectOpenRouter:
         assert collectors.next_utc_midnight_epoch(before) == 1783555200
         assert collectors.next_utc_midnight_epoch(after) == 1783555200
 
-    def test_collect_openrouter_with_fixture_fetch(self, sandbox_home):
-        from tests.conftest import OPENROUTER_ACTIVITY_FIXTURE, write_openrouter_session
+    def test_requests_from_analytics_rows(self):
+        from tests.conftest import OPENROUTER_ANALYTICS_FIXTURE
 
-        write_openrouter_session(sandbox_home)
+        total = collectors.openrouter_requests_from_analytics(
+            OPENROUTER_ANALYTICS_FIXTURE, "tencent/hy3:free"
+        )
+        assert total == 420
+
+    def test_collect_openrouter_with_fixture_fetch(self, sandbox_home):
+        from tests.conftest import OPENROUTER_ANALYTICS_FIXTURE, write_openrouter_env
+
+        write_openrouter_env(sandbox_home)
         now = 1783502400.0
         calls = []
 
-        def fetch_fn(path, date_str):
-            calls.append((path, date_str))
-            return OPENROUTER_ACTIVITY_FIXTURE
+        def fetch_fn(api_key, date_str, model_slug):
+            calls.append((api_key, date_str, model_slug))
+            return OPENROUTER_ANALYTICS_FIXTURE
 
         result = collectors.collect_openrouter(
             sandbox_home,
@@ -677,18 +685,20 @@ class TestCollectOpenRouter:
         )
         assert result["error"] is None
         assert result["source"] == "openrouter_activity"
-        assert calls == [(sandbox_home / ".config/agentic-cli-status/openrouter-storage.json", "2026-07-08")]
+        assert calls == [
+            ("sk-or-v1-test-management-key", "2026-07-08", "tencent/hy3:free")
+        ]
         assert result["windows"][0]["used_percent"] == 42.0
 
     def test_throttles_within_fetch_interval(self, sandbox_home):
-        from tests.conftest import OPENROUTER_ACTIVITY_FIXTURE, write_openrouter_session
+        from tests.conftest import OPENROUTER_ANALYTICS_FIXTURE, write_openrouter_env
 
-        write_openrouter_session(sandbox_home)
+        write_openrouter_env(sandbox_home)
         calls = []
 
-        def fetch_fn(path, date_str):
+        def fetch_fn(api_key, date_str, model_slug):
             calls.append(1)
-            return OPENROUTER_ACTIVITY_FIXTURE
+            return OPENROUTER_ANALYTICS_FIXTURE
 
         first = collectors.collect_openrouter(
             sandbox_home, fetch_fn=fetch_fn, now=1000.0, min_interval=300
@@ -710,21 +720,25 @@ class TestCollectOpenRouter:
         assert blocked is first
         assert len(calls) == 2
 
-    def test_missing_session_reports_error(self, sandbox_home):
+    def test_missing_key_reports_error(self, sandbox_home):
         result = collectors.collect_openrouter(sandbox_home, now=1.0)
         assert result["windows"] == []
-        assert "session" in result["error"]
+        assert "management API key" in result["error"]
 
-    def test_missing_playwright_does_not_raise(self, sandbox_home, monkeypatch):
-        write_openrouter_session(sandbox_home)
+    def test_fetch_failure_does_not_raise(self, sandbox_home, monkeypatch):
+        write_openrouter_env(sandbox_home)
 
-        def raise_playwright(*args, **kwargs):
-            raise RuntimeError("Playwright is not installed")
+        def raise_fetch(*args, **kwargs):
+            raise RuntimeError("OpenRouter activity HTTP 403")
 
-        monkeypatch.setattr(collectors, "fetch_activity_payload", raise_playwright)
+        monkeypatch.setattr(collectors, "fetch_analytics_rows", raise_fetch)
         result = collectors.collect_openrouter(sandbox_home, now=1000.0)
-        assert "Playwright" in result["error"]
+        assert "403" in result["error"]
         assert result["windows"] == []
+
+    def test_activity_row_date_handles_timestamp(self):
+        row = {"date": "2026-07-07 00:00:00"}
+        assert collectors._activity_row_date(row) == "2026-07-07"
 
 
 class TestTailLines:

@@ -139,6 +139,19 @@ OPENCODE_GO_HTML_FIXTURE = (
     "</body></html>"
 )
 
+OPENROUTER_ANALYTICS_FIXTURE = [
+    {
+        "model": "tencent/hy3-20260706",
+        "variant": "free",
+        "request_count": "420",
+    },
+    {
+        "model": "qwen/qwen3.5-flash-20260224",
+        "variant": "standard",
+        "request_count": "3",
+    },
+]
+
 OPENROUTER_ACTIVITY_FIXTURE = {
     "data": [
         {
@@ -184,13 +197,16 @@ OPENROUTER_ACTIVITY_FIXTURE = {
 }
 
 
-def write_openrouter_session(home: Path, payload: dict | None = None) -> Path:
-    """Write a fake Playwright storage-state file and optional activity cache."""
+def write_openrouter_env(
+    home: Path,
+    api_key: str = "sk-or-v1-test-management-key",
+) -> Path:
+    """Write a fake OpenRouter management-key .env file."""
     config_dir = home / ".config" / "agentic-cli-status"
     config_dir.mkdir(parents=True, exist_ok=True)
-    target = config_dir / "openrouter-storage.json"
+    target = config_dir / ".env"
     target.write_text(
-        json.dumps(payload or {"cookies": [], "origins": []}),
+        f"OPENROUTER_MANAGEMENT_API_KEY={api_key}\n",
         encoding="utf-8",
     )
     target.chmod(0o600)

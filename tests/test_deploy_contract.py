@@ -34,4 +34,5 @@ def test_systemd_unit_starts_the_packaged_module():
     )
     assert "agentic_cli_status.poller --daemon" in unit
     assert "PYTHONPATH=%h/.local/share/agentic-cli-status" in unit
+    assert "EnvironmentFile=-%h/.config/agentic-cli-status/.env" in unit
     assert "WantedBy=default.target" in unit

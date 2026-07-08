@@ -17,7 +17,7 @@ ACS_PACKAGE_FILES=(
   "acs_logging.py"
   "config.py"
   "collectors.py"
-  "openrouter_browser.py"
+  "openrouter_client.py"
   "tmux_console.py"
   "poller.py"
 )
@@ -43,28 +43,6 @@ acs_python_config() {
     pythonpath="$SCRIPT_DIR"
   fi
   run_as_target env PYTHONPATH="$pythonpath" python3 -c "$code"
-}
-
-# acs_playwright_python - Echo the ACS venv python (Playwright) when present.
-acs_playwright_python() {
-  local venv_python="$TARGET_HOME/.local/share/agentic-cli-status/venv/bin/python"
-  if [ -x "$venv_python" ]; then
-    printf '%s\n' "$venv_python"
-    return 0
-  fi
-  printf '%s\n' "python3"
-}
-
-# acs_python_openrouter - Run Python against the package using the Playwright venv.
-acs_python_openrouter() {
-  local code="$1" pythonpath python
-  if [ -f "$(acs_app_dir)/agentic_cli_status/openrouter_browser.py" ]; then
-    pythonpath="$(acs_app_dir)"
-  else
-    pythonpath="$SCRIPT_DIR"
-  fi
-  python="$(acs_playwright_python)"
-  run_as_target env PYTHONPATH="$pythonpath" "$python" -c "$code"
 }
 
 # acs_config_set KEY_PATH VALUE_JSON - Set one dotted config key (e.g.
@@ -129,6 +107,8 @@ install_agentic_status_core() {
     fi
     run_as_target cp "$SCRIPT_DIR/agentic_cli_status/$file" "$pkg_dir/$file"
   done
+  run_as_target rm -rf "$pkg_dir/__pycache__"
+  run_as_target rm -f "$pkg_dir/openrouter_browser.py"
 
   ext_dst="$TARGET_HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
   msg "Deploying extension $EXTENSION_UUID"
@@ -550,50 +530,95 @@ acs_opencode_go_status() {
 # OpenRouter monitoring component
 # ---------------------------------------------------------------------------
 
-# acs_openrouter_storage_path - Echo the Playwright session cache file.
-acs_openrouter_storage_path() {
-  printf '%s/.config/agentic-cli-status/openrouter-storage.json\n' "$TARGET_HOME"
+# acs_openrouter_env_path - Echo the OpenRouter management-key .env file.
+acs_openrouter_env_path() {
+  printf '%s/.config/agentic-cli-status/.env\n' "$TARGET_HOME"
 }
 
-# acs_ensure_playwright - Install Playwright + Chromium into the ACS venv.
-acs_ensure_playwright() {
-  local venv_dir app_dir python
-  app_dir="$(acs_app_dir)"
-  venv_dir="$app_dir/venv"
-  python="$venv_dir/bin/python"
-  if [ -x "$python" ] && "$python" -c "from playwright.sync_api import sync_playwright" 2>/dev/null; then
-    return 0
-  fi
-  msg "Installing Playwright for OpenRouter session setup (one-time)…"
-  run_as_target mkdir -p "$app_dir"
-  if [ ! -x "$python" ]; then
-    run_as_target python3 -m venv "$venv_dir"
-    python="$venv_dir/bin/python"
-  fi
-  run_as_target "$python" -m pip install playwright
-  run_as_target "$python" -m playwright install chromium
-  msg "Playwright ready at $venv_dir"
+# acs_openrouter_key_configured - Return 0 when a management API key is present.
+acs_openrouter_key_configured() {
+  acs_python_config "
+from agentic_cli_status.openrouter_client import management_api_key
+from pathlib import Path
+raise SystemExit(0 if management_api_key(Path('$TARGET_HOME')) else 1)
+" 2>/dev/null
 }
 
-# acs_configure_openrouter_session - Headed browser login + console confirm.
-acs_configure_openrouter_session() {
-  local storage_path
-  storage_path="$(acs_openrouter_storage_path)"
-  acs_ensure_playwright || return 1
-  if [ ! -t 0 ]; then
-    msg "OpenRouter session setup requires an interactive terminal." >&2
+# acs_write_openrouter_management_key - Persist OPENROUTER_MANAGEMENT_API_KEY.
+acs_write_openrouter_management_key() {
+  local key="$1" env_path
+  env_path="$(acs_openrouter_env_path)"
+  if [ -z "$key" ]; then
+    msg "OpenRouter management API key cannot be empty." >&2
     return 1
   fi
-  msg "Opening a browser to https://openrouter.ai/activity — log in, then confirm here."
-  acs_python_openrouter "
-from pathlib import Path
-from agentic_cli_status.openrouter_browser import run_headed_login
-path = Path('$storage_path')
-path.parent.mkdir(parents=True, exist_ok=True)
-run_headed_login(path, home=Path('$TARGET_HOME'))
-path.chmod(0o600)
-" || return 1
-  msg "OpenRouter session saved to $storage_path (mode 600)."
+  run_as_target mkdir -p "$(dirname "$env_path")"
+  printf '%s=%s\n' "OPENROUTER_MANAGEMENT_API_KEY" "$key" | run_as_target tee "$env_path" >/dev/null
+  run_as_target chmod 600 "$env_path"
+  msg "OpenRouter management API key saved to $env_path (mode 600)."
+}
+
+# acs_import_openrouter_env_from_repo - Copy key from checkout .env when present.
+acs_import_openrouter_env_from_repo() {
+  local repo_env key
+  repo_env="$SCRIPT_DIR/.env"
+  if [ ! -f "$repo_env" ]; then
+    return 1
+  fi
+  key="$(grep -E '^OPENROUTER_MANAGEMENT_API_KEY=' "$repo_env" | head -n1 | cut -d= -f2- | tr -d '\r' | sed -e 's/^["'\'']//' -e 's/["'\'']$//')"
+  if [ -z "$key" ]; then
+    return 1
+  fi
+  acs_write_openrouter_management_key "$key"
+}
+
+# acs_configure_openrouter_management_key - Prompt for or import the management key.
+acs_configure_openrouter_management_key() {
+  local key key_file env_path choice
+  env_path="$(acs_openrouter_env_path)"
+  if acs_import_openrouter_env_from_repo; then
+    return 0
+  fi
+  if [ ! -t 0 ]; then
+    msg "OpenRouter key setup requires an interactive terminal or a repo .env file." >&2
+    return 1
+  fi
+  msg "OpenRouter management API key — create one at https://openrouter.ai/settings/management-keys"
+  msg "Key input — pick one:"
+  msg "  [1] Paste key here"
+  msg "  [2] Read key from a text file (one line, no quotes)"
+  while true; do
+    choice=""
+    read -r -p "Choice [1]: " choice </dev/tty || return 1
+    case "${choice:-1}" in
+      1)
+        read -r -p "management API key: " key </dev/tty || return 1
+        if [ -z "$key" ]; then
+          msg "Key cannot be empty." >&2
+          continue
+        fi
+        acs_write_openrouter_management_key "$key" || return 1
+        return 0
+        ;;
+      2)
+        read -r -p "Path to file containing the management API key: " key_file </dev/tty || return 1
+        if [ ! -f "$key_file" ]; then
+          msg "File not found: $key_file" >&2
+          continue
+        fi
+        key="$(tr -d '\r\n' <"$key_file")"
+        if [ -z "$key" ]; then
+          msg "File is empty." >&2
+          continue
+        fi
+        acs_write_openrouter_management_key "$key" || return 1
+        return 0
+        ;;
+      *)
+        msg "Enter 1 or 2." >&2
+        ;;
+    esac
+  done
 }
 
 # acs_configure_openrouter_model - Prompt for the monitored model slug + limit.
@@ -624,59 +649,81 @@ acs_configure_openrouter_model() {
   msg "OpenRouter model saved: $slug (daily limit $limit requests, UTC midnight reset)."
 }
 
-# acs_install_openrouter - Enable monitoring and run setup when no session exists.
+# acs_install_openrouter - Enable monitoring and import or prompt for the key.
 acs_install_openrouter() {
   _acs_enable_cli openrouter
-  if [ ! -f "$(acs_openrouter_storage_path)" ]; then
-    msg "OpenRouter headless monitoring needs a one-time browser login."
+  if ! acs_openrouter_key_configured; then
+    msg "OpenRouter headless monitoring needs a management API key."
+    acs_import_openrouter_env_from_repo || true
+    if ! acs_openrouter_key_configured; then
+      if [ -t 0 ]; then
+        acs_configure_openrouter_management_key || \
+          msg "Skipped key setup; configure later via the installer menu."
+      else
+        msg "Non-interactive install: add OPENROUTER_MANAGEMENT_API_KEY to repo .env or configure later."
+      fi
+    fi
     if [ -t 0 ]; then
-      acs_configure_openrouter_session || \
-        msg "Skipped session setup; configure later via the installer menu."
       acs_configure_openrouter_model || \
         msg "Skipped model slug setup; configure later via the installer menu."
-    else
-      msg "Non-interactive install: run configure later for session + model slug."
     fi
   fi
+  acs_restart_poller_service || true
 }
 
 acs_uninstall_openrouter() { _acs_disable_cli openrouter; }
 acs_detect_openrouter()     { _acs_detect_cli openrouter; }
 
-# acs_configure_openrouter - Staleness, browser login, and model slug (headless only).
+# acs_configure_openrouter - Staleness, management key, and model slug.
 acs_configure_openrouter() {
   local current_stale stale
   if [ ! -t 0 ]; then
-    msg "OpenRouter configure requires an interactive terminal." >&2
-    return 1
+    if acs_import_openrouter_env_from_repo; then
+      :
+    else
+      msg "OpenRouter configure requires an interactive terminal or a repo .env file." >&2
+      return 1
+    fi
   fi
   current_stale="$(acs_config_get clis.openrouter.stale_after_seconds)"
-  while true; do
-    stale=""
-    read -r -e -i "$current_stale" \
-      -p "openrouter staleness threshold in seconds (>=60): " stale </dev/tty || return 1
-    if [[ "$stale" =~ ^[0-9]+$ ]] && (( stale >= 60 )); then
-      break
-    fi
-    msg "Enter a whole number of seconds, 60 or more." >&2
-  done
-  acs_config_set "clis.openrouter.stale_after_seconds" "$stale"
+  if [ -t 0 ]; then
+    while true; do
+      stale=""
+      read -r -e -i "$current_stale" \
+        -p "openrouter staleness threshold in seconds (>=60): " stale </dev/tty || return 1
+      if [[ "$stale" =~ ^[0-9]+$ ]] && (( stale >= 60 )); then
+        break
+      fi
+      msg "Enter a whole number of seconds, 60 or more." >&2
+    done
+    acs_config_set "clis.openrouter.stale_after_seconds" "$stale"
+  fi
   acs_config_set "clis.openrouter.source" "\"headless\""
-  acs_configure_openrouter_session || return 1
-  acs_configure_openrouter_model || return 1
-  msg "OpenRouter monitoring reconfigured: source=headless stale_after=${stale}s."
+  if [ -t 0 ]; then
+    acs_configure_openrouter_management_key || return 1
+    acs_configure_openrouter_model || return 1
+  fi
+  acs_restart_poller_service || true
+  msg "OpenRouter monitoring reconfigured: source=headless management key at $(acs_openrouter_env_path)."
+  msg "Reload GNOME Shell so the taskbar picks up changes: Alt+F2, type r, press Enter."
+  acs_reload_gnome_shell_x11 || true
 }
 
-# acs_openrouter_status - Per-CLI summary plus model slug and daily limit.
+# acs_openrouter_status - Per-CLI summary plus key, model slug, and daily limit.
 acs_openrouter_status() {
-  local base slug limit
+  local base slug limit key_state
   base="$(_acs_cli_status openrouter)"
   slug="$(acs_config_get clis.openrouter.model_slug 2>/dev/null || true)"
   limit="$(acs_config_get clis.openrouter.daily_limit 2>/dev/null || true)"
-  if [ -n "$slug" ] && [ -n "$limit" ]; then
-    printf '%s, %s, limit %s/day UTC\n' "$base" "$slug" "$limit"
+  if acs_openrouter_key_configured; then
+    key_state="management key configured"
   else
-    printf '%s\n' "$base"
+    key_state="management key missing"
+  fi
+  if [ -n "$slug" ] && [ -n "$limit" ]; then
+    printf '%s, %s, %s, limit %s/day UTC\n' "$base" "$key_state" "$slug" "$limit"
+  else
+    printf '%s, %s\n' "$base" "$key_state"
   fi
 }
 
@@ -744,6 +791,37 @@ acs_detect_tmux_console() {
   [ "$(acs_config_get tmux.enabled 2>/dev/null)" = "true" ]
 }
 
+# acs_restart_poller_service - Reload systemd and restart the poller when installed.
+acs_restart_poller_service() {
+  if [ ! -f "$TARGET_HOME/.config/systemd/user/$ACS_SERVICE_NAME" ]; then
+    return 0
+  fi
+  if acs_systemctl_user daemon-reload && acs_systemctl_user restart "$ACS_SERVICE_NAME"; then
+    msg "Poller service restarted ($ACS_SERVICE_NAME)."
+    return 0
+  fi
+  msg "Could not restart $ACS_SERVICE_NAME; run: systemctl --user restart $ACS_SERVICE_NAME"
+  return 1
+}
+
+# acs_reload_gnome_shell_x11 - In-place Shell reload on X11 (Alt+F2 r).
+acs_reload_gnome_shell_x11() {
+  if [ "${XDG_SESSION_TYPE:-}" != "x11" ]; then
+    msg "Wayland session: log out and back in to load new extension code."
+    return 1
+  fi
+  if ! command -v xdotool >/dev/null 2>&1; then
+    msg "xdotool missing; reload GNOME Shell manually with Alt+F2, type r, Enter."
+    return 1
+  fi
+  DISPLAY="${DISPLAY:-:0}" xdotool key --clearmodifiers alt+F2
+  sleep 0.5
+  DISPLAY="${DISPLAY:-:0}" xdotool type 'r'
+  DISPLAY="${DISPLAY:-:0}" xdotool key Return
+  msg "GNOME Shell reload triggered (Alt+F2 r). Extension picks up status.json on reload."
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Startup service component
 # ---------------------------------------------------------------------------
@@ -757,6 +835,7 @@ acs_install_startup_service() {
   acs_log INFO "installed unit $unit_dir/$ACS_SERVICE_NAME"
   if acs_systemctl_user daemon-reload && \
      acs_systemctl_user enable --now "$ACS_SERVICE_NAME"; then
+    acs_restart_poller_service || true
     msg "Poller service enabled and started ($ACS_SERVICE_NAME)."
   else
     msg "Poller service installed; enable it after login with: systemctl --user enable --now $ACS_SERVICE_NAME"

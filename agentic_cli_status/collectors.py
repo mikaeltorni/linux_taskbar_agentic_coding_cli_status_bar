@@ -23,10 +23,11 @@ plan tokens:
   ``/go`` page on ``opencode.ai``. The collector performs the same headless
   fetch with the same credentials (env vars or ``opencode-go-usage.json``),
   throttled to at least every five minutes.
-- **OpenRouter** — the activity page session (saved by the installer) calls
-  ``/api/v1/activity`` for the current UTC day, sums ``requests`` for the
-  configured free-model slug, and reports usage against the daily ceiling
-  (default 1000) with ``resets_at`` at the next 00:00 UTC boundary.
+- **OpenRouter** — the management API key saved by the installer calls
+  ``POST /api/v1/analytics/query`` (read-only analytics, not chat/completions)
+  for the current UTC day, sums ``request_count`` for the configured
+  free-model slug, and reports usage against the daily ceiling (default
+  1000) with ``resets_at`` at the next 00:00 UTC boundary.
 
 Every collector returns the shared snapshot shape::
 
@@ -60,7 +61,7 @@ from .config import (
     OPENROUTER_MODEL_SLUG_DEFAULT,
     OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS,
 )
-from .openrouter_browser import fetch_activity_payload, storage_state_path
+from .openrouter_client import fetch_analytics_rows, management_api_key
 
 #: How many days of Codex session directories to scan backwards.
 CODEX_SCAN_DAYS = 7
@@ -661,7 +662,7 @@ def collect_opencode_go(
 
 
 # ---------------------------------------------------------------------------
-# OpenRouter: /api/v1/activity (cookie session from installer setup)
+# OpenRouter: /api/v1/analytics/query (management API key from installer setup)
 # ---------------------------------------------------------------------------
 
 
@@ -698,6 +699,68 @@ def model_matches_slug(item_model: str, model_slug: str) -> bool:
     return model.startswith(base) or base in model
 
 
+def _activity_row_date(item: dict[str, Any]) -> str:
+    """Normalize an activity row date to ``YYYY-MM-DD``."""
+    raw = item.get("date")
+    if not isinstance(raw, str) or len(raw) < 10:
+        return ""
+    return raw[:10]
+
+
+def openrouter_requests_from_analytics(
+    rows: list[dict[str, Any]],
+    model_slug: str,
+) -> int:
+    """Sum ``request_count`` analytics rows for ``model_slug``.
+
+    Args:
+        rows: Analytics ``data`` rows for one UTC day.
+        model_slug: Configured model slug filter.
+
+    Returns:
+        Total request count for the day (0 when no rows match).
+    """
+    total = 0
+    for item in rows:
+        model = item.get("model") or ""
+        if not isinstance(model, str) or not model_matches_slug(model, model_slug):
+            continue
+        count = item.get("request_count")
+        if isinstance(count, int) and count >= 0:
+            total += count
+        elif isinstance(count, str) and count.isdigit():
+            total += int(count)
+    return total
+
+
+def openrouter_window_from_requests(
+    requests_today: int,
+    now: float,
+    daily_limit: int = OPENROUTER_DAILY_LIMIT_DEFAULT,
+) -> list[dict[str, Any]]:
+    """Build the daily usage window from a request count.
+
+    Args:
+        requests_today: Requests consumed on the current UTC day.
+        now: Current epoch (reset boundary).
+        daily_limit: Configured daily free-request ceiling.
+
+    Returns:
+        A single-element window list with ``label`` ``day``.
+    """
+    if daily_limit <= 0:
+        used = 100.0
+    else:
+        used = _to_percent(requests_today / daily_limit * 100.0) or 0.0
+    return [
+        {
+            "label": "day",
+            "used_percent": used,
+            "resets_at": next_utc_midnight_epoch(now),
+        }
+    ]
+
+
 def openrouter_requests_today(
     payload: dict[str, Any],
     model_slug: str,
@@ -705,19 +768,13 @@ def openrouter_requests_today(
 ) -> int:
     """Sum ``requests`` for ``model_slug`` on one UTC activity day.
 
-    Args:
-        payload: Parsed ``/api/v1/activity`` JSON body.
-        model_slug: Configured model slug filter.
-        date_str: UTC date string (``YYYY-MM-DD``).
-
-    Returns:
-        Total request count for the day (0 when no rows match).
+    Legacy helper for the completed-day ``/api/v1/activity`` payload shape.
     """
     total = 0
     for item in payload.get("data") or []:
         if not isinstance(item, dict):
             continue
-        if item.get("date") != date_str:
+        if _activity_row_date(item) != date_str:
             continue
         model = item.get("model") or item.get("model_permaslug") or ""
         if not isinstance(model, str) or not model_matches_slug(model, model_slug):
@@ -734,30 +791,10 @@ def openrouter_window_from_activity(
     now: float,
     daily_limit: int = OPENROUTER_DAILY_LIMIT_DEFAULT,
 ) -> list[dict[str, Any]]:
-    """Build the daily usage window from an activity API payload.
-
-    Args:
-        payload: Parsed ``/api/v1/activity`` body.
-        model_slug: Model slug to filter activity rows.
-        now: Current epoch (UTC day selection and reset boundary).
-        daily_limit: Configured daily free-request ceiling.
-
-    Returns:
-        A single-element window list with ``label`` ``day``.
-    """
+    """Build the daily usage window from a legacy activity API payload."""
     date_str = utc_date_string(now)
     requests_today = openrouter_requests_today(payload, model_slug, date_str)
-    if daily_limit <= 0:
-        used = 100.0
-    else:
-        used = _to_percent(requests_today / daily_limit * 100.0) or 0.0
-    return [
-        {
-            "label": "day",
-            "used_percent": used,
-            "resets_at": next_utc_midnight_epoch(now),
-        }
-    ]
+    return openrouter_window_from_requests(requests_today, now, daily_limit)
 
 
 def collect_openrouter(
@@ -771,15 +808,15 @@ def collect_openrouter(
 ) -> dict[str, Any]:
     """Collect OpenRouter free-model daily usage from the activity API.
 
-    Uses the Playwright storage state saved during installer setup. Fetch
-    attempts are throttled (default 60 s). Failed attempts keep the last good
-    reading (see :func:`_carry_last_reading`).
+    Uses the management API key saved during installer setup. Fetch attempts
+    are throttled (default 60 s). Failed attempts keep the last good reading
+    (see :func:`_carry_last_reading`).
 
     Args:
         home: The user's home directory.
         last_result: The previous snapshot for this CLI, if any.
         now: Current epoch override (tests).
-        fetch_fn: ``(storage_path, date_str) -> payload`` override (tests).
+        fetch_fn: ``(api_key, date_str, model_slug) -> rows`` override (tests).
         min_interval: Configured seconds between fetch attempts.
         model_slug: Override for ``clis.openrouter.model_slug``.
         daily_limit: Override for ``clis.openrouter.daily_limit``.
@@ -795,21 +832,24 @@ def collect_openrouter(
         return last_result
     slug = (model_slug or OPENROUTER_MODEL_SLUG_DEFAULT).strip()
     limit = daily_limit if daily_limit is not None else OPENROUTER_DAILY_LIMIT_DEFAULT
-    session_path = storage_state_path(home)
-    if not session_path.is_file():
+    api_key = management_api_key(home)
+    if not api_key:
         snapshot = _snapshot(
             "openrouter_activity",
-            error="OpenRouter session unavailable; run openrouter_monitor configure",
+            error=(
+                "OpenRouter management API key unavailable; "
+                "run openrouter_monitor configure"
+            ),
         )
         snapshot["checked_at"] = now
         return _carry_last_reading(snapshot, last_result)
     date_str = utc_date_string(now)
     fetch = fetch_fn or (
-        lambda path, day: fetch_activity_payload(path, day, headless=True, home=home)
+        lambda key, day, model: fetch_analytics_rows(key, day, model)
     )
     snapshot: dict[str, Any]
     try:
-        payload = fetch(session_path, date_str)
+        rows = fetch(api_key, date_str, slug)
     except (
         OSError,
         RuntimeError,
@@ -818,11 +858,12 @@ def collect_openrouter(
         ImportError,
         json.JSONDecodeError,
     ) as exc:
-        LOGGER.error("openrouter activity fetch failed: %s", exc)
+        LOGGER.error("openrouter analytics fetch failed: %s", exc)
         snapshot = _snapshot("openrouter_activity", error=str(exc))
         snapshot["checked_at"] = now
         return _carry_last_reading(snapshot, last_result)
-    windows = openrouter_window_from_activity(payload, slug, now, limit)
+    requests_today = openrouter_requests_from_analytics(rows, slug)
+    windows = openrouter_window_from_requests(requests_today, now, limit)
     if not windows:
         snapshot = _snapshot(
             "openrouter_activity",

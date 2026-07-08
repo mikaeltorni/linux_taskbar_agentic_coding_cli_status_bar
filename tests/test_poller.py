@@ -7,14 +7,14 @@ import json
 from agentic_cli_status import config as acs_config
 from agentic_cli_status import poller
 from tests.conftest import (
-    OPENROUTER_ACTIVITY_FIXTURE,
+    OPENROUTER_ANALYTICS_FIXTURE,
     OPENCODE_GO_HTML_FIXTURE,
     codex_token_count_event,
     grok_billing_record,
     write_codex_rollout,
     write_grok_log,
     write_opencode_go_credentials,
-    write_openrouter_session,
+    write_openrouter_env,
 )
 
 # 2026-07-03T10:41:25Z, matching the conftest codex event timestamp.
@@ -106,13 +106,13 @@ class TestPollOnce:
         for cli in acs_config.CLI_IDS:
             cfg["clis"][cli]["enabled"] = cli == "openrouter"
         acs_config.save_config(cfg)
-        write_openrouter_session(sandbox_home)
+        write_openrouter_env(sandbox_home)
 
-        def fake_fetch(path, date_str, headless=True, home=None):
-            return OPENROUTER_ACTIVITY_FIXTURE
+        def fake_fetch(api_key, date_str, model_slug):
+            return OPENROUTER_ANALYTICS_FIXTURE
 
         monkeypatch.setattr(
-            "agentic_cli_status.collectors.fetch_activity_payload", fake_fetch
+            "agentic_cli_status.collectors.fetch_analytics_rows", fake_fetch
         )
         monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
         status = poller.poll_once(home=sandbox_home, now=1783502400.0)
@@ -125,13 +125,13 @@ class TestPollOnce:
         for cli in acs_config.CLI_IDS:
             cfg["clis"][cli]["enabled"] = cli == "openrouter"
         acs_config.save_config(cfg)
-        write_openrouter_session(sandbox_home)
+        write_openrouter_env(sandbox_home)
 
-        def fake_fetch(path, date_str, headless=True, home=None):
-            return OPENROUTER_ACTIVITY_FIXTURE
+        def fake_fetch(api_key, date_str, model_slug):
+            return OPENROUTER_ANALYTICS_FIXTURE
 
         monkeypatch.setattr(
-            "agentic_cli_status.collectors.fetch_activity_payload", fake_fetch
+            "agentic_cli_status.collectors.fetch_analytics_rows", fake_fetch
         )
         assert poller.main(["--once"]) == 0
         on_disk = json.loads(poller.status_path(sandbox_home).read_text())
@@ -142,16 +142,15 @@ class TestPollOnce:
     def test_openrouter_twice_writes_stable_daily_window(self, sandbox_home, monkeypatch):
         """Two poll ticks with a fixture fetch produce stable openrouter windows."""
         _configure(sandbox_home)
-        write_openrouter_session(sandbox_home)
+        write_openrouter_env(sandbox_home)
         calls = []
 
-        def fake_fetch(path, date_str):
+        def fake_fetch(api_key, date_str, model_slug):
             calls.append(date_str)
-            return OPENROUTER_ACTIVITY_FIXTURE
+            return OPENROUTER_ANALYTICS_FIXTURE
 
         monkeypatch.setattr(
-            "agentic_cli_status.collectors.fetch_activity_payload",
-            lambda path, date_str, headless=True, home=None: fake_fetch(path, date_str),
+            "agentic_cli_status.collectors.fetch_analytics_rows", fake_fetch
         )
         first = poller.poll_once(home=sandbox_home, now=1783502400.0)
         second = poller.poll_once(

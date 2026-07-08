@@ -101,7 +101,7 @@ run_installer >"$TMP_DIR/install-1.out" 2>"$TMP_DIR/install-1.err" || {
   FAIL=$((FAIL + 1)); echo "FAIL: default install exited non-zero"; }
 
 APP_DIR="$TARGET_HOME/.local/share/agentic-cli-status"
-for module in __init__.py acs_logging.py config.py collectors.py openrouter_browser.py tmux_console.py poller.py; do
+for module in __init__.py acs_logging.py config.py collectors.py openrouter_client.py tmux_console.py poller.py; do
   assert_file_exists "$APP_DIR/agentic_cli_status/$module" "Should deploy $module"
 done
 EXT_DIR="$TARGET_HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"

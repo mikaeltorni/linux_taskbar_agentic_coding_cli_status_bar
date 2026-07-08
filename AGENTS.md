@@ -11,7 +11,8 @@ Monitoring must never consume plan limits: collectors only read data the CLIs
 already store locally (Codex session rollouts, Grok billing logs), their
 billing/metadata endpoint (Claude OAuth usage), a headless HTML scrape of
 the OpenCode Go workspace page (same source as the `opencode-go-usage` plugin),
-or the OpenRouter activity API (cookie session from installer setup; no API key),
+or the OpenRouter analytics API (management API key from installer setup;
+read-only, not chat/completions),
 and the tmux console only ever types rate-limit slash commands (`/status`,
 `/usage`, `/ogc-usage`) — never a prompt. Cline
 is deliberately unmonitored (no usage surface yet); do not add it until it
