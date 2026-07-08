@@ -395,6 +395,201 @@ class TestCollectClaude:
         assert result["windows"] == last["windows"]
 
 
+class TestClaudeOAuthRefresh:
+    """Headless OAuth token refresh so the indicator recovers post-reboot."""
+
+    def _opener_returning(self, payload, calls):
+        def opener(request, timeout):
+            calls.append(request)
+            return _FakeResponse(json.dumps(payload).encode())
+
+        return opener
+
+    def _refresh_opener(self, payload, calls):
+        def opener(request, timeout):
+            calls.append(request)
+            body = json.loads(request.data.decode("utf-8"))
+            assert body["grant_type"] == "refresh_token"
+            assert body["client_id"] == collectors.CLAUDE_OAUTH_CLIENT_ID
+            return _FakeResponse(json.dumps(payload).encode())
+
+        return opener
+
+    def test_refreshes_expired_token_then_fetches_usage(self, sandbox_home):
+        write_claude_credentials(
+            sandbox_home, expires_in_ms=-1000, refresh_token="rt-old"
+        )
+        refresh_calls = []
+        refresh_opener = self._refresh_opener(
+            {
+                "access_token": "sk-new",
+                "refresh_token": "rt-new",
+                "expires_in": 28800,
+                "refresh_token_expires_in": 2592000,
+            },
+            refresh_calls,
+        )
+        usage_calls = []
+        usage_opener = self._opener_returning(
+            {"five_hour": {"utilization": 7}, "seven_day": {"utilization": 41}},
+            usage_calls,
+        )
+        result = collectors.collect_claude(
+            sandbox_home,
+            opener=usage_opener,
+            refresh_opener=refresh_opener,
+            is_running=lambda: False,
+            now=1000.0,
+        )
+        assert result["error"] is None
+        assert result["observed_at"] == 1000.0
+        assert [w["label"] for w in result["windows"]] == ["5h", "week"]
+        # The usage call used the rotated access token.
+        assert usage_calls[0].get_header("Authorization") == "Bearer sk-new"
+        # The rotated credentials were written back to disk.
+        import json as _json
+        from pathlib import Path
+
+        on_disk = _json.loads(
+            (sandbox_home / ".claude" / ".credentials.json").read_text()
+        )["claudeAiOauth"]
+        assert on_disk["accessToken"] == "sk-new"
+        assert on_disk["refreshToken"] == "rt-new"
+        assert on_disk["expiresAt"] == int((1000.0 + 28800) * 1000)
+        assert on_disk["refreshTokenExpiresAt"] == int((1000.0 + 2592000) * 1000)
+        assert len(refresh_calls) == 1
+
+    def test_skips_refresh_while_claude_is_running(self, sandbox_home):
+        write_claude_credentials(
+            sandbox_home, expires_in_ms=-1000, refresh_token="rt-old"
+        )
+        refresh_calls = []
+
+        def refresh_opener(request, timeout):
+            refresh_calls.append(request)
+            return _FakeResponse(b"{}")
+
+        last = {
+            "windows": [{"label": "5h", "used_percent": 50.0, "resets_at": None}],
+            "observed_at": 900.0,
+            "plan": "pro",
+        }
+        result = collectors.collect_claude(
+            sandbox_home,
+            last_result=last,
+            opener=self._opener_returning({}, []),
+            refresh_opener=refresh_opener,
+            is_running=lambda: True,
+            now=1000.0,
+        )
+        # No refresh attempt, no usage attempt: carried reading shown as-is.
+        assert refresh_calls == []
+        assert result["windows"] == last["windows"]
+        assert result["error"] is None
+
+    def test_refresh_failure_carries_last_reading(self, sandbox_home):
+        write_claude_credentials(
+            sandbox_home, expires_in_ms=-1000, refresh_token="rt-old"
+        )
+
+        def refresh_opener(request, timeout):
+            raise collectors.urllib.error.HTTPError(
+                collectors.CLAUDE_OAUTH_TOKEN_URL,
+                400,
+                "bad",
+                __import__("email").message.Message(),
+                io.BytesIO(b'{"error":"invalid_grant"}'),
+            )
+
+        last = {
+            "windows": [{"label": "week", "used_percent": 50.0, "resets_at": None}],
+            "observed_at": 900.0,
+            "plan": "pro",
+        }
+        result = collectors.collect_claude(
+            sandbox_home,
+            last_result=last,
+            opener=self._opener_returning({}, []),
+            refresh_opener=refresh_opener,
+            is_running=lambda: False,
+            now=1000.0,
+        )
+        assert result["windows"] == last["windows"]
+        # The carried reading hides the expired-token transient.
+        assert result["error"] is None
+
+    def test_refresh_without_refresh_token_does_not_call_endpoint(self, sandbox_home):
+        write_claude_credentials(sandbox_home, expires_in_ms=-1000)
+        refresh_calls = []
+
+        def refresh_opener(request, timeout):
+            refresh_calls.append(request)
+            return _FakeResponse(b"{}")
+
+        result = collectors.collect_claude(
+            sandbox_home,
+            opener=self._opener_returning({}, []),
+            refresh_opener=refresh_opener,
+            is_running=lambda: False,
+            now=1.0,
+        )
+        assert refresh_calls == []
+        assert "expired" in result["error"]
+
+    def test_expired_refresh_token_is_not_used(self, sandbox_home):
+        import time
+
+        write_claude_credentials(
+            sandbox_home,
+            expires_in_ms=-1000,
+            refresh_token="rt-old",
+            refresh_expires_in_ms=-1000,
+        )
+        refresh_calls = []
+
+        def refresh_opener(request, timeout):
+            refresh_calls.append(request)
+            return _FakeResponse(b"{}")
+
+        result = collectors.collect_claude(
+            sandbox_home,
+            opener=self._opener_returning({}, []),
+            refresh_opener=refresh_opener,
+            is_running=lambda: False,
+            now=time.time(),
+        )
+        assert refresh_calls == []
+        assert "expired" in result["error"]
+
+    def test_is_running_detects_claude_binary(self, sandbox_home, tmp_path):
+        proc = tmp_path / "proc"
+        proc.mkdir()
+        # Unrelated process should be ignored.
+        (proc / "1").mkdir()
+        (proc / "1" / "cmdline").write_bytes(b"/usr/bin/bash\x00")
+        # The standalone claude binary should match.
+        (proc / "2").mkdir()
+        (proc / "2" / "cmdline").write_bytes(b"/home/u/.local/bin/claude\x00")
+        assert collectors._claude_is_running(proc_root=proc) is True
+
+    def test_is_running_detects_node_launched_claude_code(self, sandbox_home, tmp_path):
+        proc = tmp_path / "proc"
+        proc.mkdir()
+        (proc / "1").mkdir()
+        (proc / "1" / "cmdline").write_bytes(
+            b"node\x00/opt/@anthropic-ai/claude-code/cli.js\x00"
+        )
+        assert collectors._claude_is_running(proc_root=proc) is True
+
+    def test_is_running_false_when_no_claude(self, sandbox_home, tmp_path):
+        proc = tmp_path / "proc"
+        proc.mkdir()
+        (proc / "1").mkdir()
+        (proc / "1" / "cmdline").write_bytes(b"/usr/bin/python3\x00script.py\x00")
+        assert collectors._claude_is_running(proc_root=proc) is False
+
+
+
 class TestParsePane:
     def test_codex_status_pane_used_variant(self):
         text = (

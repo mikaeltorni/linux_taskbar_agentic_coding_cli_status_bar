@@ -214,24 +214,46 @@ def write_openrouter_env(
 
 
 def write_claude_credentials(
-    home: Path, token: str = "sk-test", expires_in_ms: int = 3_600_000
+    home: Path,
+    token: str = "sk-test",
+    expires_in_ms: int = 3_600_000,
+    refresh_token: str | None = None,
+    refresh_expires_in_ms: int = 86_400_000 * 30,
+    scopes: list[str] | None = None,
 ) -> Path:
-    """Write a fake Claude Code OAuth credentials file."""
+    """Write a fake Claude Code OAuth credentials file.
+
+    Args:
+        home: Sandbox home directory.
+        token: Access token to store.
+        expires_in_ms: Milliseconds from now until the access token expires.
+            Negative values produce an already-expired token.
+        refresh_token: Refresh token to store. When omitted no refresh token
+            is written (mirroring the original minimal credentials shape).
+        refresh_expires_in_ms: Milliseconds until the refresh token expires.
+        scopes: OAuth scope list; defaults to the production default set.
+    """
     import time
 
     creds_dir = home / ".claude"
     creds_dir.mkdir(parents=True, exist_ok=True)
     target = creds_dir / ".credentials.json"
-    target.write_text(
-        json.dumps(
-            {
-                "claudeAiOauth": {
-                    "accessToken": token,
-                    "expiresAt": int(time.time() * 1000) + expires_in_ms,
-                    "subscriptionType": "max",
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    oauth: dict = {
+        "accessToken": token,
+        "expiresAt": int(time.time() * 1000) + expires_in_ms,
+        "subscriptionType": "max",
+    }
+    if refresh_token is not None:
+        oauth["refreshToken"] = refresh_token
+        oauth["refreshTokenExpiresAt"] = (
+            int(time.time() * 1000) + refresh_expires_in_ms
+        )
+        oauth["scopes"] = scopes or [
+            "user:file_upload",
+            "user:inference",
+            "user:mcp_servers",
+            "user:profile",
+            "user:sessions:claude_code",
+        ]
+    target.write_text(json.dumps({"claudeAiOauth": oauth}), encoding="utf-8")
     return target

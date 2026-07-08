@@ -14,6 +14,12 @@ plan tokens:
   ``~/.claude/.credentials.json``. It is a billing/metadata endpoint, not a
   model endpoint, so it costs no tokens; calls are throttled to at most one
   per :data:`~agentic_cli_status.config.CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS`.
+  When the stored access token has expired (e.g. right after a reboot, before
+  the user relaunches ``claude``), the collector first refreshes it headlessly
+  via the OAuth token endpoint using the stored refresh token — but only while
+  no ``claude`` process is running, so it can never race the CLI's own refresh
+  and accidentally rotate the single-use refresh token out from under it. The
+  rotated credentials are written back atomically.
 - **Grok** — the CLI logs a ``billing: fetched credits config`` record (with
   ``creditUsagePercent`` and the weekly period) to ``~/.grok/logs/*.log``
   every time it starts or refreshes billing. The collector parses the newest
@@ -44,9 +50,11 @@ unavailable or stale.
 from __future__ import annotations
 
 import datetime as _dt
+import fcntl
 import json
 import os
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -77,6 +85,37 @@ CLAUDE_OAUTH_BETA = "oauth-2025-04-20"
 #: endpoint requires a ``claude-code/<version>`` agent to stay in the normally
 #: rate-limited bucket.
 CLAUDE_UA_FALLBACK_VERSION = "2.0.0"
+
+#: OAuth token-refresh endpoint Claude Code itself POSTs to with its refresh
+#: token. Same host as :data:`CLAUDE_USAGE_URL`; the path and JSON body shape
+#: (``grant_type=refresh_token`` + ``client_id`` + ``scope``) match the CLI's
+#: own ``requestOAuthTokenRefresh`` so rotating refresh tokens round-trip
+#: cleanly. Overridable via ``CLAUDE_CODE_OAUTH_TOKEN_URL`` for staging installs.
+CLAUDE_OAUTH_TOKEN_URL = os.environ.get(
+    "CLAUDE_CODE_OAUTH_TOKEN_URL", "https://api.anthropic.com/v1/oauth/token"
+)
+#: The client_id Claude Code registers with the OAuth provider. The CLI ships
+#: this constant; we mirror it so refresh requests are accepted. A future CLI
+#: build may rotate it, so ``CLAUDE_CODE_OAUTH_CLIENT_ID`` overrides it.
+CLAUDE_OAUTH_CLIENT_ID = os.environ.get(
+    "CLAUDE_CODE_OAUTH_CLIENT_ID", "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+)
+#: Scopes requested on refresh when the credentials file lists none. Mirrors
+#: the default scope set Claude Code requests at login.
+CLAUDE_OAUTH_DEFAULT_SCOPES = (
+    "user:file_upload",
+    "user:inference",
+    "user:mcp_servers",
+    "user:profile",
+    "user:sessions:claude_code",
+)
+#: Name of the lock file Claude Code uses to serialize OAuth refreshes. We hold
+#: the same path (best-effort ``flock``) so two poller instances never refresh
+#: concurrently and clobber a just-rotated refresh token.
+CLAUDE_OAUTH_REFRESH_LOCK_NAME = ".oauth_refresh.lock"
+#: Upper bound on the time we will wait for the refresh lock before giving up.
+CLAUDE_OAUTH_REFRESH_LOCK_TIMEOUT_SECONDS = 5.0
+
 def _snapshot(
     source: str,
     observed_at: float | None = None,
@@ -251,10 +290,245 @@ def _claude_access_token(home: Path) -> tuple[str | None, str | None, str | None
         return None, None, "no accessToken in credentials"
     expires_at = oauth.get("expiresAt")
     if isinstance(expires_at, (int, float)) and expires_at / 1000 < time.time():
-        # Claude Code refreshes the token itself on next launch; never refresh
-        # here, just report the condition.
+        # The access token has expired. The poller refreshes it itself via
+        # :func:`_claude_refresh_oauth_token` when it is safe to do so (no
+        # ``claude`` process is running, so we cannot race the CLI's own
+        # refresh); otherwise the caller reports this condition and carries
+        # the last good reading until Claude Code next launches.
         return None, oauth.get("subscriptionType"), "access token expired"
     return token, oauth.get("subscriptionType"), None
+
+
+def _claude_is_running(proc_root: Path = Path("/proc")) -> bool:
+    """Return True when a Claude Code process appears to be running.
+
+    Scans ``/proc/*/cmdline`` (read-only, no CLI spawn) for an executable
+    whose basename is ``claude`` or a ``cli.js`` shipped inside the
+    ``claude-code`` npm package. Used to gate poller-side OAuth refreshes so
+    we never rotate the refresh token while the CLI holds it in memory.
+    """
+    try:
+        entries = [p for p in proc_root.iterdir() if p.name.isdigit()]
+    except OSError:
+        return False
+    for entry in entries:
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if not raw:
+            continue
+        for part in raw.split(b"\x00"):
+            if not part:
+                continue
+            arg = part.decode("utf-8", "ignore")
+            base = Path(arg).name
+            if base == "claude":
+                return True
+            if base == "cli.js" and "claude-code" in arg:
+                return True
+    return False
+
+
+def _claude_refresh_lock_path(home: Path) -> Path:
+    """Return the path to Claude Code's OAuth refresh lock file."""
+    return home / ".claude" / CLAUDE_OAUTH_REFRESH_LOCK_NAME
+
+
+def _claude_refresh_oauth_token(
+    home: Path,
+    now: float | None = None,
+    opener: Any = None,
+    is_running: Any = None,
+    lock_timeout: float | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    """Refresh Claude Code's OAuth access token using the stored refresh token.
+
+    OAuth refresh tokens are **single-use and rotating**: every successful
+    refresh invalidates the previous refresh token and issues a new one. If
+    two processes refresh concurrently one wins, the other's stored refresh
+    token becomes invalid, and the CLI silently logs the user out. To stay
+    safe this helper:
+
+    * skips entirely when a ``claude`` process is running (the CLI refreshes
+      its own token, and our writing the rotated token back to disk would
+      race it);
+    * holds an ``flock`` on Claude Code's own ``~/.claude/.oauth_refresh.lock``
+      so two poller instances never refresh at once;
+    * writes the rotated ``accessToken``/``refreshToken``/``expiresAt`` back
+      to ``~/.claude/.credentials.json`` atomically, preserving every other
+      field Claude Code stores there.
+
+    A successful refresh does not consume plan limits: it only rotates the
+    auth credential at the OAuth token endpoint, the same call Claude Code
+    makes on its own.
+
+    Args:
+        home: The user's home directory.
+        now: Current epoch override (tests).
+        opener: ``urllib.request.urlopen``-compatible callable (tests).
+        is_running: Callable returning whether ``claude`` is running
+            (tests). Defaults to :func:`_claude_is_running`.
+        lock_timeout: Seconds to wait for the refresh lock (tests). Defaults
+            to :data:`CLAUDE_OAUTH_REFRESH_LOCK_TIMEOUT_SECONDS`.
+
+    Returns:
+        ``(access_token, subscription, error)`` — ``access_token`` is None
+        with an error message when the refresh was skipped or failed. A skip
+        is *not* an error: when ``claude`` is running we return
+        ``("skipped: claude running", subscription, None)``-style sentinel —
+        actually we return ``(None, subscription, "skipped: claude running")``
+        so the caller can fall back to carrying the last reading.
+    """
+    now = now if now is not None else time.time()
+    if is_running is None:
+        is_running = _claude_is_running
+    if lock_timeout is None:
+        lock_timeout = CLAUDE_OAUTH_REFRESH_LOCK_TIMEOUT_SECONDS
+    if is_running():
+        return None, None, "skipped: claude running"
+    creds_file = home / ".claude" / ".credentials.json"
+    try:
+        creds = json.loads(creds_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, None, f"credentials unavailable: {exc}"
+    oauth = dict(creds.get("claudeAiOauth") or {})
+    refresh_token = oauth.get("refreshToken")
+    if not refresh_token:
+        return None, oauth.get("subscriptionType"), "no refresh token in credentials"
+    refresh_expires_at = oauth.get("refreshTokenExpiresAt")
+    if (
+        isinstance(refresh_expires_at, (int, float))
+        and refresh_expires_at / 1000 < now
+    ):
+        return (
+            None,
+            oauth.get("subscriptionType"),
+            "refresh token expired",
+        )
+    scopes = oauth.get("scopes")
+    if not isinstance(scopes, list) or not scopes:
+        scopes = list(CLAUDE_OAUTH_DEFAULT_SCOPES)
+    body = json.dumps(
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": CLAUDE_OAUTH_CLIENT_ID,
+            "scope": " ".join(scopes),
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        CLAUDE_OAUTH_TOKEN_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": claude_user_agent(home),
+            "anthropic-beta": CLAUDE_OAUTH_BETA,
+        },
+        method="POST",
+    )
+    opener = opener or urllib.request.urlopen
+    lock_path = _claude_refresh_lock_path(home)
+    lock_fd: int | None = None
+    try:
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_fd = os.open(
+                lock_path,
+                os.O_CREAT | os.O_RDWR,
+                0o600,
+            )
+        except OSError as exc:
+            LOGGER.warning("claude oauth refresh lock unavailable: %s", exc)
+            lock_fd = None
+        if lock_fd is not None:
+            deadline = now + lock_timeout
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.time() >= deadline:
+                        LOGGER.warning("claude oauth refresh lock timed out")
+                        return (
+                            None,
+                            oauth.get("subscriptionType"),
+                            "refresh lock timed out",
+                        )
+                    time.sleep(0.1)
+            # Re-check after acquiring the lock: another poller may have just
+            # refreshed, or ``claude`` may have launched while we waited.
+            if is_running():
+                return None, oauth.get("subscriptionType"), "skipped: claude running"
+        try:
+            with opener(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body_text = ""
+            try:
+                body_text = exc.read().decode("utf-8", "replace")[:200]
+            except OSError:
+                pass
+            LOGGER.error("claude oauth refresh HTTP %s: %s", exc.code, body_text)
+            return (
+                None,
+                oauth.get("subscriptionType"),
+                f"refresh HTTP {exc.code}",
+            )
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            LOGGER.error("claude oauth refresh failed: %s", exc)
+            return None, oauth.get("subscriptionType"), f"refresh failed: {exc}"
+        new_access = payload.get("access_token")
+        if not isinstance(new_access, str) or not new_access:
+            return (
+                None,
+                oauth.get("subscriptionType"),
+                "refresh response missing access_token",
+            )
+        oauth["accessToken"] = new_access
+        new_refresh = payload.get("refresh_token")
+        if isinstance(new_refresh, str) and new_refresh:
+            oauth["refreshToken"] = new_refresh
+        if isinstance(payload.get("expires_in"), (int, float)):
+            oauth["expiresAt"] = int((now + float(payload["expires_in"])) * 1000)
+        if isinstance(payload.get("refresh_token_expires_in"), (int, float)):
+            oauth["refreshTokenExpiresAt"] = int(
+                (now + float(payload["refresh_token_expires_in"])) * 1000
+            )
+        creds["claudeAiOauth"] = oauth
+        try:
+            creds_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                dir=str(creds_file.parent), prefix=".credentials.", suffix=".tmp"
+            )
+            with os.fdopen(tmp_fd, "w") as fh:
+                json.dump(creds, fh, indent=2)
+            try:
+                old_mode = creds_file.stat().st_mode & 0o777
+            except OSError:
+                old_mode = 0o600
+            os.chmod(tmp_path, old_mode or 0o600)
+            os.replace(tmp_path, creds_file)
+        except OSError as exc:
+            LOGGER.error("claude oauth refresh write-back failed: %s", exc)
+            return (
+                new_access,
+                oauth.get("subscriptionType"),
+                f"refresh write-back failed: {exc}",
+            )
+        LOGGER.info("claude oauth refresh succeeded; credentials updated")
+        return new_access, oauth.get("subscriptionType"), None
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
 
 
 def _carry_last_reading(
@@ -287,6 +561,8 @@ def collect_claude(
     now: float | None = None,
     opener: Any = None,
     min_interval: float | None = None,
+    refresh_opener: Any = None,
+    is_running: Any = None,
 ) -> dict[str, Any]:
     """Collect Claude Code rate limits from the OAuth usage endpoint.
 
@@ -298,14 +574,28 @@ def collect_claude(
     attempts keep the last good reading (see :func:`_carry_last_reading`).
     Every attempted snapshot carries ``checked_at``.
 
+    When the on-disk access token has expired, the collector first tries a
+    headless OAuth refresh (see :func:`_claude_refresh_oauth_token`) so the
+    indicator recovers after a reboot without waiting for the user to
+    relaunch ``claude``. The refresh is skipped while ``claude`` is running
+    (the CLI refreshes its own token) and on any failure the last good
+    reading is carried as before.
+
     Args:
         home: The user's home directory.
         last_result: The previous snapshot for this CLI, if any.
         now: Current epoch override (tests).
-        opener: ``urllib.request.urlopen``-compatible callable (tests).
+        opener: ``urllib.request.urlopen``-compatible callable for the
+            *usage* endpoint (tests).
         min_interval: Configured seconds between endpoint attempts
             (``clis.claude_code.endpoint_min_interval_seconds``); defaults to
             :data:`CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS`.
+        refresh_opener: ``urllib.request.urlopen``-compatible callable for
+            the *token refresh* endpoint (tests). Defaults to
+            :func:`urllib.request.urlopen`.
+        is_running: Callable returning whether ``claude`` is running, used to
+            gate the refresh (tests). Defaults to
+            :func:`_claude_is_running`.
     """
     now = now if now is not None else time.time()
     if min_interval is None:
@@ -323,18 +613,35 @@ def collect_claude(
         return last_result
     token, subscription, error = _claude_access_token(home)
     if token is None:
-        snapshot = _snapshot("claude_oauth_endpoint", plan=subscription, error=error)
-        snapshot["checked_at"] = now
-        snapshot = _carry_last_reading(snapshot, last_result)
-        if error == "access token expired" and snapshot["windows"]:
-            # Claude Code refreshes this token itself on its next use, so an
-            # expired token is a transient we recover from within a tick or
-            # two. While a recent reading is still carried, suppress the error
-            # rather than flashing "access token expired" in the popup; if the
-            # token really stays expired, the carried reading ages into the
-            # ordinary stale marker on its own.
-            snapshot["error"] = None
-        return snapshot
+        if error == "access token expired":
+            # Try a headless refresh so the indicator recovers after a reboot
+            # without waiting for the user to relaunch ``claude``. Safe only
+            # while no ``claude`` process holds the refresh token in memory
+            # (see :func:`_claude_refresh_oauth_token`); if it is skipped or
+            # fails we fall through to carrying the last reading below.
+            refreshed, subscription, refresh_error = _claude_refresh_oauth_token(
+                home, now=now, opener=refresh_opener, is_running=is_running
+            )
+            if refreshed:
+                token = refreshed
+                error = None
+            elif refresh_error and refresh_error != "skipped: claude running":
+                LOGGER.info("claude oauth refresh not attempted: %s", refresh_error)
+        if token is None:
+            snapshot = _snapshot(
+                "claude_oauth_endpoint", plan=subscription, error=error
+            )
+            snapshot["checked_at"] = now
+            snapshot = _carry_last_reading(snapshot, last_result)
+            if error == "access token expired" and snapshot["windows"]:
+                # An expired token is a transient Claude Code recovers from on
+                # its next launch (or that the poller just tried to refresh
+                # above). While a recent reading is still carried, suppress the
+                # error rather than flashing "access token expired" in the
+                # popup; if the token really stays expired, the carried reading
+                # ages into the ordinary stale marker on its own.
+                snapshot["error"] = None
+            return snapshot
     request = urllib.request.Request(
         CLAUDE_USAGE_URL,
         headers={
