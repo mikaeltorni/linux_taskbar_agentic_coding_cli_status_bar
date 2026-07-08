@@ -177,6 +177,143 @@ def _carry_window_resets(
     return {**snapshot, "windows": filled}
 
 
+def _load_pane_capture(home: Path, cli_id: str) -> tuple[str | None, float | None]:
+    """Return saved pane text and its mtime epoch, if any."""
+    pane = state_dir(home) / PANE_DIR_NAME / f"{cli_id}.txt"
+    try:
+        stat = pane.stat()
+        return pane.read_text(encoding="utf-8"), stat.st_mtime
+    except OSError:
+        return None, None
+
+
+def resolve_grok_snapshot(
+    billing: dict[str, Any],
+    *,
+    live_text: str | None,
+    saved_text: str | None,
+    saved_at: float | None,
+    last: dict[str, Any] | None,
+    source_mode: str,
+    tmux_enabled: bool,
+    now: float,
+    stale_after: int,
+    tmux_throttled: bool,
+) -> dict[str, Any]:
+    """Merge Grok billing and console readings with a fixed priority.
+
+    Priority (first match wins):
+
+    1. ``headless`` source or tmux disabled → billing only (ignore live,
+       saved, and prior console readings).
+    2. Live tmux text parses to windows → console (``observed_at`` = ``now``).
+    3. Saved pane fresh (mtime within ``stale_after``) → console
+       (``observed_at`` = file mtime).
+    4. Throttled tick + last ``tmux_pane`` still fresh → last console.
+    5. Billing fallback (``resets_at`` is never invented from billing logs).
+    """
+    plan = billing.get("plan")
+
+    if source_mode == "headless" or not tmux_enabled:
+        return dict(billing)
+
+    def _from_pane(text: str, observed_at: float) -> dict[str, Any] | None:
+        pane = parse_pane("grok", text, now=now)
+        if not pane.get("windows"):
+            return None
+        merged = dict(pane)
+        merged["plan"] = plan or pane.get("plan")
+        merged["observed_at"] = observed_at
+        return merged
+
+    if live_text is not None:
+        live_snap = _from_pane(live_text, now)
+        if live_snap is not None:
+            return live_snap
+
+    if (
+        saved_text is not None
+        and saved_at is not None
+        and (now - saved_at) <= stale_after
+    ):
+        saved_snap = _from_pane(saved_text, saved_at)
+        if saved_snap is not None:
+            return saved_snap
+
+    if (
+        tmux_throttled
+        and last
+        and last.get("source") == "tmux_pane"
+        and last.get("windows")
+        and not _is_stale(last, stale_after, now)
+    ):
+        carried = dict(billing)
+        for key in ("source", "observed_at", "windows", "error"):
+            if key in last:
+                carried[key] = last[key]
+        if not carried.get("plan"):
+            carried["plan"] = last.get("plan") or plan
+        return carried
+
+    return dict(billing)
+
+
+def _collect_grok_cli(
+    cli_config: dict[str, Any],
+    tmux_config: dict[str, Any],
+    home: Path,
+    last: dict[str, Any] | None,
+    now: float,
+) -> dict[str, Any]:
+    """Collect Grok via billing logs plus optional tmux console resolution."""
+    source_mode = cli_config["source"]
+    stale_after = cli_config["stale_after_seconds"]
+    tmux_enabled = tmux_config.get("enabled", True)
+    billing = collect_grok(home)
+    last_tmux_attempt = (last or {}).get("tmux_attempt_at")
+    tmux_wanted = (
+        tmux_enabled
+        and source_mode in ("auto", "tmux")
+        and (
+            source_mode == "tmux"
+            or _is_stale(billing, stale_after, now)
+            or source_mode == "auto"
+        )
+        and (
+            last_tmux_attempt is None
+            or now - last_tmux_attempt >= TMUX_REFRESH_MIN_INTERVAL_SECONDS
+        )
+    )
+    live_text: str | None = None
+    if tmux_wanted:
+        last_tmux_attempt = now
+        live_text = refresh_and_capture(tmux_config["session"], "grok")
+    saved_text, saved_at = (None, None)
+    if source_mode in ("auto", "tmux") and tmux_enabled:
+        saved_text, saved_at = _load_pane_capture(home, "grok")
+    snapshot = resolve_grok_snapshot(
+        billing,
+        live_text=live_text,
+        saved_text=saved_text,
+        saved_at=saved_at,
+        last=last,
+        source_mode=source_mode,
+        tmux_enabled=tmux_enabled,
+        now=now,
+        stale_after=stale_after,
+        tmux_throttled=not tmux_wanted,
+    )
+    if (
+        live_text is not None
+        and parse_pane("grok", live_text, now=now).get("windows")
+    ):
+        _save_pane_capture(home, "grok", live_text)
+    if last_tmux_attempt is not None:
+        snapshot["tmux_attempt_at"] = last_tmux_attempt
+    snapshot["stale"] = _is_stale(snapshot, stale_after, now)
+    return snapshot
+
+
 def _collect_cli(
     cli_id: str,
     cli_config: dict[str, Any],
@@ -193,6 +330,9 @@ def _collect_cli(
     this tick's or the previous one's — wins (see
     :func:`_carry_fresher_reading`).
     """
+    if cli_id == "grok":
+        return _collect_grok_cli(cli_config, tmux_config, home, last, now)
+
     source_mode = cli_config["source"]
     stale_after = cli_config["stale_after_seconds"]
     snapshot: dict[str, Any] = {"windows": []}
@@ -201,9 +341,8 @@ def _collect_cli(
     snapshot = _carry_fresher_reading(snapshot, last)
     if cli_id == "codex":
         snapshot = _carry_codex_reset_metadata(snapshot, last)
-    # A tmux pane reading can carry fresh percentages but no reset clock (the
-    # Grok pane never shows one); remember this tick's headless reset epochs so
-    # they survive a pane replacement below.
+    # Remember this tick's headless reset epochs so they survive a pane
+    # replacement below (Codex weekly resets can wrap onto continuation lines).
     headless_snapshot = snapshot
     last_tmux_attempt = (last or {}).get("tmux_attempt_at")
     tmux_wanted = (

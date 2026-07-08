@@ -126,7 +126,7 @@ class TestCollectGrok:
             {
                 "label": "week",
                 "used_percent": 100.0,
-                "resets_at": 1783577040,
+                "resets_at": None,
             }
         ]
 
@@ -689,11 +689,36 @@ class TestParsePane:
         ]
 
     def test_grok_usage_pane(self):
+        now = dt.datetime(2026, 7, 4, 12, 0).astimezone().timestamp()
         text = "Credits used this week: 100% (period ends Jul 9)\n"
-        result = collectors.parse_pane("grok", text, now=1.0)
+        result = collectors.parse_pane("grok", text, now=now)
+        expected_reset = int(
+            dt.datetime(2026, 7, 9, 23, 59, 59).astimezone().timestamp()
+        )
         assert result["windows"] == [
-            {"label": "week", "used_percent": 100.0, "resets_at": None}
+            {"label": "week", "used_percent": 100.0, "resets_at": expected_reset}
         ]
+
+    def test_grok_weekly_limit_left_with_period_ends(self):
+        now = dt.datetime(2026, 7, 4, 12, 0).astimezone().timestamp()
+        text = (
+            "╰────────────────── Weekly limit left: 45% · Composer 2.5 "
+            "(period ends Jul 12) ─╯\n"
+        )
+        result = collectors.parse_pane("grok", text, now=now)
+        expected_reset = int(
+            dt.datetime(2026, 7, 12, 23, 59, 59).astimezone().timestamp()
+        )
+        assert result["windows"] == [
+            {"label": "week", "used_percent": 55.0, "resets_at": expected_reset}
+        ]
+
+    def test_grok_period_ends_in_duration(self):
+        now = 1_000_000.0
+        text = "Weekly limit left: 10% (period ends in 2d 5h)\n"
+        result = collectors.parse_pane("grok", text, now=now)
+        assert result["windows"][0]["used_percent"] == 90.0
+        assert result["windows"][0]["resets_at"] == int(now + 2 * 86400 + 5 * 3600)
 
     def test_unparseable_pane_reports_error(self):
         result = collectors.parse_pane("codex", "welcome to codex\n", now=1.0)
@@ -957,3 +982,6 @@ class TestTailLines:
         write_grok_log(sandbox_home, "grok.log", records)
         result = collectors.collect_grok(sandbox_home)
         assert result["windows"][0]["used_percent"] == 66.0
+
+
+

@@ -72,6 +72,17 @@ def codex_token_count_event(
     }
 
 
+def write_grok_pane(home: Path, text: str) -> Path:
+    """Write a saved Grok tmux pane capture under the poller state directory."""
+    from agentic_cli_status.config import state_dir
+
+    pane_dir = state_dir(home) / "panes"
+    pane_dir.mkdir(parents=True, exist_ok=True)
+    target = pane_dir / "grok.txt"
+    target.write_text(text, encoding="utf-8")
+    return target
+
+
 def write_grok_log(home: Path, name: str, records: list[dict]) -> Path:
     """Write a fake Grok CLI log file with JSON records, one per line."""
     logs_dir = home / ".grok" / "logs"

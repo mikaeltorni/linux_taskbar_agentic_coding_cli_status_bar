@@ -797,14 +797,12 @@ def _grok_last_billing(log_file: Path) -> dict[str, Any] | None:
     used = _to_percent(billing.get("creditUsagePercent"))
     if used is None:
         return None
-    period = billing.get("currentPeriod") or {}
-    resets = _to_epoch(period.get("end") or billing.get("billingPeriodEnd"))
     observed = float(last_ts) if last_ts is not None else log_file.stat().st_mtime
     return _snapshot(
         "grok_logs",
         observed_at=observed,
         plan=last.get("subscriptionTier"),
-        windows=[{"label": "week", "used_percent": used, "resets_at": resets}],
+        windows=[{"label": "week", "used_percent": used, "resets_at": None}],
     )
 
 
@@ -1235,6 +1233,8 @@ _PANE_RESET_IN = re.compile(
     r"(?:(\d+)m)?",
     re.I,
 )
+#: Grok /usage pane: "(period ends Jul 9)", "period ends in 2d 5h".
+_PANE_PERIOD_END = re.compile(r"\bperiod\s+ends?\b\s*(.+)$", re.I)
 
 #: Three-letter month abbreviation -> month number (1-12).
 _MONTH_ABBR = {
@@ -1245,6 +1245,41 @@ _MONTH_ABBR = {
         start=1,
     )
 }
+
+
+def _pane_period_end_epoch(line: str, now: float) -> int | None:
+    """Convert a Grok "period ends …" phrase into an absolute epoch."""
+    match = _PANE_PERIOD_END.search(line)
+    if not match:
+        return None
+    descriptor = match.group(1).strip().rstrip(")")
+    duration = _pane_reset_duration_epoch(f"resets {descriptor}", now)
+    if duration is not None:
+        return duration
+    day_month = re.search(r"\b(\d{1,2})\s+([A-Za-z]{3})\b", descriptor, re.I)
+    if day_month:
+        day, month_abbr = int(day_month.group(1)), day_month.group(2)
+    else:
+        month_day = re.search(r"\b([A-Za-z]{3})\s+(\d{1,2})\b", descriptor, re.I)
+        if not month_day:
+            return None
+        month_abbr, day = month_day.group(1), int(month_day.group(2))
+    month = _MONTH_ABBR.get(month_abbr.lower())
+    if month is None:
+        return None
+    base = _dt.datetime.fromtimestamp(now).astimezone()
+    try:
+        candidate = base.replace(
+            month=month, day=day, hour=23, minute=59, second=59, microsecond=0,
+        )
+    except ValueError:
+        return None
+    if candidate.timestamp() < now - 86400:
+        try:
+            candidate = candidate.replace(year=candidate.year + 1)
+        except ValueError:
+            return None
+    return int(candidate.timestamp())
 
 
 def _pane_reset_duration_epoch(line: str, now: float) -> int | None:
@@ -1330,7 +1365,9 @@ def _pane_window_reset(
                 break
             if offset and any(k.search(lines[probe]) for k in stop_keywords):
                 break
-            epoch = _pane_reset_duration_epoch(lines[probe], now)
+            epoch = _pane_period_end_epoch(lines[probe], now)
+            if epoch is None:
+                epoch = _pane_reset_duration_epoch(lines[probe], now)
             if epoch is None:
                 epoch = _pane_reset_epoch(lines[probe], now)
             if epoch is not None:
