@@ -11,7 +11,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 // extension.js — agentic-cli-status@local
 //
 // Top-bar indicator showing the rate-limit usage of the major agentic coding
-// CLIs (Codex, Claude Code, Grok CLI). The extension renders ONLY: all data
+// CLIs (Codex, Claude Code, Grok CLI, OpenCode Go, OpenRouter). The extension renders
+// ONLY: all data
 // collection happens in the agentic-cli-status poller service, which writes
 // ~/.local/state/agentic-cli-status/status.json. The extension watches that
 // file with a Gio file monitor plus a fallback timer paced at the poller's
@@ -38,6 +39,8 @@ const CLI_TAGS = [
   ['codex', 'CX'],
   ['claude_code', 'CC'],
   ['grok', 'GK'],
+  ['opencode_go', 'OG'],
+  ['openrouter', 'OR'],
 ];
 
 // Percent-LEFT gradient stops. Every rendered percentage gets its own
@@ -208,8 +211,8 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
       `${resetClock(weekly.resets_at)}${staleMark}</span>`;
   }
 
-  const fiveHour = windows.find(w => w.label === '5h');
-  const fiveHourExhausted = fiveHour && percentLeft(fiveHour, nowEpoch) === 0;
+  const shortTerm = windows.find(w => w.label === '5h' || w.label === 'rolling');
+  const fiveHourExhausted = shortTerm && percentLeft(shortTerm, nowEpoch) === 0;
   const tagColor = fiveHourExhausted
     ? EMPTY_COLOR
     : percentColor(percentLeft(windows[0], nowEpoch));
@@ -217,7 +220,7 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
   const parts = windows
     .map(w => {
       const left = percentLeft(w, nowEpoch);
-      if (w === fiveHour && fiveHourExhausted) {
+      if (w === shortTerm && fiveHourExhausted) {
         return `<span foreground="${EMPTY_COLOR}">` +
           `${resetCountdown(w.resets_at, nowEpoch)}</span>`;
       }
@@ -291,7 +294,13 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         'Waiting for the agentic-cli-status poller…', { reactive: false }));
       return;
     }
-    const names = { codex: 'Codex', claude_code: 'Claude Code', grok: 'Grok CLI' };
+    const names = {
+      codex: 'Codex',
+      claude_code: 'Claude Code',
+      grok: 'Grok CLI',
+      opencode_go: 'OpenCode Go',
+      openrouter: 'OpenRouter',
+    };
     for (const [cliId, tag] of CLI_TAGS) {
       const snapshot = status.clis?.[cliId];
       const label = this._segments.get(cliId);

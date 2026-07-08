@@ -101,7 +101,7 @@ run_installer >"$TMP_DIR/install-1.out" 2>"$TMP_DIR/install-1.err" || {
   FAIL=$((FAIL + 1)); echo "FAIL: default install exited non-zero"; }
 
 APP_DIR="$TARGET_HOME/.local/share/agentic-cli-status"
-for module in __init__.py acs_logging.py config.py collectors.py tmux_console.py poller.py; do
+for module in __init__.py acs_logging.py config.py collectors.py openrouter_browser.py tmux_console.py poller.py; do
   assert_file_exists "$APP_DIR/agentic_cli_status/$module" "Should deploy $module"
 done
 EXT_DIR="$TARGET_HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
@@ -115,7 +115,7 @@ assert_file_contains "$EXT_DIR/extension.js" "poll_interval_seconds" \
 
 CONFIG_FILE="$TARGET_HOME/.config/agentic-cli-status/config.json"
 assert_file_exists "$CONFIG_FILE" "Should seed the default config"
-for cli in codex claude_code grok; do
+for cli in codex claude_code grok opencode_go openrouter; do
   assert_file_contains "$CONFIG_FILE" "\"$cli\"" "Config should have a $cli entry"
 done
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
@@ -157,6 +157,56 @@ assert config["clis"]["claude_code"]["enabled"] is True
 PY
 PASS=$((PASS + 1))
 
+# --- OpenCode Go component registers the plugin and can be disabled alone ---
+run_installer --select opencode_go_monitor >"$TMP_DIR/install-og.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --select opencode_go_monitor exited non-zero"; }
+OPENCODE_CONFIG="$TARGET_HOME/.config/opencode/opencode.json"
+assert_file_exists "$OPENCODE_CONFIG" "OpenCode Go install should seed opencode.json"
+assert_file_contains "$OPENCODE_CONFIG" '"opencode-go-usage"' \
+  "opencode.json should list the opencode-go-usage plugin"
+assert_file_contains "$REPO_ROOT/lib/status_setup.sh" "Application tab" \
+  "Installer should document Application → Cookies auth cookie lookup"
+assert_file_contains "$REPO_ROOT/lib/status_setup.sh" "PASTE_YOUR_AUTH_COOKIE_HERE" \
+  "Installer should support editing the config file for long auth cookies"
+assert_file_contains "$REPO_ROOT/lib/status_setup.sh" "press →" \
+  "Installer menu should tell users to press right-arrow to configure credentials"
+assert_file_contains "$REPO_ROOT/lib/status_setup.sh" "creds missing" \
+  "Installer status should surface missing OpenCode Go credentials in the menu"
+run_installer --uninstall opencode_go_monitor >"$TMP_DIR/uninstall-og.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --uninstall opencode_go_monitor exited non-zero"; }
+PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: opencode_go should be disabled, others untouched"; }
+import json, sys
+config = json.load(open(sys.argv[1]))
+assert config["clis"]["opencode_go"]["enabled"] is False
+assert config["clis"]["grok"]["enabled"] is False
+assert config["clis"]["codex"]["enabled"] is True
+assert config["clis"]["claude_code"]["enabled"] is True
+PY
+PASS=$((PASS + 1))
+
+# --- OpenRouter component enables openrouter and can be disabled alone ------
+run_installer --select openrouter_monitor >"$TMP_DIR/install-or.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --select openrouter_monitor exited non-zero"; }
+PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: openrouter should be enabled with defaults"; }
+import json, sys
+config = json.load(open(sys.argv[1]))
+or_cli = config["clis"]["openrouter"]
+assert or_cli["enabled"] is True
+assert or_cli["source"] == "headless"
+assert or_cli["model_slug"] == "tencent/hy3:free"
+assert or_cli["daily_limit"] == 1000
+PY
+run_installer --uninstall openrouter_monitor >"$TMP_DIR/uninstall-or.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --uninstall openrouter_monitor exited non-zero"; }
+PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: openrouter should be disabled, others untouched"; }
+import json, sys
+config = json.load(open(sys.argv[1]))
+assert config["clis"]["openrouter"]["enabled"] is False
+assert config["clis"]["opencode_go"]["enabled"] is False
+assert config["clis"]["codex"]["enabled"] is True
+PY
+PASS=$((PASS + 1))
+
 # --- --list-components must be side-effect free ----------------------------
 LIST_HOME="$TMP_DIR/list-home"
 mkdir -p "$LIST_HOME"
@@ -173,7 +223,7 @@ PATH="$BIN_DIR:$PATH" SUDO_USER=mk DISPLAY=:99 HOME="$LIST_HOME" \
   XDG_CONFIG_HOME="$LIST_HOME/.config" XDG_STATE_HOME="$LIST_HOME/.local/state" \
   bash "$REPO_ROOT/install.sh" --list-components >"$TMP_DIR/list.out" 2>/dev/null || {
     FAIL=$((FAIL + 1)); echo "FAIL: --list-components exited non-zero"; }
-for ID in codex_monitor claude_code_monitor grok_monitor polling_rate tmux_console startup_service; do
+for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor openrouter_monitor polling_rate tmux_console startup_service; do
   assert_file_contains "$TMP_DIR/list.out" "$ID" "--list-components should list $ID"
 done
 assert_not_contains "$TMP_DIR/list.out" "cline" "--list-components must not offer cline"

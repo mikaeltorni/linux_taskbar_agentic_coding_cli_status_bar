@@ -27,6 +27,24 @@
       "uninstall": 0,
       "workspace": 0
     },
+    "opencode_go_monitor": {
+      "config_value": "",
+      "favorite": 0,
+      "on": 1,
+      "startup": 0,
+      "sticky": 0,
+      "uninstall": 0,
+      "workspace": 0
+    },
+    "openrouter_monitor": {
+      "config_value": "",
+      "favorite": 0,
+      "on": 1,
+      "startup": 0,
+      "sticky": 0,
+      "uninstall": 0,
+      "workspace": 0
+    },
     "polling_rate": {
       "config_value": "",
       "favorite": 0,

@@ -37,15 +37,15 @@ CONFIG_DIR_NAME = "agentic-cli-status"
 CONFIG_FILE_NAME = "config.json"
 
 #: CLI ids in display order. Cline is intentionally absent: it has no usage /
-#: rate-limit surface yet (no /usage equivalent), so only the three major
-#: agentic coding CLIs with one are monitored.
-CLI_IDS = ("codex", "claude_code", "grok")
+#: rate-limit surface yet (no /usage equivalent).
+CLI_IDS = ("codex", "claude_code", "grok", "opencode_go", "openrouter")
 
 #: The slash command each CLI's TUI uses to display its rate limits/usage.
 SLASH_COMMANDS = {
     "codex": "/usage",
     "claude_code": "/usage",
     "grok": "/usage",
+    "opencode_go": "/ogc-usage",
 }
 
 #: Polling rate bounds, in SECONDS. Local file reads are cheap, so the floor
@@ -65,6 +65,25 @@ MIN_STALE_AFTER_SECONDS = 60
 #: the install-configurable ``clis.claude_code.endpoint_min_interval_seconds``.
 CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS = 180
 MIN_CLAUDE_ENDPOINT_INTERVAL_SECONDS = 60
+
+#: OpenCode Go fetches opencode.ai HTML on a 5-minute cache (matching the
+#: opencode-go-usage plugin); the poller honors the same floor independently
+#: of the second-scale poll tick.
+OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS = 300
+MIN_OPENCODE_GO_FETCH_INTERVAL_SECONDS = 300
+
+#: OpenRouter activity API fetches are throttled independently of the poll
+#: tick so second-scale polling does not hammer the site.
+OPENROUTER_FETCH_MIN_INTERVAL_SECONDS = 60
+MIN_OPENROUTER_FETCH_INTERVAL_SECONDS = 60
+
+#: Default free-model daily request ceiling for the configured model slug.
+OPENROUTER_DAILY_LIMIT_DEFAULT = 1000
+MIN_OPENROUTER_DAILY_LIMIT = 1
+MAX_OPENROUTER_DAILY_LIMIT = 100_000
+
+#: Default model slug (Tencent Hy3 free tier).
+OPENROUTER_MODEL_SLUG_DEFAULT = "tencent/hy3:free"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "poll_interval_seconds": 5,
@@ -88,6 +107,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": True,
             "source": "auto",
             "stale_after_seconds": 1800,
+        },
+        "opencode_go": {
+            "enabled": True,
+            "source": "auto",
+            "stale_after_seconds": 1800,
+            "fetch_min_interval_seconds": OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS,
+        },
+        "openrouter": {
+            "enabled": True,
+            "source": "headless",
+            "stale_after_seconds": 1800,
+            "fetch_min_interval_seconds": OPENROUTER_FETCH_MIN_INTERVAL_SECONDS,
+            "model_slug": OPENROUTER_MODEL_SLUG_DEFAULT,
+            "daily_limit": OPENROUTER_DAILY_LIMIT_DEFAULT,
         },
     },
 }
@@ -170,7 +203,14 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     for cli_id in CLI_IDS:
         cli = config["clis"].setdefault(cli_id, {})
         defaults = DEFAULT_CONFIG["clis"][cli_id]
-        if cli.get("source") not in VALID_SOURCES:
+        if cli_id == "openrouter":
+            if cli.get("source") != "headless":
+                LOGGER.warning(
+                    "cli %s only supports headless collection; forcing headless",
+                    cli_id,
+                )
+                cli["source"] = "headless"
+        elif cli.get("source") not in VALID_SOURCES:
             LOGGER.warning(
                 "cli %s has invalid source %r; using %r",
                 cli_id,
@@ -201,6 +241,59 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
         claude["endpoint_min_interval_seconds"] = (
             CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS
         )
+    opencode = config["clis"]["opencode_go"]
+    fetch_interval = opencode.get("fetch_min_interval_seconds")
+    if not isinstance(fetch_interval, int) or not (
+        MIN_OPENCODE_GO_FETCH_INTERVAL_SECONDS
+        <= fetch_interval
+        <= MAX_POLL_INTERVAL_SECONDS
+    ):
+        LOGGER.warning(
+            "opencode_go fetch_min_interval_seconds %r out of range [%d, %d]; "
+            "using default %d",
+            fetch_interval,
+            MIN_OPENCODE_GO_FETCH_INTERVAL_SECONDS,
+            MAX_POLL_INTERVAL_SECONDS,
+            OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS,
+        )
+        opencode["fetch_min_interval_seconds"] = (
+            OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS
+        )
+    openrouter = config["clis"]["openrouter"]
+    or_fetch = openrouter.get("fetch_min_interval_seconds")
+    if not isinstance(or_fetch, int) or not (
+        MIN_OPENROUTER_FETCH_INTERVAL_SECONDS
+        <= or_fetch
+        <= MAX_POLL_INTERVAL_SECONDS
+    ):
+        LOGGER.warning(
+            "openrouter fetch_min_interval_seconds %r out of range [%d, %d]; "
+            "using default %d",
+            or_fetch,
+            MIN_OPENROUTER_FETCH_INTERVAL_SECONDS,
+            MAX_POLL_INTERVAL_SECONDS,
+            OPENROUTER_FETCH_MIN_INTERVAL_SECONDS,
+        )
+        openrouter["fetch_min_interval_seconds"] = (
+            OPENROUTER_FETCH_MIN_INTERVAL_SECONDS
+        )
+    daily_limit = openrouter.get("daily_limit")
+    if not isinstance(daily_limit, int) or not (
+        MIN_OPENROUTER_DAILY_LIMIT <= daily_limit <= MAX_OPENROUTER_DAILY_LIMIT
+    ):
+        LOGGER.warning(
+            "openrouter daily_limit %r out of range [%d, %d]; using default %d",
+            daily_limit,
+            MIN_OPENROUTER_DAILY_LIMIT,
+            MAX_OPENROUTER_DAILY_LIMIT,
+            OPENROUTER_DAILY_LIMIT_DEFAULT,
+        )
+        openrouter["daily_limit"] = OPENROUTER_DAILY_LIMIT_DEFAULT
+    model_slug = openrouter.get("model_slug")
+    if not isinstance(model_slug, str) or not model_slug.strip():
+        openrouter["model_slug"] = OPENROUTER_MODEL_SLUG_DEFAULT
+    else:
+        openrouter["model_slug"] = model_slug.strip()
     return config
 
 

@@ -10,11 +10,14 @@ import pytest
 
 from agentic_cli_status import collectors
 from tests.conftest import (
+    OPENCODE_GO_HTML_FIXTURE,
     codex_token_count_event,
     grok_billing_record,
     write_claude_credentials,
     write_codex_rollout,
     write_grok_log,
+    write_opencode_go_credentials,
+    write_openrouter_session,
 )
 
 
@@ -501,6 +504,227 @@ class TestParsePane:
         result = collectors.parse_pane("codex", "welcome to codex\n", now=1.0)
         assert result["windows"] == []
         assert result["error"]
+
+    def test_opencode_go_ogc_usage_pane(self):
+        text = (
+            "OpenCode Go Usage:\n"
+            "  Rolling:  0%  (resets in 4h 57m)\n"
+            "  Weekly:   17% (resets in 2d 18h)\n"
+            "  Monthly:  8%  (resets in 29d 22h)\n"
+        )
+        now = 1000.0
+        result = collectors.parse_pane("opencode_go", text, now=now)
+        assert result["error"] is None
+        assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
+            ("rolling", 0.0),
+            ("week", 17.0),
+            ("month", 8.0),
+        ]
+        by_label = {w["label"]: w["resets_at"] for w in result["windows"]}
+        assert by_label["rolling"] == int(now + 4 * 3600 + 57 * 60)
+        assert by_label["week"] == int(now + 2 * 86400 + 18 * 3600)
+        assert by_label["month"] == int(now + 29 * 86400 + 22 * 3600)
+
+
+class TestCollectOpenCodeGo:
+    def _opener_returning(self, html: str, calls: list):
+        def opener(request, timeout=20):
+            calls.append(request.full_url)
+            return _FakeResponse(html.encode("utf-8"))
+
+        return opener
+
+    def test_parses_html_fixture(self, sandbox_home):
+        write_opencode_go_credentials(sandbox_home)
+        calls = []
+        now = 2000.0
+        result = collectors.collect_opencode_go(
+            sandbox_home,
+            opener=self._opener_returning(OPENCODE_GO_HTML_FIXTURE, calls),
+            now=now,
+        )
+        assert result["error"] is None
+        assert result["source"] == "opencode_go_page"
+        assert len(calls) == 1
+        assert "wrk_test123" in calls[0]
+        assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
+            ("rolling", 0.0),
+            ("week", 17.0),
+            ("month", 8.0),
+        ]
+        assert result["windows"][0]["resets_at"] == int(now + 17820)
+        assert result["windows"][1]["resets_at"] == int(now + 234000)
+        assert result["windows"][2]["resets_at"] == int(now + 2588400)
+
+    def test_throttles_within_fetch_interval(self, sandbox_home):
+        write_opencode_go_credentials(sandbox_home)
+        calls = []
+        opener = self._opener_returning(OPENCODE_GO_HTML_FIXTURE, calls)
+        first = collectors.collect_opencode_go(
+            sandbox_home, opener=opener, now=1000.0, min_interval=300
+        )
+        blocked = collectors.collect_opencode_go(
+            sandbox_home,
+            last_result=first,
+            opener=opener,
+            now=1200.0,
+            min_interval=300,
+        )
+        collectors.collect_opencode_go(
+            sandbox_home,
+            last_result=first,
+            opener=opener,
+            now=1301.0,
+            min_interval=300,
+        )
+        assert blocked is first
+        assert len(calls) == 2
+
+    def test_empty_last_reading_bypasses_fetch_throttle(self, sandbox_home):
+        write_opencode_go_credentials(sandbox_home)
+        calls = []
+        opener = self._opener_returning(OPENCODE_GO_HTML_FIXTURE, calls)
+        last = {
+            "source": "tmux_pane",
+            "windows": [],
+            "error": "no usage percentages found in pane",
+            "checked_at": 1000.0,
+        }
+        result = collectors.collect_opencode_go(
+            sandbox_home,
+            last_result=last,
+            opener=opener,
+            now=1100.0,
+            min_interval=300,
+        )
+        assert result["windows"]
+        assert len(calls) == 1
+
+    def test_missing_credentials_reports_error(self, sandbox_home):
+        result = collectors.collect_opencode_go(sandbox_home, now=1.0)
+        assert result["windows"] == []
+        assert "credentials" in result["error"]
+
+    def test_failed_fetch_keeps_last_reading(self, sandbox_home):
+        write_opencode_go_credentials(sandbox_home)
+        last = {
+            "windows": [{"label": "week", "used_percent": 17.0, "resets_at": 3000}],
+            "observed_at": 1000.0,
+        }
+
+        def failing_opener(request, timeout=20):
+            raise OSError("network down")
+
+        result = collectors.collect_opencode_go(
+            sandbox_home, last_result=last, opener=failing_opener, now=2000.0
+        )
+        assert result["windows"] == last["windows"]
+        assert result["error"]
+
+
+class TestCollectOpenRouter:
+    def test_requests_today_honors_model_slug(self):
+        from tests.conftest import OPENROUTER_ACTIVITY_FIXTURE
+
+        total = collectors.openrouter_requests_today(
+            OPENROUTER_ACTIVITY_FIXTURE, "tencent/hy3:free", "2026-07-08"
+        )
+        assert total == 420
+
+    def test_short_slug_hy3_matches_hy3_free(self):
+        from tests.conftest import OPENROUTER_ACTIVITY_FIXTURE
+
+        total = collectors.openrouter_requests_today(
+            OPENROUTER_ACTIVITY_FIXTURE, "hy3", "2026-07-08"
+        )
+        assert total == 420
+
+    def test_used_percent_and_resets_at(self):
+        from tests.conftest import OPENROUTER_ACTIVITY_FIXTURE
+
+        now = 1783502400.0  # 2026-07-08 09:20 UTC
+        windows = collectors.openrouter_window_from_activity(
+            OPENROUTER_ACTIVITY_FIXTURE, "tencent/hy3:free", now, daily_limit=1000
+        )
+        assert len(windows) == 1
+        assert windows[0]["label"] == "day"
+        assert windows[0]["used_percent"] == 42.0
+        assert windows[0]["resets_at"] == collectors.next_utc_midnight_epoch(now)
+
+    def test_utc_midnight_boundary_before_and_after(self):
+        before = 1783468800.0  # 2026-07-08 00:00:00 UTC
+        after = 1783468801.0  # one second into the day
+        assert collectors.next_utc_midnight_epoch(before) == 1783555200
+        assert collectors.next_utc_midnight_epoch(after) == 1783555200
+
+    def test_collect_openrouter_with_fixture_fetch(self, sandbox_home):
+        from tests.conftest import OPENROUTER_ACTIVITY_FIXTURE, write_openrouter_session
+
+        write_openrouter_session(sandbox_home)
+        now = 1783502400.0
+        calls = []
+
+        def fetch_fn(path, date_str):
+            calls.append((path, date_str))
+            return OPENROUTER_ACTIVITY_FIXTURE
+
+        result = collectors.collect_openrouter(
+            sandbox_home,
+            fetch_fn=fetch_fn,
+            now=now,
+            model_slug="tencent/hy3:free",
+            daily_limit=1000,
+        )
+        assert result["error"] is None
+        assert result["source"] == "openrouter_activity"
+        assert calls == [(sandbox_home / ".config/agentic-cli-status/openrouter-storage.json", "2026-07-08")]
+        assert result["windows"][0]["used_percent"] == 42.0
+
+    def test_throttles_within_fetch_interval(self, sandbox_home):
+        from tests.conftest import OPENROUTER_ACTIVITY_FIXTURE, write_openrouter_session
+
+        write_openrouter_session(sandbox_home)
+        calls = []
+
+        def fetch_fn(path, date_str):
+            calls.append(1)
+            return OPENROUTER_ACTIVITY_FIXTURE
+
+        first = collectors.collect_openrouter(
+            sandbox_home, fetch_fn=fetch_fn, now=1000.0, min_interval=300
+        )
+        blocked = collectors.collect_openrouter(
+            sandbox_home,
+            last_result=first,
+            fetch_fn=fetch_fn,
+            now=1200.0,
+            min_interval=300,
+        )
+        collectors.collect_openrouter(
+            sandbox_home,
+            last_result=first,
+            fetch_fn=fetch_fn,
+            now=1301.0,
+            min_interval=300,
+        )
+        assert blocked is first
+        assert len(calls) == 2
+
+    def test_missing_session_reports_error(self, sandbox_home):
+        result = collectors.collect_openrouter(sandbox_home, now=1.0)
+        assert result["windows"] == []
+        assert "session" in result["error"]
+
+    def test_missing_playwright_does_not_raise(self, sandbox_home, monkeypatch):
+        write_openrouter_session(sandbox_home)
+
+        def raise_playwright(*args, **kwargs):
+            raise RuntimeError("Playwright is not installed")
+
+        monkeypatch.setattr(collectors, "fetch_activity_payload", raise_playwright)
+        result = collectors.collect_openrouter(sandbox_home, now=1000.0)
+        assert "Playwright" in result["error"]
+        assert result["windows"] == []
 
 
 class TestTailLines:

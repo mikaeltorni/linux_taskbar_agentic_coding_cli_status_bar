@@ -15,7 +15,8 @@ class TestLoadConfig:
         assert set(cfg["clis"]) == set(acs_config.CLI_IDS)
         for cli in acs_config.CLI_IDS:
             assert cfg["clis"][cli]["enabled"] is True
-            assert cfg["clis"][cli]["source"] == "auto"
+            expected_source = "headless" if cli == "openrouter" else "auto"
+            assert cfg["clis"][cli]["source"] == expected_source
 
     def test_cline_is_not_monitored(self):
         assert "cline" not in acs_config.CLI_IDS
@@ -43,6 +44,55 @@ class TestLoadConfig:
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"poll_interval_seconds": 2}), encoding="utf-8")
         assert acs_config.load_config()["poll_interval_seconds"] == 5
+
+    def test_opencode_go_fetch_interval_defaults_and_floor(self, sandbox_home):
+        assert (
+            acs_config.load_config()["clis"]["opencode_go"][
+                "fetch_min_interval_seconds"
+            ]
+            == 300
+        )
+        path = acs_config.config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {"clis": {"opencode_go": {"fetch_min_interval_seconds": 60}}}
+            ),
+            encoding="utf-8",
+        )
+        assert (
+            acs_config.load_config()["clis"]["opencode_go"][
+                "fetch_min_interval_seconds"
+            ]
+            == 300
+        )
+
+    def test_openrouter_defaults_and_validation(self, sandbox_home):
+        openrouter = acs_config.load_config()["clis"]["openrouter"]
+        assert openrouter["source"] == "headless"
+        assert openrouter["model_slug"] == "tencent/hy3:free"
+        assert openrouter["daily_limit"] == 1000
+        assert openrouter["fetch_min_interval_seconds"] == 60
+        path = acs_config.config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "clis": {
+                        "openrouter": {
+                            "fetch_min_interval_seconds": 30,
+                            "daily_limit": 0,
+                            "model_slug": "  ",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        fixed = acs_config.load_config()["clis"]["openrouter"]
+        assert fixed["fetch_min_interval_seconds"] == 60
+        assert fixed["daily_limit"] == 1000
+        assert fixed["model_slug"] == "tencent/hy3:free"
 
     def test_claude_endpoint_interval_defaults_and_floor(self, sandbox_home):
         """The Claude endpoint interval defaults to 180 s and floors at 60 s."""
@@ -78,6 +128,15 @@ class TestLoadConfig:
             ]
             == 60
         )
+
+    def test_openrouter_source_always_headless(self, sandbox_home):
+        path = acs_config.config_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps({"clis": {"openrouter": {"source": "auto"}}}),
+            encoding="utf-8",
+        )
+        assert acs_config.load_config()["clis"]["openrouter"]["source"] == "headless"
 
     def test_invalid_source_falls_back(self, sandbox_home):
         path = acs_config.config_path()

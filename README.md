@@ -1,8 +1,8 @@
 # Linux Taskbar Agentic Coding CLI Status Bar
 
 GNOME taskbar indicator that displays the current rate-limit / usage status of
-the three major agentic coding CLIs — **Codex**, **Claude Code**, and **Grok
-CLI** — polled in the background **without consuming plan limits**. Cline is
+the major agentic coding CLIs — **Codex**, **Claude Code**, **Grok CLI**, and
+**OpenCode Go** — polled in the background **without consuming plan limits**. Cline is
 deliberately not monitored: it has no `/usage`-style rate-limit surface yet.
 
 The top bar shows one compact colored segment per CLI with the percentage of
@@ -21,7 +21,7 @@ own the instant its countdown reaches zero. Reset clocks are rounded to the
 nearest minute to avoid endpoint timestamp jitter. Otherwise the CLI tag takes the
 color of its 5h window (Grok: its weekly window), dashes and separators stay
 neutral gray, and stale data is dimmed with a trailing `?` — e.g.
-`CX 43·57  CC 88·60·38  GK 12`.
+`CX 43·57  CC 88·60·38  GK 12  OG 100·17·8`.
 Claude's third value is its active model-scoped weekly limit (currently
 Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
@@ -53,11 +53,13 @@ Two cooperating parts, connected only by a JSON file:
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` `token_count` events (`rate_limits.primary/secondary`: 5h + weekly `used_percent`, `resets_at`, plan) | `/usage` for available resets, followed by `/status` for 5h + weekly limits |
 | Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h, weekly, and model-scoped weekly windows (including Fable) as `/usage`. Self-throttled to a configurable interval (60–3600 s, default 180) regardless of polling rate; 429 `Retry-After` lockouts are honored and the last good reading is kept on errors | `/usage` |
 | Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/*.log` (`creditUsagePercent` + weekly period + tier) | `/usage` |
+| OpenCode Go | Headless scrape of the workspace `/go` page on `opencode.ai` (same embedded `rollingUsage`/`weeklyUsage`/`monthlyUsage` JSON as the [`opencode-go-usage`](https://npmx.dev/package/opencode-go-usage) plugin). Credentials from `OPENCODE_GO_WORKSPACE_ID`/`OPENCODE_GO_AUTH_COOKIE` or `~/.config/opencode/opencode-go-usage.json`. Self-throttled to ≥300 s | `/ogc-usage` |
 
 None of these send a prompt or start a model turn, so **monitoring never
 consumes plan limits**: the Codex and Grok sources are files the CLIs already
-write, and the Claude endpoint is the billing/metadata endpoint that powers
-`/usage` itself.
+write, the Claude endpoint is the billing/metadata endpoint that powers
+`/usage` itself, and OpenCode Go only reads the same quota page the plugin
+scrapes.
 
 ### tmux debug console
 
@@ -100,6 +102,7 @@ package, extension, default config) always runs; the components are:
 | `codex_monitor` | on | Codex monitoring; reconfigure source mode + staleness |
 | `claude_code_monitor` | on | Claude Code monitoring; same options |
 | `grok_monitor` | on | Grok CLI monitoring; same options |
+| `opencode_go_monitor` | on | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
 | `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |
 | `tmux_console` | on | The background tmux debug console / refresher |
 | `startup_service` | on | Poller starts at login (`systemd --user`) and keeps running |
@@ -110,6 +113,16 @@ action or `bash install.sh --configure-component <id>`):
 - **source** — `auto` (headless first, tmux pane fallback when stale),
   `headless` (never touch tmux), or `tmux` (pane capture only).
 - **stale_after_seconds** — age after which headless data counts as stale.
+
+**OpenCode Go credentials** (for `opencode_go_monitor`): in the installer menu,
+highlight **OpenCode Go usage** and press **→** (right arrow) to configure
+credentials, or run `bash install.sh --configure-component opencode_go_monitor`.
+The menu line shows `creds missing (press →)` until a workspace ID and auth
+cookie are saved. To find the cookie: log in at [opencode.ai](https://opencode.ai),
+open DevTools (**F12**), go to **Application** → **Cookies** →
+`https://opencode.ai`, and copy the **Value** of the **`auth`** row (starts with
+`Fe26.2…`). It is not in the page HTML — searching Elements/Styles for `fe26`
+will not find it.
 
 `claude_code_monitor` additionally exposes **endpoint_min_interval_seconds**
 (60–3600, default 180) — how often the OAuth usage endpoint may be checked.

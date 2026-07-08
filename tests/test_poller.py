@@ -7,10 +7,14 @@ import json
 from agentic_cli_status import config as acs_config
 from agentic_cli_status import poller
 from tests.conftest import (
+    OPENROUTER_ACTIVITY_FIXTURE,
+    OPENCODE_GO_HTML_FIXTURE,
     codex_token_count_event,
     grok_billing_record,
     write_codex_rollout,
     write_grok_log,
+    write_opencode_go_credentials,
+    write_openrouter_session,
 )
 
 # 2026-07-03T10:41:25Z, matching the conftest codex event timestamp.
@@ -63,6 +67,105 @@ class TestPollOnce:
 
         assert previous["clis"]["codex"]["resets_available"] == 1
 
+    def test_opencode_go_twice_writes_three_windows(self, sandbox_home, monkeypatch):
+        """Two poll ticks with a fixture opener produce stable opencode_go windows."""
+        _configure(sandbox_home)
+        write_opencode_go_credentials(sandbox_home)
+        calls = []
+
+        def fake_opener(request, timeout=20):
+            calls.append(1)
+            from tests.conftest import OPENCODE_GO_HTML_FIXTURE
+            from tests.test_collectors import _FakeResponse
+
+            return _FakeResponse(OPENCODE_GO_HTML_FIXTURE.encode("utf-8"))
+
+        monkeypatch.setattr(
+            "agentic_cli_status.collectors.urllib.request.urlopen", fake_opener
+        )
+        first = poller.poll_once(home=sandbox_home, now=NOW)
+        second = poller.poll_once(
+            home=sandbox_home, previous=first, now=NOW + 301
+        )
+        for status in (first, second):
+            og = status["clis"]["opencode_go"]
+            assert og["enabled"] and not og.get("error")
+            assert [(w["label"], w["used_percent"]) for w in og["windows"]] == [
+                ("rolling", 0.0),
+                ("week", 17.0),
+                ("month", 8.0),
+            ]
+        assert len(calls) == 2
+
+    def test_poll_once_with_openrouter_and_tmux_enabled(
+        self, sandbox_home, monkeypatch
+    ):
+        """Default tmux-on config must not crash when openrouter is enabled."""
+        cfg = acs_config.load_config()
+        cfg["tmux"]["enabled"] = True
+        for cli in acs_config.CLI_IDS:
+            cfg["clis"][cli]["enabled"] = cli == "openrouter"
+        acs_config.save_config(cfg)
+        write_openrouter_session(sandbox_home)
+
+        def fake_fetch(path, date_str, headless=True, home=None):
+            return OPENROUTER_ACTIVITY_FIXTURE
+
+        monkeypatch.setattr(
+            "agentic_cli_status.collectors.fetch_activity_payload", fake_fetch
+        )
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        status = poller.poll_once(home=sandbox_home, now=1783502400.0)
+        assert status["clis"]["openrouter"]["windows"][0]["used_percent"] == 42.0
+
+    def test_main_once_openrouter_entrypoint(self, sandbox_home, monkeypatch):
+        """Real ``python -m agentic_cli_status.poller --once`` path."""
+        cfg = acs_config.load_config()
+        cfg["tmux"]["enabled"] = False
+        for cli in acs_config.CLI_IDS:
+            cfg["clis"][cli]["enabled"] = cli == "openrouter"
+        acs_config.save_config(cfg)
+        write_openrouter_session(sandbox_home)
+
+        def fake_fetch(path, date_str, headless=True, home=None):
+            return OPENROUTER_ACTIVITY_FIXTURE
+
+        monkeypatch.setattr(
+            "agentic_cli_status.collectors.fetch_activity_payload", fake_fetch
+        )
+        assert poller.main(["--once"]) == 0
+        on_disk = json.loads(poller.status_path(sandbox_home).read_text())
+        window = on_disk["clis"]["openrouter"]["windows"][0]
+        assert window["used_percent"] == 42.0
+        assert window["resets_at"] == 1783555200
+
+    def test_openrouter_twice_writes_stable_daily_window(self, sandbox_home, monkeypatch):
+        """Two poll ticks with a fixture fetch produce stable openrouter windows."""
+        _configure(sandbox_home)
+        write_openrouter_session(sandbox_home)
+        calls = []
+
+        def fake_fetch(path, date_str):
+            calls.append(date_str)
+            return OPENROUTER_ACTIVITY_FIXTURE
+
+        monkeypatch.setattr(
+            "agentic_cli_status.collectors.fetch_activity_payload",
+            lambda path, date_str, headless=True, home=None: fake_fetch(path, date_str),
+        )
+        first = poller.poll_once(home=sandbox_home, now=1783502400.0)
+        second = poller.poll_once(
+            home=sandbox_home, previous=first, now=1783502459.0
+        )
+        for status in (first, second):
+            or_snap = status["clis"]["openrouter"]
+            assert or_snap["enabled"] and not or_snap.get("error")
+            window = or_snap["windows"][0]
+            assert window["label"] == "day"
+            assert window["used_percent"] == 42.0
+            assert window["resets_at"] == 1783555200
+        assert len(calls) == 1
+
     def test_claude_endpoint_interval_reaches_collector(
         self, sandbox_home, monkeypatch
     ):
@@ -72,7 +175,7 @@ class TestPollOnce:
         acs_config.save_config(cfg)
         seen = {}
 
-        def fake_collect_claude(home, last, min_interval=None):
+        def fake_collect_claude(home, last, min_interval=None, now=None):
             seen["min_interval"] = min_interval
             return {"windows": [], "error": "mocked"}
 
@@ -203,7 +306,7 @@ class TestPollOnce:
         acs_config.save_config(cfg)
         claude_calls = []
 
-        def fake_collect_claude(home, last, min_interval=None):
+        def fake_collect_claude(home, last, min_interval=None, now=None):
             claude_calls.append(NOW)
             return {
                 "source": "claude_oauth_endpoint",
@@ -238,7 +341,7 @@ class TestPollOnce:
         """An unchanged CLI error must not be re-warned on every poll tick."""
         _configure(sandbox_home)
 
-        def fake_collect_claude(home, last, min_interval=None):
+        def fake_collect_claude(home, last, min_interval=None, now=None):
             return {"windows": [], "error": "HTTP 429", "checked_at": NOW}
 
         monkeypatch.setattr(poller, "collect_claude", fake_collect_claude)

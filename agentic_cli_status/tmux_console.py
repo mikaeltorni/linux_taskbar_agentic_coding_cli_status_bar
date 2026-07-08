@@ -34,7 +34,17 @@ CLI_COMMANDS = {
     "codex": "codex",
     "claude_code": "claude",
     "grok": "grok",
+    "opencode_go": "opencode",
 }
+
+
+def tmux_console_cli_ids(cli_ids: list[str]) -> list[str]:
+    """Return the subset of ``cli_ids`` that own a tmux debug-console window.
+
+    Headless-only monitors (e.g. OpenRouter) are intentionally absent from
+    :data:`CLI_COMMANDS` and must never be passed to :func:`ensure_console`.
+    """
+    return [cli_id for cli_id in cli_ids if cli_id in CLI_COMMANDS]
 
 #: Environment exported into every console window (via ``tmux -e``) so the
 #: TUIs stay silent monitoring surfaces instead of announcing fake agent
@@ -54,7 +64,7 @@ _WINDOW_ENV_ARGS = [arg for var in WINDOW_ENV for arg in ("-e", var)]
 #: as a systemd user service whose PATH lacks per-app bin dirs (notably
 #: ~/.grok/bin), and a tmux window whose command cannot be resolved dies
 #: instantly — so windows are always created with an absolute path.
-_BINARY_FALLBACK_DIRS = (".local/bin", ".grok/bin", ".codex/bin")
+_BINARY_FALLBACK_DIRS = (".local/bin", ".grok/bin", ".codex/bin", ".opencode/bin")
 
 
 def resolve_cli_binary(cli_id: str) -> str | None:
@@ -125,6 +135,9 @@ def ensure_console(session: str, cli_ids: list[str]) -> bool:
         existing = set(listed.stdout.split())
     created_any = have_session
     for cli_id in cli_ids:
+        if cli_id not in CLI_COMMANDS:
+            LOGGER.debug("cli %s has no tmux console; skipping window", cli_id)
+            continue
         if cli_id in existing:
             continue
         binary = resolve_cli_binary(cli_id)

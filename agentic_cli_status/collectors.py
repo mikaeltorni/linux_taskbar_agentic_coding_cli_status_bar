@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless rate-limit collectors for Codex, Claude Code, and Grok CLI.
+"""Headless rate-limit collectors for Codex, Claude Code, Grok, OpenCode Go, and OpenRouter.
 
 Each collector reads data the CLI has already written locally (or exposes on a
 billing/metadata endpoint) so polling never sends a prompt and never consumes
@@ -18,6 +18,15 @@ plan tokens:
   ``creditUsagePercent`` and the weekly period) to ``~/.grok/logs/*.log``
   every time it starts or refreshes billing. The collector parses the newest
   record.
+- **OpenCode Go** — the ``opencode-go-usage`` plugin scrapes embedded
+  ``rollingUsage``/``weeklyUsage``/``monthlyUsage`` JSON from the workspace
+  ``/go`` page on ``opencode.ai``. The collector performs the same headless
+  fetch with the same credentials (env vars or ``opencode-go-usage.json``),
+  throttled to at least every five minutes.
+- **OpenRouter** — the activity page session (saved by the installer) calls
+  ``/api/v1/activity`` for the current UTC day, sums ``requests`` for the
+  configured free-model slug, and reports usage against the daily ceiling
+  (default 1000) with ``resets_at`` at the next 00:00 UTC boundary.
 
 Every collector returns the shared snapshot shape::
 
@@ -35,6 +44,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import re
 import time
 import urllib.error
@@ -43,7 +53,14 @@ from pathlib import Path
 from typing import Any
 
 from .acs_logging import LOGGER
-from .config import CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS
+from .config import (
+    CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS,
+    OPENROUTER_DAILY_LIMIT_DEFAULT,
+    OPENROUTER_FETCH_MIN_INTERVAL_SECONDS,
+    OPENROUTER_MODEL_SLUG_DEFAULT,
+    OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS,
+)
+from .openrouter_browser import fetch_activity_payload, storage_state_path
 
 #: How many days of Codex session directories to scan backwards.
 CODEX_SCAN_DAYS = 7
@@ -484,6 +501,346 @@ def _grok_last_billing(log_file: Path) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# OpenCode Go: opencode.ai workspace /go page (opencode-go-usage plugin)
+# ---------------------------------------------------------------------------
+
+OPENCODE_GO_USAGE_URL = "https://opencode.ai/workspace/{workspace_id}/go"
+OPENCODE_GO_CONFIG_FILE = "opencode-go-usage.json"
+_OPENCODE_GO_USAGE_PATTERNS = {
+    "rolling": re.compile(r"rollingUsage:\$R\[\d+\]=(\{[^}]+\})"),
+    "week": re.compile(r"weeklyUsage:\$R\[\d+\]=(\{[^}]+\})"),
+    "month": re.compile(r"monthlyUsage:\$R\[\d+\]=(\{[^}]+\})"),
+}
+_OPENCODE_GO_JS_KEYS = re.compile(
+    r"([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)"
+)
+
+
+def _opencode_go_config_paths(home: Path) -> list[Path]:
+    """Return candidate opencode-go-usage.json paths (plugin order)."""
+    return [
+        home / ".config" / "opencode" / OPENCODE_GO_CONFIG_FILE,
+        home / ".opencode" / OPENCODE_GO_CONFIG_FILE,
+    ]
+
+
+def _opencode_go_credentials(
+    home: Path,
+) -> tuple[str | None, str | None, str | None]:
+    """Load OpenCode Go workspace ID and auth cookie.
+
+    Returns:
+        ``(workspace_id, auth_cookie, error)`` — both credentials are None
+        with an error message when unavailable.
+    """
+    env_workspace = os.environ.get("OPENCODE_GO_WORKSPACE_ID")
+    env_cookie = os.environ.get("OPENCODE_GO_AUTH_COOKIE")
+    if env_workspace and env_cookie:
+        return env_workspace, env_cookie, None
+    for path in _opencode_go_config_paths(home):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        workspace = payload.get("workspaceId")
+        cookie = payload.get("authCookie")
+        if workspace and cookie:
+            return workspace, cookie, None
+    return None, None, "OpenCode Go credentials unavailable"
+
+
+def _opencode_go_usage_from_html(html: str, now: float) -> list[dict[str, Any]]:
+    """Parse rolling/weekly/monthly usage windows from a /go page body."""
+    windows: list[dict[str, Any]] = []
+    for label, pattern in _OPENCODE_GO_USAGE_PATTERNS.items():
+        match = pattern.search(html)
+        if not match:
+            continue
+        json_str = _OPENCODE_GO_JS_KEYS.sub(r'\1"\2"\3', match.group(1))
+        try:
+            payload = json.loads(json_str)
+        except ValueError:
+            continue
+        used = _to_percent(payload.get("usagePercent"))
+        if used is None:
+            continue
+        reset_in = payload.get("resetInSec")
+        resets_at = (
+            int(now + int(reset_in))
+            if isinstance(reset_in, (int, float))
+            else None
+        )
+        windows.append(
+            {"label": label, "used_percent": used, "resets_at": resets_at}
+        )
+    return windows
+
+
+def collect_opencode_go(
+    home: Path,
+    last_result: dict[str, Any] | None = None,
+    now: float | None = None,
+    opener: Any = None,
+    min_interval: float | None = None,
+) -> dict[str, Any]:
+    """Collect OpenCode Go usage from the workspace /go page.
+
+    Enforces a minimum interval between fetch attempts (default 300 s,
+    matching the opencode-go-usage plugin cache). Failed attempts keep the
+    last good reading (see :func:`_carry_last_reading`).
+
+    Args:
+        home: The user's home directory.
+        last_result: The previous snapshot for this CLI, if any.
+        now: Current epoch override (tests).
+        opener: ``urllib.request.urlopen``-compatible callable (tests).
+        min_interval: Configured seconds between fetch attempts
+            (``clis.opencode_go.fetch_min_interval_seconds``).
+    """
+    now = now if now is not None else time.time()
+    if min_interval is None:
+        min_interval = OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS
+    if (
+        last_result
+        and last_result.get("checked_at")
+        and now - last_result["checked_at"] < min_interval
+        and last_result.get("windows")
+        and not last_result.get("error")
+    ):
+        return last_result
+    workspace, cookie, error = _opencode_go_credentials(home)
+    if workspace is None or cookie is None:
+        snapshot = _snapshot("opencode_go_page", error=error)
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    if not re.fullmatch(r"wrk_[a-zA-Z0-9]+", workspace):
+        snapshot = _snapshot(
+            "opencode_go_page", error="invalid workspace ID format"
+        )
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    url = OPENCODE_GO_USAGE_URL.format(workspace_id=workspace)
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64; rv:148.0) "
+                "Gecko/20100101 Firefox/148.0"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Cookie": f"auth={cookie}",
+        },
+    )
+    opener = opener or urllib.request.urlopen
+    snapshot: dict[str, Any]
+    try:
+        with opener(request, timeout=20) as response:
+            html = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        LOGGER.error("opencode go page HTTP %s", exc.code)
+        snapshot = _snapshot("opencode_go_page", error=f"HTTP {exc.code}")
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        LOGGER.error("opencode go page failed: %s", exc)
+        snapshot = _snapshot("opencode_go_page", error=str(exc))
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    windows = _opencode_go_usage_from_html(html, now)
+    if not windows:
+        snapshot = _snapshot(
+            "opencode_go_page", error="no usage windows in page response"
+        )
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    snapshot = _snapshot(
+        "opencode_go_page", observed_at=now, windows=windows
+    )
+    snapshot["checked_at"] = now
+    return snapshot
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter: /api/v1/activity (cookie session from installer setup)
+# ---------------------------------------------------------------------------
+
+
+def utc_date_string(now: float) -> str:
+    """Return the UTC calendar date for ``now`` as ``YYYY-MM-DD``."""
+    return _dt.datetime.fromtimestamp(now, tz=_dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def next_utc_midnight_epoch(now: float) -> int:
+    """Return the epoch of the next 00:00 UTC boundary after ``now``."""
+    current = _dt.datetime.fromtimestamp(now, tz=_dt.timezone.utc)
+    next_day = current.date() + _dt.timedelta(days=1)
+    midnight = _dt.datetime(
+        next_day.year, next_day.month, next_day.day, tzinfo=_dt.timezone.utc
+    )
+    return int(midnight.timestamp())
+
+
+def model_matches_slug(item_model: str, model_slug: str) -> bool:
+    """Return whether an activity row's model matches the configured slug.
+
+    Honors exact ``model`` equality first, then allows short slugs such as
+    ``hy3`` to match ``tencent/hy3:free``.
+    """
+    if not item_model or not model_slug:
+        return False
+    if item_model == model_slug:
+        return True
+    slug = model_slug.strip()
+    model = item_model.strip()
+    if slug.lower() in model.lower():
+        return True
+    base = slug.split(":")[0]
+    return model.startswith(base) or base in model
+
+
+def openrouter_requests_today(
+    payload: dict[str, Any],
+    model_slug: str,
+    date_str: str,
+) -> int:
+    """Sum ``requests`` for ``model_slug`` on one UTC activity day.
+
+    Args:
+        payload: Parsed ``/api/v1/activity`` JSON body.
+        model_slug: Configured model slug filter.
+        date_str: UTC date string (``YYYY-MM-DD``).
+
+    Returns:
+        Total request count for the day (0 when no rows match).
+    """
+    total = 0
+    for item in payload.get("data") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("date") != date_str:
+            continue
+        model = item.get("model") or item.get("model_permaslug") or ""
+        if not isinstance(model, str) or not model_matches_slug(model, model_slug):
+            continue
+        requests = item.get("requests")
+        if isinstance(requests, int) and requests >= 0:
+            total += requests
+    return total
+
+
+def openrouter_window_from_activity(
+    payload: dict[str, Any],
+    model_slug: str,
+    now: float,
+    daily_limit: int = OPENROUTER_DAILY_LIMIT_DEFAULT,
+) -> list[dict[str, Any]]:
+    """Build the daily usage window from an activity API payload.
+
+    Args:
+        payload: Parsed ``/api/v1/activity`` body.
+        model_slug: Model slug to filter activity rows.
+        now: Current epoch (UTC day selection and reset boundary).
+        daily_limit: Configured daily free-request ceiling.
+
+    Returns:
+        A single-element window list with ``label`` ``day``.
+    """
+    date_str = utc_date_string(now)
+    requests_today = openrouter_requests_today(payload, model_slug, date_str)
+    if daily_limit <= 0:
+        used = 100.0
+    else:
+        used = _to_percent(requests_today / daily_limit * 100.0) or 0.0
+    return [
+        {
+            "label": "day",
+            "used_percent": used,
+            "resets_at": next_utc_midnight_epoch(now),
+        }
+    ]
+
+
+def collect_openrouter(
+    home: Path,
+    last_result: dict[str, Any] | None = None,
+    now: float | None = None,
+    fetch_fn: Any = None,
+    min_interval: float | None = None,
+    model_slug: str | None = None,
+    daily_limit: int | None = None,
+) -> dict[str, Any]:
+    """Collect OpenRouter free-model daily usage from the activity API.
+
+    Uses the Playwright storage state saved during installer setup. Fetch
+    attempts are throttled (default 60 s). Failed attempts keep the last good
+    reading (see :func:`_carry_last_reading`).
+
+    Args:
+        home: The user's home directory.
+        last_result: The previous snapshot for this CLI, if any.
+        now: Current epoch override (tests).
+        fetch_fn: ``(storage_path, date_str) -> payload`` override (tests).
+        min_interval: Configured seconds between fetch attempts.
+        model_slug: Override for ``clis.openrouter.model_slug``.
+        daily_limit: Override for ``clis.openrouter.daily_limit``.
+    """
+    now = now if now is not None else time.time()
+    if min_interval is None:
+        min_interval = OPENROUTER_FETCH_MIN_INTERVAL_SECONDS
+    if (
+        last_result
+        and last_result.get("checked_at")
+        and now - last_result["checked_at"] < min_interval
+    ):
+        return last_result
+    slug = (model_slug or OPENROUTER_MODEL_SLUG_DEFAULT).strip()
+    limit = daily_limit if daily_limit is not None else OPENROUTER_DAILY_LIMIT_DEFAULT
+    session_path = storage_state_path(home)
+    if not session_path.is_file():
+        snapshot = _snapshot(
+            "openrouter_activity",
+            error="OpenRouter session unavailable; run openrouter_monitor configure",
+        )
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    date_str = utc_date_string(now)
+    fetch = fetch_fn or (
+        lambda path, day: fetch_activity_payload(path, day, headless=True, home=home)
+    )
+    snapshot: dict[str, Any]
+    try:
+        payload = fetch(session_path, date_str)
+    except (
+        OSError,
+        RuntimeError,
+        FileNotFoundError,
+        ModuleNotFoundError,
+        ImportError,
+        json.JSONDecodeError,
+    ) as exc:
+        LOGGER.error("openrouter activity fetch failed: %s", exc)
+        snapshot = _snapshot("openrouter_activity", error=str(exc))
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    windows = openrouter_window_from_activity(payload, slug, now, limit)
+    if not windows:
+        snapshot = _snapshot(
+            "openrouter_activity",
+            error="no daily usage window from activity response",
+        )
+        snapshot["checked_at"] = now
+        return _carry_last_reading(snapshot, last_result)
+    snapshot = _snapshot(
+        "openrouter_activity",
+        observed_at=now,
+        plan=slug,
+        windows=windows,
+    )
+    snapshot["checked_at"] = now
+    return snapshot
+
+
+# ---------------------------------------------------------------------------
 # tmux pane fallback: parse rendered /status | /usage TUI text
 # ---------------------------------------------------------------------------
 
@@ -502,6 +859,11 @@ _PANE_WINDOW_KEYWORDS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "grok": [
         ("week", re.compile(r"week(?:ly)?\s+limit|credits?|usage", re.I)),
     ],
+    "opencode_go": [
+        ("rolling", re.compile(r"\brolling\b", re.I)),
+        ("week", re.compile(r"\bweekly\b", re.I)),
+        ("month", re.compile(r"\bmonthly\b", re.I)),
+    ],
 }
 
 _PANE_PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
@@ -517,6 +879,15 @@ _PANE_RESET = re.compile(r"\bresets?\b\s*(?:at\s+)?(.+)$", re.I)
 _PANE_RESET_CLOCK = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
 #: A "D Mon" calendar day inside a reset descriptor (e.g. "9 Jul").
 _PANE_RESET_DATE = re.compile(r"\b(\d{1,2})\s+([A-Za-z]{3})", re.I)
+#: OpenCode Go pane: "resets in 4h 57m", "resets in 2d 18h", "resets in 59m".
+_PANE_RESET_IN = re.compile(
+    r"\bresets?\s+in\s+"
+    r"(?:(\d+)d\s*)?"
+    r"(?:(\d+)h\s*)?"
+    r"(?:(\d+)m)?",
+    re.I,
+)
+
 #: Three-letter month abbreviation -> month number (1-12).
 _MONTH_ABBR = {
     name.lower(): number
@@ -526,6 +897,20 @@ _MONTH_ABBR = {
         start=1,
     )
 }
+
+
+def _pane_reset_duration_epoch(line: str, now: float) -> int | None:
+    """Convert an OpenCode Go "resets in …" duration phrase into an epoch."""
+    match = _PANE_RESET_IN.search(line)
+    if not match or not any(match.groups()):
+        return None
+    days = int(match.group(1) or 0)
+    hours = int(match.group(2) or 0)
+    minutes = int(match.group(3) or 0)
+    total_seconds = days * 86400 + hours * 3600 + minutes * 60
+    if total_seconds <= 0:
+        return None
+    return int(now + total_seconds)
 
 
 def _pane_reset_epoch(line: str, now: float) -> int | None:
@@ -597,7 +982,9 @@ def _pane_window_reset(
                 break
             if offset and any(k.search(lines[probe]) for k in stop_keywords):
                 break
-            epoch = _pane_reset_epoch(lines[probe], now)
+            epoch = _pane_reset_duration_epoch(lines[probe], now)
+            if epoch is None:
+                epoch = _pane_reset_epoch(lines[probe], now)
             if epoch is not None:
                 return epoch
         return None
@@ -643,7 +1030,7 @@ def parse_pane(cli_id: str, text: str, now: float | None = None) -> dict[str, An
     label is accepted (with "left" percentages converted to used).
 
     Args:
-        cli_id: One of ``codex``, ``claude_code``, ``grok``.
+        cli_id: One of ``codex``, ``claude_code``, ``grok``, ``opencode_go``.
         text: The output of ``tmux capture-pane -p`` for that CLI's window.
         now: Current epoch override (tests).
     """

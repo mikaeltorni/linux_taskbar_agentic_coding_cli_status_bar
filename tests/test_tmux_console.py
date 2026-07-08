@@ -19,6 +19,10 @@ def test_codex_monitor_uses_usage_command():
     assert SLASH_COMMANDS["codex"] == "/usage"
 
 
+def test_opencode_go_monitor_uses_ogc_usage_command():
+    assert SLASH_COMMANDS["opencode_go"] == "/ogc-usage"
+
+
 class TestEnsureConsole:
     """Console windows must be created with TTS/tracker suppression env vars.
 
@@ -36,6 +40,26 @@ class TestEnsureConsole:
             )
 
         return run
+
+    def test_openrouter_enabled_does_not_keyerror(self, monkeypatch):
+        """Headless-only CLIs must be skipped, not looked up in CLI_COMMANDS."""
+        calls = []
+
+        def fake_tmux(args):
+            calls.append(args)
+            if args[0] == "list-windows":
+                return subprocess.CompletedProcess(args, 0, "codex\n", "")
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        monkeypatch.setattr(tmux_console, "tmux_available", lambda: True)
+        monkeypatch.setattr(tmux_console, "_tmux", fake_tmux)
+        monkeypatch.setattr(
+            tmux_console, "resolve_cli_binary", lambda cli_id: f"/usr/bin/{cli_id}"
+        )
+        assert tmux_console.ensure_console("acs", ["codex", "openrouter"]) is True
+        assert tmux_console.tmux_console_cli_ids(
+            ["codex", "openrouter", "grok"]
+        ) == ["codex", "grok"]
 
     def test_new_session_and_window_set_suppression_env(self, monkeypatch):
         calls = []

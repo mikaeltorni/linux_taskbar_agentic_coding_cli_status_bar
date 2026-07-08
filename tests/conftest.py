@@ -109,6 +109,94 @@ def grok_billing_record(
     }
 
 
+def write_opencode_go_credentials(
+    home: Path,
+    workspace_id: str = "wrk_test123",
+    auth_cookie: str = "Fe26.2**testcookie",
+) -> Path:
+    """Write a fake opencode-go-usage.json credentials file."""
+    config_dir = home / ".config" / "opencode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    target = config_dir / "opencode-go-usage.json"
+    target.write_text(
+        json.dumps(
+            {
+                "workspaceId": workspace_id,
+                "authCookie": auth_cookie,
+                "refreshIntervalMinutes": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return target
+
+
+OPENCODE_GO_HTML_FIXTURE = (
+    "<html><body>"
+    "rollingUsage:$R[0]={usagePercent:0,resetInSec:17820}"
+    "weeklyUsage:$R[1]={usagePercent:17,resetInSec:234000}"
+    "monthlyUsage:$R[2]={usagePercent:8,resetInSec:2588400}"
+    "</body></html>"
+)
+
+OPENROUTER_ACTIVITY_FIXTURE = {
+    "data": [
+        {
+            "date": "2026-07-08",
+            "model": "tencent/hy3:free",
+            "model_permaslug": "tencent/hy3:free",
+            "endpoint_id": "ep-1",
+            "provider_name": "Tencent",
+            "requests": 420,
+            "usage": 0.0,
+            "byok_usage_inference": 0.0,
+            "prompt_tokens": 1000,
+            "completion_tokens": 500,
+            "reasoning_tokens": 0,
+        },
+        {
+            "date": "2026-07-08",
+            "model": "openai/gpt-4.1",
+            "model_permaslug": "openai/gpt-4.1",
+            "endpoint_id": "ep-2",
+            "provider_name": "OpenAI",
+            "requests": 3,
+            "usage": 0.01,
+            "byok_usage_inference": 0.0,
+            "prompt_tokens": 50,
+            "completion_tokens": 25,
+            "reasoning_tokens": 0,
+        },
+        {
+            "date": "2026-07-07",
+            "model": "tencent/hy3:free",
+            "model_permaslug": "tencent/hy3:free",
+            "endpoint_id": "ep-1",
+            "provider_name": "Tencent",
+            "requests": 999,
+            "usage": 0.0,
+            "byok_usage_inference": 0.0,
+            "prompt_tokens": 1000,
+            "completion_tokens": 500,
+            "reasoning_tokens": 0,
+        },
+    ]
+}
+
+
+def write_openrouter_session(home: Path, payload: dict | None = None) -> Path:
+    """Write a fake Playwright storage-state file and optional activity cache."""
+    config_dir = home / ".config" / "agentic-cli-status"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    target = config_dir / "openrouter-storage.json"
+    target.write_text(
+        json.dumps(payload or {"cookies": [], "origins": []}),
+        encoding="utf-8",
+    )
+    target.chmod(0o600)
+    return target
+
+
 def write_claude_credentials(
     home: Path, token: str = "sk-test", expires_in_ms: int = 3_600_000
 ) -> Path:

@@ -25,9 +25,16 @@ from pathlib import Path
 from typing import Any
 
 from .acs_logging import LOGGER
-from .collectors import collect_claude, collect_codex, collect_grok, parse_pane
-from .config import CLI_IDS, load_config, state_dir
-from .tmux_console import ensure_console, refresh_and_capture
+from .collectors import (
+    collect_claude,
+    collect_codex,
+    collect_grok,
+    collect_openrouter,
+    collect_opencode_go,
+    parse_pane,
+)
+from .config import CLI_IDS, SLASH_COMMANDS, load_config, state_dir
+from .tmux_console import ensure_console, refresh_and_capture, tmux_console_cli_ids
 
 STATUS_FILE_NAME = "status.json"
 PANE_DIR_NAME = "panes"
@@ -39,11 +46,28 @@ TMUX_REFRESH_MIN_INTERVAL_SECONDS = 60
 # Headless collector dispatch. Each entry receives the CLI's config dict so
 # per-CLI knobs (like Claude's endpoint interval) reach the collector.
 _HEADLESS_COLLECTORS = {
-    "codex": lambda home, last, cli_config: collect_codex(home),
-    "claude_code": lambda home, last, cli_config: collect_claude(
-        home, last, min_interval=cli_config.get("endpoint_min_interval_seconds")
+    "codex": lambda home, last, cli_config, now: collect_codex(home),
+    "claude_code": lambda home, last, cli_config, now: collect_claude(
+        home,
+        last,
+        now=now,
+        min_interval=cli_config.get("endpoint_min_interval_seconds"),
     ),
-    "grok": lambda home, last, cli_config: collect_grok(home),
+    "grok": lambda home, last, cli_config, now: collect_grok(home),
+    "opencode_go": lambda home, last, cli_config, now: collect_opencode_go(
+        home,
+        last,
+        now=now,
+        min_interval=cli_config.get("fetch_min_interval_seconds"),
+    ),
+    "openrouter": lambda home, last, cli_config, now: collect_openrouter(
+        home,
+        last,
+        now=now,
+        min_interval=cli_config.get("fetch_min_interval_seconds"),
+        model_slug=cli_config.get("model_slug"),
+        daily_limit=cli_config.get("daily_limit"),
+    ),
 }
 
 
@@ -173,7 +197,7 @@ def _collect_cli(
     stale_after = cli_config["stale_after_seconds"]
     snapshot: dict[str, Any] = {"windows": []}
     if source_mode in ("auto", "headless"):
-        snapshot = _HEADLESS_COLLECTORS[cli_id](home, last, cli_config)
+        snapshot = _HEADLESS_COLLECTORS[cli_id](home, last, cli_config, now)
     snapshot = _carry_fresher_reading(snapshot, last)
     if cli_id == "codex":
         snapshot = _carry_codex_reset_metadata(snapshot, last)
@@ -183,7 +207,8 @@ def _collect_cli(
     headless_snapshot = snapshot
     last_tmux_attempt = (last or {}).get("tmux_attempt_at")
     tmux_wanted = (
-        tmux_config.get("enabled", True)
+        cli_id in SLASH_COMMANDS
+        and tmux_config.get("enabled", True)
         and source_mode in ("auto", "tmux")
         and (
             source_mode == "tmux"
@@ -220,7 +245,7 @@ def _collect_cli(
                     # the headless source reported.
                     pane_snapshot["plan"] = snapshot.get("plan")
                     snapshot = pane_snapshot
-            elif not snapshot.get("windows"):
+            elif not snapshot.get("windows") and pane_snapshot.get("windows"):
                 snapshot = pane_snapshot
             if cli_id == "codex" and "resets_available" in pane_snapshot:
                 previous_count = (last or {}).get("resets_available", 0)
@@ -277,8 +302,9 @@ def poll_once(
     now = now if now is not None else time.time()
     config = load_config()
     enabled = [cli for cli in CLI_IDS if config["clis"][cli]["enabled"]]
-    if config["tmux"].get("enabled", True) and enabled:
-        ensure_console(config["tmux"]["session"], enabled)
+    console_clis = tmux_console_cli_ids(enabled)
+    if config["tmux"].get("enabled", True) and console_clis:
+        ensure_console(config["tmux"]["session"], console_clis)
     previous_clis = (previous or {}).get("clis", {})
     status: dict[str, Any] = {
         "generated_at": now,

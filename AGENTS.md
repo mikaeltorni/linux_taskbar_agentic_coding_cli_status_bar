@@ -2,15 +2,18 @@
 
 This repository owns the `agentic-cli-status@local` GNOME Shell extension, the
 `agentic_cli_status` Python poller (headless rate-limit collectors for Codex,
-Claude Code, and Grok CLI plus the tmux debug console), and their installer
+Claude Code, Grok CLI, OpenCode Go, and OpenRouter plus the tmux debug console), and their installer
 integration. Keep agentic CLI rate-limit monitoring in this repo; the CLIs
 themselves are installed by `linux_codex_claude_code_setup`, and the in-TUI
 status-bar rendering (statusline segments) stays in `claude_code_status_bar`.
 
 Monitoring must never consume plan limits: collectors only read data the CLIs
-already store locally (Codex session rollouts, Grok billing logs) or their
-billing/metadata endpoint (Claude OAuth usage), and the tmux console only ever
-types rate-limit slash commands (`/status`, `/usage`) — never a prompt. Cline
+already store locally (Codex session rollouts, Grok billing logs), their
+billing/metadata endpoint (Claude OAuth usage), a headless HTML scrape of
+the OpenCode Go workspace page (same source as the `opencode-go-usage` plugin),
+or the OpenRouter activity API (cookie session from installer setup; no API key),
+and the tmux console only ever types rate-limit slash commands (`/status`,
+`/usage`, `/ogc-usage`) — never a prompt. Cline
 is deliberately unmonitored (no usage surface yet); do not add it until it
 grows one.
 

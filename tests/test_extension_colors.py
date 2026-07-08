@@ -130,6 +130,14 @@ const results = {
     {label: '5h', used_percent: 40, resets_at: NOW + 3600},
     {label: 'week', used_percent: 100, resets_at: NOW - 60}]
   }, NOW),
+  opencode_go_segment: segmentMarkup('OG', {windows: [
+    {label: 'rolling', used_percent: 0, resets_at: NOW + 17820},
+    {label: 'week', used_percent: 83, resets_at: NOW + 234000},
+    {label: 'month', used_percent: 92, resets_at: NOW + 2588400}]
+  }, NOW),
+  openrouter_segment: segmentMarkup('OR', {windows: [
+    {label: 'day', used_percent: 42, resets_at: NOW + 52000}]
+  }, NOW),
 };
 print(JSON.stringify(results));
 """
@@ -267,6 +275,30 @@ def test_exhausted_fable_shows_rounded_red_reset_clock_inline(js_results):
         + separator
         + '<span foreground="#ff0000">Sun 14:00</span>'
     )
+
+
+def test_cli_tags_place_openrouter_after_opencode_go():
+    source = EXTENSION_JS.read_text(encoding="utf-8")
+    og_index = source.index("['opencode_go', 'OG']")
+    or_index = source.index("['openrouter', 'OR']")
+    assert og_index < or_index
+    assert "['grok', 'GK']" in source[:og_index]
+
+
+def test_openrouter_segment_renders_daily_window(js_results):
+    segment = js_results["openrouter_segment"]
+    assert segment.startswith('<span foreground="#')
+    assert '>58<' in segment  # 42% used -> 58% left
+
+
+def test_opencode_go_segment_colors_three_windows(js_results):
+    segment = js_results["opencode_go_segment"]
+    assert segment.startswith('<span foreground="#8ff0a4">OG ')
+    assert '<span foreground="#8ff0a4">100</span>' in segment
+    assert 'foreground="#9a9996">17</span>' not in segment
+    assert 'foreground="#9a9996">8</span>' not in segment
+    assert '>17</span>' in segment and '>8</span>' in segment
+    assert '<span foreground="#9a9996">·</span>' in segment
 
 
 def test_reset_availability_wording(js_results):
