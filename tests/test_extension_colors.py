@@ -29,6 +29,7 @@ HELPER_FUNCTIONS = (
     "percentLeft",
     "percentColor",
     "resetClock",
+    "resetDate",
     "resetCountdown",
     "resetsText",
     "resetAvailabilityText",
@@ -135,6 +136,13 @@ const results = {
     {label: 'week', used_percent: 83, resets_at: NOW + 234000},
     {label: 'month', used_percent: 92, resets_at: NOW + 2588400}]
   }, NOW),
+  opencode_go_month_exhausted: segmentMarkup('OG', {windows: [
+    {label: 'rolling', used_percent: 0, resets_at: NOW + 17820},
+    {label: 'week', used_percent: 83, resets_at: NOW + 234000},
+    {label: 'month', used_percent: 100, resets_at: NOW + 2588400}]
+  }, NOW),
+  monthly_reset_date: resetDate(NOW + 2588400),
+  monthly_details_reset: resetsText(NOW + 2588400, 'month'),
   openrouter_segment: segmentMarkup('OR', {windows: [
     {label: 'day', used_percent: 42, resets_at: NOW + 52000}]
   }, NOW),
@@ -299,6 +307,31 @@ def test_opencode_go_segment_colors_three_windows(js_results):
     assert 'foreground="#9a9996">8</span>' not in segment
     assert '>17</span>' in segment and '>8</span>' in segment
     assert '<span foreground="#9a9996">·</span>' in segment
+
+
+CALENDAR_DATE_RE = re.compile(r"\d{1,2} [A-Z][a-z]{2}")
+WEEKDAY_TIME_RE = re.compile(
+    r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{2}:\d{2}"
+)
+
+
+def test_exhausted_monthly_shows_calendar_date_not_weekday(js_results):
+    segment = js_results["opencode_go_month_exhausted"]
+    assert CALENDAR_DATE_RE.search(segment)
+    assert not WEEKDAY_TIME_RE.search(segment)
+    assert '<span foreground="#ff0000">3 Aug</span>' in segment
+
+
+def test_monthly_reset_date_formatter(js_results):
+    assert js_results["monthly_reset_date"] == "3 Aug"
+    assert CALENDAR_DATE_RE.fullmatch(js_results["monthly_reset_date"])
+    assert not WEEKDAY_TIME_RE.search(js_results["monthly_reset_date"])
+
+
+def test_monthly_details_reset_uses_calendar_date(js_results):
+    assert js_results["monthly_details_reset"] == " — resets 3 Aug"
+    assert CALENDAR_DATE_RE.search(js_results["monthly_details_reset"])
+    assert not WEEKDAY_TIME_RE.search(js_results["monthly_details_reset"])
 
 
 def test_reset_availability_wording(js_results):

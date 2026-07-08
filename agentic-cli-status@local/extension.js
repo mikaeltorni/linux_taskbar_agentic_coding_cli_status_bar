@@ -163,6 +163,19 @@ function resetClock(epoch) {
 }
 
 /**
+ * Format an exhausted monthly window's reset as a local calendar date.
+ *
+ * @param {?number} epoch - Reset time in epoch seconds.
+ * @returns {string} Localized date such as "8 Aug", or "0" when absent.
+ */
+function resetDate(epoch) {
+  if (!epoch)
+    return '0';
+  const roundedEpoch = Math.round(Number(epoch) / 60) * 60;
+  return GLib.DateTime.new_from_unix_local(roundedEpoch).format('%e %b').trim();
+}
+
+/**
  * Format the time remaining until a rolling-window reset as hours/minutes.
  *
  * @param {?number} epoch - Reset time in epoch seconds.
@@ -225,8 +238,11 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
           `${resetCountdown(w.resets_at, nowEpoch)}</span>`;
       }
       if (w !== weekly && left === 0) {
+        const reset = w.label === 'month'
+          ? resetDate(w.resets_at)
+          : resetClock(w.resets_at);
         return `<span foreground="${EMPTY_COLOR}">` +
-          `${resetClock(w.resets_at)}</span>`;
+          `${reset}</span>`;
       }
       return `<span foreground="${percentColor(left)}">${left}</span>`;
     })
@@ -241,12 +257,14 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
  * Format an epoch reset time for the details menu in the local timezone.
  *
  * @param {?number} epoch - Reset time in epoch seconds.
+ * @param {?string} label - Window label; monthly windows use a calendar date.
  * @returns {string} Localized "resets …" suffix, or an empty string.
  */
-function resetsText(epoch) {
+function resetsText(epoch, label) {
   if (!epoch)
     return '';
-  return ` — resets ${resetClock(epoch)}`;
+  const reset = label === 'month' ? resetDate(epoch) : resetClock(epoch);
+  return ` — resets ${reset}`;
 }
 
 /** Format Codex's optional manual-reset allowance for the details heading. */
@@ -337,7 +355,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       // A window that has already rolled over reads as full; its old reset
       // time is history, so don't dangle it as if still upcoming.
       const reset = resetPassed(window, nowEpoch)
-        ? '' : resetsText(window.resets_at);
+        ? '' : resetsText(window.resets_at, window.label);
       const item = new PopupMenu.PopupMenuItem('', { reactive: false });
       item.label.clutter_text.set_markup(
         `   ${GLib.markup_escape_text(String(window.label ?? ''), -1)}: ` +
