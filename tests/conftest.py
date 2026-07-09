@@ -25,6 +25,7 @@ def sandbox_home(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(home / ".local" / "state"))
     monkeypatch.setenv("ACS_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.delenv("OPENROUTER_MANAGEMENT_API_KEY", raising=False)
     return home
 
 

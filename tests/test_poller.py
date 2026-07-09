@@ -164,6 +164,8 @@ class TestPollOnce:
         monkeypatch.setattr(
             "agentic_cli_status.collectors.fetch_analytics_rows", fake_fetch
         )
+        frozen_now = 1783502400.0
+        monkeypatch.setattr(poller.time, "time", lambda: frozen_now)
         assert poller.main(["--once"]) == 0
         on_disk = json.loads(poller.status_path(sandbox_home).read_text())
         window = on_disk["clis"]["openrouter"]["windows"][0]
