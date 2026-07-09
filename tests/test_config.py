@@ -13,8 +13,9 @@ class TestLoadConfig:
         # The polling rate is expressed in SECONDS and defaults to 5.
         assert cfg["poll_interval_seconds"] == 5
         assert set(cfg["clis"]) == set(acs_config.CLI_IDS)
+        default_on = {"codex", "grok", "opencode_go", "openrouter"}
         for cli in acs_config.CLI_IDS:
-            assert cfg["clis"][cli]["enabled"] is True
+            assert cfg["clis"][cli]["enabled"] is (cli in default_on)
             expected_source = "headless" if cli == "openrouter" else "auto"
             assert cfg["clis"][cli]["source"] == expected_source
 

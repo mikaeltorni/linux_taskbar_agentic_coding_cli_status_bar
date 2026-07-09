@@ -100,7 +100,7 @@ package, extension, default config) always runs; the components are:
 | Component | Default | What it controls |
 |---|---|---|
 | `codex_monitor` | on | Codex monitoring; reconfigure source mode + staleness |
-| `claude_code_monitor` | on | Claude Code monitoring; same options |
+| `claude_code_monitor` | off | Claude Code monitoring; same options |
 | `grok_monitor` | on | Grok CLI monitoring; same options |
 | `opencode_go_monitor` | on | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
 | `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |

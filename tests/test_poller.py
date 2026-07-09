@@ -76,9 +76,9 @@ class TestPollOnce:
         assert "resets_available" not in codex
         grok = status["clis"]["grok"]
         assert grok["windows"][0]["used_percent"] == 88.0
-        # claude has no credentials in the sandbox: enabled but stale + error.
+        # claude_code is default-off; the status entry still exists but is disabled.
         claude = status["clis"]["claude_code"]
-        assert claude["enabled"] and claude["stale"] and claude["error"]
+        assert not claude["enabled"]
         on_disk = json.loads(poller.status_path(sandbox_home).read_text())
         assert on_disk["clis"]["codex"]["windows"][0]["used_percent"] == 57.0
 
@@ -203,6 +203,7 @@ class TestPollOnce:
     ):
         """The configured endpoint interval is passed to collect_claude."""
         cfg = _configure(sandbox_home)
+        cfg["clis"]["claude_code"]["enabled"] = True
         cfg["clis"]["claude_code"]["endpoint_min_interval_seconds"] = 90
         acs_config.save_config(cfg)
         seen = {}
@@ -334,6 +335,7 @@ class TestPollOnce:
         poll tick — guaranteeing a 429 lockout at second-scale polling rates.
         """
         cfg = _configure(sandbox_home)
+        cfg["clis"]["claude_code"]["enabled"] = True
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
         claude_calls = []
@@ -371,7 +373,9 @@ class TestPollOnce:
         self, sandbox_home, monkeypatch, caplog
     ):
         """An unchanged CLI error must not be re-warned on every poll tick."""
-        _configure(sandbox_home)
+        cfg = _configure(sandbox_home)
+        cfg["clis"]["claude_code"]["enabled"] = True
+        acs_config.save_config(cfg)
 
         def fake_collect_claude(home, last, min_interval=None, now=None):
             return {"windows": [], "error": "HTTP 429", "checked_at": NOW}

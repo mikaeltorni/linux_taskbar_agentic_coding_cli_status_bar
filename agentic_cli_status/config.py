@@ -98,7 +98,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "stale_after_seconds": 1800,
         },
         "claude_code": {
-            "enabled": True,
+            "enabled": False,
             "source": "auto",
             "stale_after_seconds": 1800,
             "endpoint_min_interval_seconds": CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS,
