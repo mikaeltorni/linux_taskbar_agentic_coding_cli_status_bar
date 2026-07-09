@@ -118,6 +118,17 @@ assert_file_exists "$CONFIG_FILE" "Should seed the default config"
 for cli in codex claude_code grok opencode_go openrouter; do
   assert_file_contains "$CONFIG_FILE" "\"$cli\"" "Config should have a $cli entry"
 done
+# A default install must enable every default-on CLI (codex/claude_code/grok/
+# opencode_go/openrouter): the extension hides any CLI whose status entry has
+# enabled=false, so a disabled default-on CLI would vanish from the bar with
+# no obvious path back on a plain default install.
+PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'CHECK' || { FAIL=$((FAIL + 1)); echo "FAIL: default install must enable all default-on CLIs"; }
+import json, sys
+config = json.load(open(sys.argv[1]))
+for cli in ("codex", "claude_code", "grok", "opencode_go", "openrouter"):
+    assert config["clis"][cli]["enabled"] is True, cli
+CHECK
+PASS=$((PASS + 1))
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
 assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 5' \
   "Default polling rate should be 5 seconds"
@@ -205,6 +216,18 @@ assert config["clis"]["openrouter"]["enabled"] is False
 assert config["clis"]["opencode_go"]["enabled"] is False
 assert config["clis"]["codex"]["enabled"] is True
 PY
+PASS=$((PASS + 1))
+# --- A default install re-enables previously-uninstalled default-on CLIs ---
+# grok (and the other default-on CLIs) were just uninstalled above; a plain
+# default install must bring them back, or they would stay hidden from the
+# taskbar (the extension drops any cli with enabled=false).
+run_installer >"$TMP_DIR/reinstall.out" 2>&1 || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall exited non-zero"; }
+PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'CHECK' || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall must re-enable disabled default-on CLIs"; }
+import json, sys
+config = json.load(open(sys.argv[1]))
+for cli in ("codex", "claude_code", "grok", "opencode_go", "openrouter"):
+    assert config["clis"][cli]["enabled"] is True, cli
+CHECK
 PASS=$((PASS + 1))
 
 # --- --list-components must be side-effect free ----------------------------
