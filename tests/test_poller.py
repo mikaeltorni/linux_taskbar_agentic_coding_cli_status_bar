@@ -18,6 +18,7 @@ from tests.conftest import (
     OPENCODE_GO_HTML_FIXTURE,
     codex_token_count_event,
     grok_billing_record,
+    grok_billing_record_no_percent,
     write_codex_rollout,
     write_grok_log,
     write_grok_pane,
@@ -653,6 +654,40 @@ class TestPollOnce:
         assert grok["source"] == "grok_logs"
         assert grok["windows"][0]["used_percent"] == 99.0
         assert grok["windows"][0]["resets_at"] is None
+
+    def test_grok_post_reset_no_percent_stays_fresh_headless(
+        self, sandbox_home, monkeypatch
+    ):
+        """A post-reset billing record with no percent must not break the display.
+
+        After a weekly reset Grok's newest billing records omit
+        ``creditUsagePercent``; the prior week's records still carry it but are
+        expired. The poller must publish the fresh 0%-used window (the taskbar
+        then shows 100% left) rather than falling through to "no billing
+        records found" (empty windows, stale), which left the indicator broken.
+        """
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        write_grok_log(
+            sandbox_home,
+            "grok.log",
+            [
+                grok_billing_record(91.0, ts="2026-07-08T23:30:47.372Z"),
+                grok_billing_record_no_percent(ts="2026-07-09T09:10:47.647Z"),
+            ],
+        )
+        # No live capture / pane available: headless billing must still be valid.
+        monkeypatch.setattr(poller, "refresh_and_capture", lambda *a, **k: None)
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        status = poller.poll_once(home=sandbox_home, now=NOW)
+        grok = status["clis"]["grok"]
+        assert grok["source"] == "grok_logs"
+        assert grok["windows"] == [
+            {"label": "week", "used_percent": 0.0, "resets_at": None}
+        ]
+        assert grok["error"] is None
+        assert grok["stale"] is False
 
     def test_grok_falls_back_when_last_pane_stale(
         self, sandbox_home, monkeypatch

@@ -794,9 +794,17 @@ def _grok_last_billing(log_file: Path) -> dict[str, Any] | None:
     if last is None:
         return None
     billing = last["config"]
-    used = _to_percent(billing.get("creditUsagePercent"))
-    if used is None:
-        return None
+    # Grok omits ``creditUsagePercent`` from ``fetched credits config`` records
+    # published right after a weekly reset, when the brand-new period has seen
+    # no usage yet. That is a real, fresh reading of a 0%-used (100% left)
+    # window, not a missing sample: fall back to 0 used rather than discarding
+    # the record. Discarding it would make ``collect_grok`` skip the newest
+    # post-reset period and report "no billing records found" (empty windows,
+    # stale) until the next paid request repopulates the field.
+    if "creditUsagePercent" in billing:
+        used = _to_percent(billing.get("creditUsagePercent"))
+    else:
+        used = 0.0
     observed = float(last_ts) if last_ts is not None else log_file.stat().st_mtime
     return _snapshot(
         "grok_logs",

@@ -120,6 +120,40 @@ def grok_billing_record(
     }
 
 
+def grok_billing_record_no_percent(
+    ts: str = "2026-07-09T09:10:47.647Z",
+    tier: str = "SuperGrok",
+    period_start: str = "2026-07-09T06:04:00.368952+00:00",
+    period_end: str = "2026-07-16T06:04:00.368952+00:00",
+) -> dict:
+    """Build a post-reset Grok record with no ``creditUsagePercent`` field.
+
+    Grok publishes ``fetched credits config`` records for the new weekly
+    period immediately after a reset, omitting ``creditUsagePercent`` because
+    the fresh period has seen no usage yet. ``collect_grok`` must treat this
+    as a real 0%-used reading rather than discarding it.
+    """
+    return {
+        "ts": ts,
+        "src": "shell",
+        "lvl": "info",
+        "msg": "billing: fetched credits config",
+        "ctx": {
+            "config": {
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": period_start,
+                    "end": period_end,
+                },
+                "billingPeriodStart": period_start,
+                "billingPeriodEnd": period_end,
+                "historyLen": 0,
+            },
+            "subscriptionTier": tier,
+        },
+    }
+
+
 def write_opencode_go_credentials(
     home: Path,
     workspace_id: str = "wrk_test123",

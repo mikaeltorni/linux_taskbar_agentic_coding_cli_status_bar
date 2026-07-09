@@ -13,6 +13,7 @@ from tests.conftest import (
     OPENCODE_GO_HTML_FIXTURE,
     codex_token_count_event,
     grok_billing_record,
+    grok_billing_record_no_percent,
     write_claude_credentials,
     write_codex_rollout,
     write_grok_log,
@@ -128,6 +129,45 @@ class TestCollectGrok:
                 "used_percent": 100.0,
                 "resets_at": None,
             }
+        ]
+
+    def test_post_reset_record_without_percent_is_0_used(self, sandbox_home):
+        """A reset record missing ``creditUsagePercent`` is 0% used, not dropped.
+
+        Grok publishes ``fetched credits config`` for the new weekly period
+        right after a reset without ``creditUsagePercent`` (no usage yet). The
+        collector must surface it as a fresh 0%-used window instead of skipping
+        to an expired prior-week record and reporting "no billing records".
+        """
+        write_grok_log(
+            sandbox_home,
+            "grok.log",
+            [
+                grok_billing_record(91.0, ts="2026-07-08T23:30:47.372Z"),
+                grok_billing_record_no_percent(ts="2026-07-09T09:10:47.647Z"),
+            ],
+        )
+        result = collectors.collect_grok(sandbox_home)
+        assert result["error"] is None
+        assert result["windows"] == [
+            {"label": "week", "used_percent": 0.0, "resets_at": None}
+        ]
+        assert result["observed_at"] is not None
+
+    def test_only_post_reset_records_still_reports_window(self, sandbox_home):
+        """Even a log whose newest records all lack the field stays valid."""
+        write_grok_log(
+            sandbox_home,
+            "grok.log",
+            [
+                grok_billing_record_no_percent(ts="2026-07-09T09:10:47.647Z"),
+                grok_billing_record_no_percent(ts="2026-07-09T09:10:49.499Z"),
+            ],
+        )
+        result = collectors.collect_grok(sandbox_home)
+        assert result["error"] is None
+        assert result["windows"] == [
+            {"label": "week", "used_percent": 0.0, "resets_at": None}
         ]
 
     def test_missing_logs_dir_reports_error(self, sandbox_home):

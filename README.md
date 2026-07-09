@@ -52,7 +52,7 @@ Two cooperating parts, connected only by a JSON file:
 |---|---|---|
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` `token_count` events (`rate_limits.primary/secondary`: 5h + weekly `used_percent`, `resets_at`, plan) | `/usage` for available resets, followed by `/status` for 5h + weekly limits |
 | Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h, weekly, and model-scoped weekly windows (including Fable) as `/usage`. Self-throttled to a configurable interval (60–3600 s, default 180) regardless of polling rate; 429 `Retry-After` lockouts are honored and the last good reading is kept on errors | `/usage` |
-| Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/*.log` (`creditUsagePercent` + weekly period + tier) | `/usage` |
+| Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/*.log` (`creditUsagePercent` + weekly period + tier). Post-reset records omit `creditUsagePercent` (no usage yet) and are read as 0% used | `/usage` |
 | OpenCode Go | Headless scrape of the workspace `/go` page on `opencode.ai` (same embedded `rollingUsage`/`weeklyUsage`/`monthlyUsage` JSON as the [`opencode-go-usage`](https://npmx.dev/package/opencode-go-usage) plugin). Credentials from `OPENCODE_GO_WORKSPACE_ID`/`OPENCODE_GO_AUTH_COOKIE` or `~/.config/opencode/opencode-go-usage.json`. Self-throttled to ≥300 s | `/ogc-usage` |
 
 None of these send a prompt or start a model turn, so **monitoring never
