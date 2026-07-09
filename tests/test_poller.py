@@ -76,9 +76,9 @@ class TestPollOnce:
         assert "resets_available" not in codex
         grok = status["clis"]["grok"]
         assert grok["windows"][0]["used_percent"] == 88.0
-        # claude_code is default-off; the status entry still exists but is disabled.
+        # Claude Code is default-on; missing credentials leave it stale but visible.
         claude = status["clis"]["claude_code"]
-        assert not claude["enabled"]
+        assert claude["enabled"]
         on_disk = json.loads(poller.status_path(sandbox_home).read_text())
         assert on_disk["clis"]["codex"]["windows"][0]["used_percent"] == 57.0
 

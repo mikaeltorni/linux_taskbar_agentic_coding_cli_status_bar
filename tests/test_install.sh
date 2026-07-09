@@ -118,14 +118,13 @@ assert_file_exists "$CONFIG_FILE" "Should seed the default config"
 for cli in codex claude_code grok opencode_go openrouter; do
   assert_file_contains "$CONFIG_FILE" "\"$cli\"" "Config should have a $cli entry"
 done
-# A default install must enable every default-on CLI (codex/grok/opencode_go/
-# openrouter). claude_code is opt-in via --select claude_code_monitor.
+# A default install must enable every default-on CLI, including Claude Code;
+# the extension hides any CLI whose status entry has enabled=false.
 PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'CHECK' || { FAIL=$((FAIL + 1)); echo "FAIL: default install must enable all default-on CLIs"; }
 import json, sys
 config = json.load(open(sys.argv[1]))
-for cli in ("codex", "grok", "opencode_go", "openrouter"):
+for cli in ("codex", "claude_code", "grok", "opencode_go", "openrouter"):
     assert config["clis"][cli]["enabled"] is True, cli
-assert config["clis"]["claude_code"]["enabled"] is False
 CHECK
 PASS=$((PASS + 1))
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
@@ -163,7 +162,7 @@ import json, sys
 config = json.load(open(sys.argv[1]))
 assert config["clis"]["grok"]["enabled"] is False
 assert config["clis"]["codex"]["enabled"] is True
-assert config["clis"]["claude_code"]["enabled"] is False
+assert config["clis"]["claude_code"]["enabled"] is True
 PY
 PASS=$((PASS + 1))
 
@@ -190,7 +189,7 @@ config = json.load(open(sys.argv[1]))
 assert config["clis"]["opencode_go"]["enabled"] is False
 assert config["clis"]["grok"]["enabled"] is False
 assert config["clis"]["codex"]["enabled"] is True
-assert config["clis"]["claude_code"]["enabled"] is False
+assert config["clis"]["claude_code"]["enabled"] is True
 PY
 PASS=$((PASS + 1))
 
@@ -219,19 +218,17 @@ PASS=$((PASS + 1))
 # --- A default install re-enables previously-uninstalled default-on CLIs ---
 # grok (and the other default-on CLIs) were just uninstalled above; a plain
 # default install must bring them back, or they would stay hidden from the
-# taskbar (the extension drops any cli with enabled=false). claude_code stays
-# off unless explicitly selected.
+# taskbar (the extension drops any cli with enabled=false).
 run_installer >"$TMP_DIR/reinstall.out" 2>&1 || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall exited non-zero"; }
 PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'CHECK' || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall must re-enable disabled default-on CLIs"; }
 import json, sys
 config = json.load(open(sys.argv[1]))
-for cli in ("codex", "grok", "opencode_go", "openrouter"):
+for cli in ("codex", "claude_code", "grok", "opencode_go", "openrouter"):
     assert config["clis"][cli]["enabled"] is True, cli
-assert config["clis"]["claude_code"]["enabled"] is False
 CHECK
 PASS=$((PASS + 1))
 
-# --- claude_code_monitor is opt-in: --select re-enables it -----------------
+# --- claude_code_monitor remains selectable explicitly ----------------------
 run_installer --select claude_code_monitor >"$TMP_DIR/install-cc.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --select claude_code_monitor exited non-zero"; }
 PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: --select claude_code_monitor should enable claude_code"; }
