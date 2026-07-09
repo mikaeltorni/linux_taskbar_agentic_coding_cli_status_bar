@@ -110,6 +110,7 @@ const results = {
   countdown_60m: resetCountdown(NOW + 3600, NOW),
   rounded_reset_clock: resetClock(1783259999),
   rounded_details_reset: resetsText(1783259999),
+  grok_details_reset: resetsText(1783577040, 'week'),
   one_reset_available: resetAvailabilityText(1),
   multiple_resets_available: resetAvailabilityText(2),
   missing_resets_available: resetAvailabilityText(undefined),
@@ -269,6 +270,12 @@ def test_boot_stale_weekly_flips_from_reset_clock_to_available(js_results):
     assert '<span foreground="#8ff0a4">100</span>' in segment  # weekly replenished
     assert '>60<' in segment   # 5h at 40% used -> 60% left, still normal
     assert '#ff0000' not in segment  # no red reset clock
+
+
+def test_grok_details_menu_shows_weekly_reset_suffix(js_results):
+    reset = js_results["grok_details_reset"]
+    assert reset.startswith(" — resets ")
+    assert re.search(r"[A-Za-z]{3} \d{2}:\d{2}", reset)
 
 
 def test_exhausted_fable_shows_rounded_red_reset_clock_inline(js_results):

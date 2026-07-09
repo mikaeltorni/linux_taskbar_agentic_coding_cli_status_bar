@@ -842,12 +842,20 @@ def _grok_last_billing(log_file: Path) -> dict[str, Any] | None:
         used = _to_percent(billing.get("creditUsagePercent"))
     else:
         used = 0.0
+    period = billing.get("currentPeriod")
+    resets_at = (
+        _to_epoch(period.get("end"))
+        if isinstance(period, dict)
+        else None
+    )
+    if resets_at is None:
+        resets_at = _to_epoch(billing.get("billingPeriodEnd"))
     observed = float(last_ts) if last_ts is not None else log_file.stat().st_mtime
     return _snapshot(
         "grok_logs",
         observed_at=observed,
         plan=last.get("subscriptionTier"),
-        windows=[{"label": "week", "used_percent": used, "resets_at": None}],
+        windows=[{"label": "week", "used_percent": used, "resets_at": resets_at}],
     )
 
 

@@ -14,6 +14,8 @@ import pytest
 from agentic_cli_status import config as acs_config
 from agentic_cli_status import poller
 from tests.conftest import (
+    GROK_BILLING_PERIOD_END,
+    GROK_POST_RESET_PERIOD_END,
     OPENROUTER_ANALYTICS_FIXTURE,
     OPENCODE_GO_HTML_FIXTURE,
     codex_token_count_event,
@@ -550,10 +552,10 @@ class TestPollOnce:
         assert grok["source"] == "grok_logs"
         assert grok["windows"][0]["used_percent"] == 99.0
 
-    def test_grok_console_reset_not_from_billing_log(
+    def test_grok_console_backfills_reset_from_billing_when_pane_omits_it(
         self, sandbox_home, monkeypatch
     ):
-        """Grok resets_at is never invented from billing-log period ends."""
+        """Pane usage wins; billing period end fills a missing resets_at."""
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
@@ -574,7 +576,7 @@ class TestPollOnce:
         grok = status["clis"]["grok"]
         assert grok["source"] == "tmux_pane"
         assert grok["windows"][0]["used_percent"] == 100.0
-        assert grok["windows"][0]["resets_at"] is None
+        assert grok["windows"][0]["resets_at"] == GROK_BILLING_PERIOD_END
 
     def test_grok_uses_saved_pane_when_live_capture_unparseable(
         self, sandbox_home, monkeypatch
@@ -653,7 +655,7 @@ class TestPollOnce:
         grok = status["clis"]["grok"]
         assert grok["source"] == "grok_logs"
         assert grok["windows"][0]["used_percent"] == 99.0
-        assert grok["windows"][0]["resets_at"] is None
+        assert grok["windows"][0]["resets_at"] == GROK_BILLING_PERIOD_END
 
     def test_grok_post_reset_no_percent_stays_fresh_headless(
         self, sandbox_home, monkeypatch
@@ -684,7 +686,11 @@ class TestPollOnce:
         grok = status["clis"]["grok"]
         assert grok["source"] == "grok_logs"
         assert grok["windows"] == [
-            {"label": "week", "used_percent": 0.0, "resets_at": None}
+            {
+                "label": "week",
+                "used_percent": 0.0,
+                "resets_at": GROK_POST_RESET_PERIOD_END,
+            }
         ]
         assert grok["error"] is None
         assert grok["stale"] is False

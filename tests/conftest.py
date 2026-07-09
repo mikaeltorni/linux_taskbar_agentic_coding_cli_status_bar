@@ -10,6 +10,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Epoch for ``grok_billing_record``'s default ``currentPeriod.end``.
+GROK_BILLING_PERIOD_END = 1783577040
+# Epoch for ``grok_billing_record_no_percent``'s default post-reset period end.
+GROK_POST_RESET_PERIOD_END = 1784181840
+
 
 @pytest.fixture
 def sandbox_home(tmp_path, monkeypatch):

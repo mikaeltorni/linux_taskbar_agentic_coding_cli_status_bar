@@ -10,6 +10,8 @@ import pytest
 
 from agentic_cli_status import collectors
 from tests.conftest import (
+    GROK_BILLING_PERIOD_END,
+    GROK_POST_RESET_PERIOD_END,
     OPENCODE_GO_HTML_FIXTURE,
     codex_token_count_event,
     grok_billing_record,
@@ -199,9 +201,18 @@ class TestCollectGrok:
             {
                 "label": "week",
                 "used_percent": 100.0,
-                "resets_at": None,
+                "resets_at": GROK_BILLING_PERIOD_END,
             }
         ]
+
+    def test_billing_period_end_from_current_period(self, sandbox_home):
+        write_grok_log(
+            sandbox_home,
+            "grok.log",
+            [grok_billing_record(12.0)],
+        )
+        result = collectors.collect_grok(sandbox_home)
+        assert result["windows"][0]["resets_at"] == GROK_BILLING_PERIOD_END
 
     def test_post_reset_record_without_percent_is_0_used(self, sandbox_home):
         """A reset record missing ``creditUsagePercent`` is 0% used, not dropped.
@@ -222,7 +233,11 @@ class TestCollectGrok:
         result = collectors.collect_grok(sandbox_home)
         assert result["error"] is None
         assert result["windows"] == [
-            {"label": "week", "used_percent": 0.0, "resets_at": None}
+            {
+                "label": "week",
+                "used_percent": 0.0,
+                "resets_at": GROK_POST_RESET_PERIOD_END,
+            }
         ]
         assert result["observed_at"] is not None
 
@@ -239,7 +254,11 @@ class TestCollectGrok:
         result = collectors.collect_grok(sandbox_home)
         assert result["error"] is None
         assert result["windows"] == [
-            {"label": "week", "used_percent": 0.0, "resets_at": None}
+            {
+                "label": "week",
+                "used_percent": 0.0,
+                "resets_at": GROK_POST_RESET_PERIOD_END,
+            }
         ]
 
     def test_missing_logs_dir_reports_error(self, sandbox_home):

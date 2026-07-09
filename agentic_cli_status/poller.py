@@ -210,7 +210,8 @@ def resolve_grok_snapshot(
     3. Saved pane fresh (mtime within ``stale_after``) → console
        (``observed_at`` = file mtime).
     4. Throttled tick + last ``tmux_pane`` still fresh → last console.
-    5. Billing fallback (``resets_at`` is never invented from billing logs).
+    5. Billing fallback (``resets_at`` may be filled from billing period ends
+       after merge when the winning reading omitted it).
     """
     plan = billing.get("plan")
 
@@ -303,6 +304,7 @@ def _collect_grok_cli(
         stale_after=stale_after,
         tmux_throttled=not tmux_wanted,
     )
+    snapshot = _carry_window_resets(snapshot, billing)
     if (
         live_text is not None
         and parse_pane("grok", live_text, now=now).get("windows")
