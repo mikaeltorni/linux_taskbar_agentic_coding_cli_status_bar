@@ -26,6 +26,7 @@ from typing import Any
 
 from .acs_logging import LOGGER
 from .collectors import (
+    _carry_last_reading,
     collect_claude,
     collect_codex,
     collect_grok,
@@ -305,6 +306,9 @@ def _collect_grok_cli(
         tmux_throttled=not tmux_wanted,
     )
     snapshot = _carry_window_resets(snapshot, billing)
+    # A failed billing read or unparseable tmux capture must not blank GK to
+    # "–" when the previous tick had a good reading (see _carry_last_reading).
+    snapshot = _carry_last_reading(snapshot, last)
     if (
         live_text is not None
         and parse_pane("grok", live_text, now=now).get("windows")

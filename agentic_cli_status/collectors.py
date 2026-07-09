@@ -580,7 +580,7 @@ def _carry_last_reading(
     if last_result and last_result.get("windows") and not snapshot["windows"]:
         snapshot["windows"] = last_result["windows"]
         snapshot["observed_at"] = last_result.get("observed_at")
-        snapshot["plan"] = snapshot["plan"] or last_result.get("plan")
+        snapshot["plan"] = snapshot.get("plan") or last_result.get("plan")
     return snapshot
 
 

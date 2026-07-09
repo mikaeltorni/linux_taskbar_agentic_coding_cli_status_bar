@@ -701,6 +701,96 @@ class TestPollOnce:
         assert grok["error"] is None
         assert grok["stale"] is False
 
+    def test_grok_carries_last_reading_when_billing_fails(
+        self, sandbox_home, monkeypatch
+    ):
+        """A transient billing read failure must not blank GK to "–"."""
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        monkeypatch.setattr(
+            poller,
+            "collect_grok",
+            lambda home: {
+                "source": "grok_logs",
+                "windows": [],
+                "error": "no billing records found",
+            },
+        )
+        monkeypatch.setattr(poller, "refresh_and_capture", lambda *a, **k: None)
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        previous = {
+            "clis": {
+                "grok": {
+                    "source": "grok_logs",
+                    "observed_at": NOW - 120,
+                    "plan": "SuperGrok",
+                    "windows": [
+                        {
+                            "label": "week",
+                            "used_percent": 32.0,
+                            "resets_at": GROK_BILLING_PERIOD_END,
+                        },
+                    ],
+                    "error": None,
+                },
+            },
+        }
+        status = poller.poll_once(
+            home=sandbox_home, previous=previous, now=NOW
+        )
+        grok = status["clis"]["grok"]
+        assert grok["windows"] == previous["clis"]["grok"]["windows"]
+        assert grok["observed_at"] == NOW - 120
+        assert grok["plan"] == "SuperGrok"
+        assert grok["error"] == "no billing records found"
+
+    def test_grok_carries_last_reading_when_tmux_unparseable(
+        self, sandbox_home, monkeypatch
+    ):
+        """Unparseable tmux capture with failed billing keeps the prior window."""
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        monkeypatch.setattr(
+            poller,
+            "collect_grok",
+            lambda home: {
+                "source": "grok_logs",
+                "windows": [],
+                "error": "no billing records found",
+            },
+        )
+        monkeypatch.setattr(
+            poller,
+            "refresh_and_capture",
+            lambda *a, **k: "welcome to grok\n",
+        )
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        previous = {
+            "clis": {
+                "grok": {
+                    "source": "tmux_pane",
+                    "observed_at": NOW - 60,
+                    "plan": "SuperGrok",
+                    "windows": [
+                        {
+                            "label": "week",
+                            "used_percent": 55.0,
+                            "resets_at": 1783577040,
+                        },
+                    ],
+                    "error": None,
+                },
+            },
+        }
+        status = poller.poll_once(
+            home=sandbox_home, previous=previous, now=NOW
+        )
+        grok = status["clis"]["grok"]
+        assert grok["windows"] == previous["clis"]["grok"]["windows"]
+        assert grok["observed_at"] == NOW - 60
+
     def test_grok_falls_back_when_last_pane_stale(
         self, sandbox_home, monkeypatch
     ):
