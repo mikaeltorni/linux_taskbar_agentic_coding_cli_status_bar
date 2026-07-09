@@ -181,8 +181,12 @@ def collect_codex(home: Path) -> dict[str, Any]:
     """Collect Codex rate limits from the newest session rollout file.
 
     Scans up to :data:`CODEX_SCAN_DAYS` of ``~/.codex/sessions`` day
-    directories newest-first and returns the last ``token_count`` event's
-    ``rate_limits`` payload (primary = 5h window, secondary = weekly window).
+    directories newest-first and returns the newest state of each rate-limit
+    window. Codex may run several concurrent 5h windows at once (Codex
+    v0.142+), so the collector tracks the most-depleted reading per window
+    label rather than the literal final ``token_count`` event; otherwise a
+    freshly-opened concurrent window logged last would make the bar jump to
+    ~100% left (a spurious reset).
 
     Args:
         home: The user's home directory.
@@ -201,9 +205,28 @@ def collect_codex(home: Path) -> dict[str, Any]:
 
 
 def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
-    """Return the snapshot for the last rate_limits event in one rollout file."""
-    last: dict[str, Any] | None = None
-    last_ts: float | None = None
+    """Return the snapshot for the newest state of each rate-limit window.
+
+    Codex (v0.142+) can run several concurrent 5h ``primary`` windows at once
+    (each with its own ``resets_at``), and later activity on a lightly-used
+    window lands *after* the heavily-used one in the file. Picking the literal
+    final ``rate_limits`` event therefore reports whichever window happened to
+    log last, which makes the bar jump to ~100% left (a spurious "reset") whenever
+    a fresh concurrent window is active. So instead track, per reset window, the
+    most recent event seen and report the true current state of every window.
+    """
+    # Codex (v0.142+) can open several concurrent 5h windows at once, each
+    # with its own resets_at, and later activity on a lightly-used window lands
+    # *after* the heavily-used one in the file. Picking the literal final event
+    # would then report the fresh window and make the bar jump to ~100% left (a
+    # spurious "reset"). Track the most-depleted window per label instead: the
+    # window you are actively draining accrues usage fastest, so the highest
+    # used_percent is the relevant one for a budget bar, and it is immune to the
+    # ordering artifact.
+    latest: dict[str, dict[str, Any]] = {}
+    observed: dict[str, float] = {}
+    overall_ts: float | None = None
+    plan_type: str | None = None
     try:
         for line in _tail_lines(rollout):
             if '"rate_limits"' not in line:
@@ -214,33 +237,47 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
                 continue
             payload = event.get("payload") or {}
             limits = payload.get("rate_limits")
-            if isinstance(limits, dict):
-                last = limits
-                last_ts = _to_epoch(event.get("timestamp"))
+            if not isinstance(limits, dict):
+                continue
+            ts = _to_epoch(event.get("timestamp"))
+            if ts is not None:
+                overall_ts = ts if overall_ts is None else max(overall_ts, ts)
+            for key, label in (("primary", "5h"), ("secondary", "week")):
+                window = limits.get(key)
+                if not isinstance(window, dict):
+                    continue
+                # A window without a usable used_percent is meaningless (it
+                # would otherwise default to 0.0 and render as 100% left), so
+                # skip it rather than publish a misleading reading.
+                used = _to_percent(window.get("used_percent"))
+                if used is None:
+                    continue
+                if label not in latest or used > _to_percent(
+                    latest[label].get("used_percent")
+                ):
+                    latest[label] = window
+                    observed[label] = ts if ts is not None else rollout.stat().st_mtime
+                if limits.get("plan_type"):
+                    plan_type = limits["plan_type"]
     except OSError as exc:
         LOGGER.error("cannot read codex rollout %s: %s", rollout, exc)
         return None
-    if last is None:
-        return None
     windows = []
-    for key, label in (("primary", "5h"), ("secondary", "week")):
-        window = last.get(key) or {}
-        used = _to_percent(window.get("used_percent"))
-        if used is not None:
-            windows.append(
-                {
-                    "label": label,
-                    "used_percent": used,
-                    "resets_at": _to_epoch(window.get("resets_at")),
-                }
-            )
+    for label, window in latest.items():
+        windows.append(
+            {
+                "label": label,
+                "used_percent": _to_percent(window.get("used_percent")),
+                "resets_at": _to_epoch(window.get("resets_at")),
+            }
+        )
     if not windows:
         return None
-    observed = float(last_ts) if last_ts is not None else rollout.stat().st_mtime
+    newest_observed = max(observed.values())
     return _snapshot(
         "codex_sessions",
-        observed_at=observed,
-        plan=last.get("plan_type"),
+        observed_at=newest_observed,
+        plan=plan_type,
         windows=windows,
     )
 

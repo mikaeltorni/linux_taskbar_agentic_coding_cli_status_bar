@@ -48,6 +48,78 @@ class TestCollectCodex:
         }
         assert result["observed_at"] == pytest.approx(1783075285, abs=2)
 
+    def test_reports_most_depleted_window_when_concurrent_5h_windows_interleave(
+        self, sandbox_home
+    ):
+        # Codex v0.142+ can open several concurrent 5h windows, each with its
+        # own resets_at. A lightly-used concurrent window is logged *after* the
+        # heavily-used one, so the naive "last event in file" approach would
+        # report the fresh window (near 100% left) and make the bar look reset.
+        base = "2026/07/03"
+        events = [
+            # User's real window, drained to 25%, resets at 1783080635.
+            codex_token_count_event(25, 4, timestamp="2026-07-03T10:40:00Z"),
+            # Fresh concurrent 5h window with a different reset, only 3% used,
+            # logged last — this is the trap.
+            {
+                "timestamp": "2026-07-03T10:45:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {"total_token_usage": {"total_tokens": 1}},
+                    "rate_limits": {
+                        "limit_id": "codex",
+                        "primary": {
+                            "used_percent": 3.0,
+                            "window_minutes": 300,
+                            "resets_at": 1783085000,
+                        },
+                        "secondary": {
+                            "used_percent": 1.0,
+                            "window_minutes": 10080,
+                            "resets_at": 1783579000,
+                        },
+                        "plan_type": "plus",
+                    },
+                },
+            },
+        ]
+        write_codex_rollout(sandbox_home, base, "rollout-x.jsonl", events)
+        result = collectors.collect_codex(sandbox_home)
+        by_label = {w["label"]: w for w in result["windows"]}
+        # Exactly one window per label, and the most-depleted (real) window wins.
+        assert list(by_label) == ["5h", "week"]
+        assert by_label["5h"]["used_percent"] == 25.0
+        assert by_label["week"]["used_percent"] == 4.0
+
+    def test_skips_window_missing_used_percent(self, sandbox_home):
+        # A window object without a usable used_percent must not be published
+        # (it would otherwise default to 0.0 and render as 100% left).
+        events = [
+            {
+                "timestamp": "2026-07-03T10:40:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {"total_token_usage": {"total_tokens": 1}},
+                    "rate_limits": {
+                        "limit_id": "codex",
+                        "primary": {"window_minutes": 300, "resets_at": 1783080635},
+                        "secondary": {
+                            "used_percent": 12.0,
+                            "window_minutes": 10080,
+                            "resets_at": 1783577400,
+                        },
+                        "plan_type": "plus",
+                    },
+                },
+            },
+        ]
+        write_codex_rollout(sandbox_home, "2026/07/03", "rollout-x.jsonl", events)
+        result = collectors.collect_codex(sandbox_home)
+        assert [w["label"] for w in result["windows"]] == ["week"]
+        assert result["windows"][0]["used_percent"] == 12.0
+
     def test_skips_rollouts_without_rate_limits(self, sandbox_home):
         write_codex_rollout(
             sandbox_home,
