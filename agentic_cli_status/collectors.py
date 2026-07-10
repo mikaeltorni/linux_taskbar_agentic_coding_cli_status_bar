@@ -74,6 +74,11 @@ from .openrouter_client import fetch_analytics_rows, management_api_key
 #: How many days of Codex session directories to scan backwards.
 CODEX_SCAN_DAYS = 7
 
+#: Codex can report the same rolling limit with reset epochs a few seconds
+#: apart when concurrent sessions publish snapshots. Treat those as one logical
+#: window so a later authoritative snapshot can replace an earlier one.
+CODEX_SAME_RESET_TOLERANCE_SECONDS = 60
+
 #: How much of the end of a large session/log file to read per tick. The
 #: newest rate-limit record lives at the end, so a bounded tail keeps
 #: second-scale polling cheap even for multi-megabyte files.
@@ -183,10 +188,10 @@ def collect_codex(home: Path) -> dict[str, Any]:
     Scans up to :data:`CODEX_SCAN_DAYS` of ``~/.codex/sessions`` day
     directories newest-first and returns the newest state of each rate-limit
     window. Codex may run several concurrent 5h windows at once (Codex
-    v0.142+), so the collector tracks the most-depleted reading per window
-    label rather than the literal final ``token_count`` event; otherwise a
-    freshly-opened concurrent window logged last would make the bar jump to
-    ~100% left (a spurious reset).
+    v0.142+), so the collector tracks the most-depleted genuinely distinct
+    reset window rather than the literal final ``token_count`` event;
+    otherwise a freshly-opened concurrent window logged last would make the
+    bar jump to ~100% left (a spurious reset).
 
     Args:
         home: The user's home directory.
@@ -212,8 +217,12 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
     window lands *after* the heavily-used one in the file. Picking the literal
     final ``rate_limits`` event therefore reports whichever window happened to
     log last, which makes the bar jump to ~100% left (a spurious "reset") whenever
-    a fresh concurrent window is active. So instead track, per reset window, the
-    most recent event seen and report the true current state of every window.
+    a fresh concurrent window is active. Keep the most-depleted reading across
+    genuinely distinct reset windows, but first coalesce reset epochs that are
+    only seconds apart and retain the newest snapshot in that logical window.
+    Codex emits those near-identical epochs for one rolling account window
+    across concurrent sessions; otherwise a stale 100%-used snapshot can mask
+    a newer post-limit reading until the next reset.
     """
     # Codex (v0.142+) can open several concurrent 5h windows at once, each
     # with its own resets_at, and later activity on a lightly-used window lands
@@ -222,13 +231,14 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
     # spurious "reset"). Track the most-depleted window per label instead: the
     # window you are actively draining accrues usage fastest, so the highest
     # used_percent is the relevant one for a budget bar, and it is immune to the
-    # ordering artifact.
-    latest: dict[str, dict[str, Any]] = {}
-    observed: dict[str, float] = {}
-    overall_ts: float | None = None
+    # ordering artifact. A reset epoch can drift by a few seconds between
+    # snapshots of the same rolling account window, so first collapse those
+    # near-identical epochs to their latest event. Only then choose the most
+    # depleted truly distinct window for the budget bar.
+    candidates: dict[str, list[dict[str, Any]]] = {}
     plan_type: str | None = None
     try:
-        for line in _tail_lines(rollout):
+        for order, line in enumerate(_tail_lines(rollout)):
             if '"rate_limits"' not in line:
                 continue
             try:
@@ -240,8 +250,7 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
             if not isinstance(limits, dict):
                 continue
             ts = _to_epoch(event.get("timestamp"))
-            if ts is not None:
-                overall_ts = ts if overall_ts is None else max(overall_ts, ts)
+            observed_at = ts if ts is not None else rollout.stat().st_mtime
             for key, label in (("primary", "5h"), ("secondary", "week")):
                 window = limits.get(key)
                 if not isinstance(window, dict):
@@ -252,28 +261,59 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
                 used = _to_percent(window.get("used_percent"))
                 if used is None:
                     continue
-                if label not in latest or used > _to_percent(
-                    latest[label].get("used_percent")
+                reset = _to_epoch(window.get("resets_at"))
+                candidate = {
+                    "used_percent": used,
+                    "resets_at": reset,
+                    "observed_at": observed_at,
+                    "order": order,
+                }
+                label_candidates = candidates.setdefault(label, [])
+                same_window = next(
+                    (
+                        existing
+                        for existing in label_candidates
+                        if reset is not None
+                        and existing["resets_at"] is not None
+                        and abs(reset - existing["resets_at"])
+                        <= CODEX_SAME_RESET_TOLERANCE_SECONDS
+                    ),
+                    None,
+                )
+                if same_window is None:
+                    label_candidates.append(candidate)
+                elif (candidate["observed_at"], candidate["order"]) >= (
+                    same_window["observed_at"],
+                    same_window["order"],
                 ):
-                    latest[label] = window
-                    observed[label] = ts if ts is not None else rollout.stat().st_mtime
+                    label_candidates[label_candidates.index(same_window)] = candidate
                 if limits.get("plan_type"):
                     plan_type = limits["plan_type"]
     except OSError as exc:
         LOGGER.error("cannot read codex rollout %s: %s", rollout, exc)
         return None
     windows = []
-    for label, window in latest.items():
+    selected: dict[str, dict[str, Any]] = {}
+    for label, label_candidates in candidates.items():
+        selected[label] = max(
+            label_candidates,
+            key=lambda candidate: (
+                candidate["used_percent"],
+                candidate["observed_at"],
+                candidate["order"],
+            ),
+        )
+    for label, candidate in selected.items():
         windows.append(
             {
                 "label": label,
-                "used_percent": _to_percent(window.get("used_percent")),
-                "resets_at": _to_epoch(window.get("resets_at")),
+                "used_percent": candidate["used_percent"],
+                "resets_at": candidate["resets_at"],
             }
         )
     if not windows:
         return None
-    newest_observed = max(observed.values())
+    newest_observed = max(candidate["observed_at"] for candidate in selected.values())
     return _snapshot(
         "codex_sessions",
         observed_at=newest_observed,
