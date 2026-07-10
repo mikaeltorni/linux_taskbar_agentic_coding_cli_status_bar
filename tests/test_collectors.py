@@ -24,6 +24,7 @@ from tests.conftest import (
 )
 
 
+
 class TestCollectCodex:
     def test_reads_last_rate_limits_event_of_newest_rollout(self, sandbox_home):
         write_codex_rollout(
@@ -93,6 +94,70 @@ class TestCollectCodex:
         assert list(by_label) == ["5h", "week"]
         assert by_label["5h"]["used_percent"] == 25.0
         assert by_label["week"]["used_percent"] == 4.0
+
+    def test_uses_newest_snapshot_when_reset_epochs_describe_same_window(
+        self, sandbox_home
+    ):
+        """A later post-limit reading must replace an earlier exhausted one.
+
+        Codex can report reset epochs a few seconds apart for the same account
+        window across concurrent sessions. After one session reaches 100%, a
+        later snapshot for that same window may show the current session's
+        lower usage. Selecting the largest percentage across both snapshots
+        would keep the stale exhausted reading visible until the reset.
+        """
+        events = [
+            {
+                "timestamp": "2026-07-09T23:24:02Z",
+                "type": "event_msg",
+                "payload": {
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 100.0,
+                            "resets_at": 1783653454,
+                        },
+                        "secondary": {
+                            "used_percent": 16.0,
+                            "resets_at": 1784240254,
+                        },
+                        "plan_type": "plus",
+                    }
+                },
+            },
+            {
+                "timestamp": "2026-07-09T23:24:20Z",
+                "type": "event_msg",
+                "payload": {
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 6.0,
+                            "resets_at": 1783653479,
+                        },
+                        "secondary": {
+                            "used_percent": 1.0,
+                            "resets_at": 1784240279,
+                        },
+                        "plan_type": "plus",
+                    }
+                },
+            },
+        ]
+        write_codex_rollout(sandbox_home, "2026/07/10", "rollout-x.jsonl", events)
+
+        result = collectors.collect_codex(sandbox_home)
+        by_label = {window["label"]: window for window in result["windows"]}
+
+        assert by_label["5h"] == {
+            "label": "5h",
+            "used_percent": 6.0,
+            "resets_at": 1783653479,
+        }
+        assert by_label["week"] == {
+            "label": "week",
+            "used_percent": 1.0,
+            "resets_at": 1784240279,
+        }
+        assert result["observed_at"] == pytest.approx(1783639460, abs=2)
 
     def test_skips_window_missing_used_percent(self, sandbox_home):
         # A window object without a usable used_percent must not be published
@@ -1113,6 +1178,4 @@ class TestTailLines:
         write_grok_log(sandbox_home, "grok.log", records)
         result = collectors.collect_grok(sandbox_home)
         assert result["windows"][0]["used_percent"] == 66.0
-
-
 
