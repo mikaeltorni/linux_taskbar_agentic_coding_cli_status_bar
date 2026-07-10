@@ -16,6 +16,7 @@
 #   bash install.sh --default         # core + every default-on component, no prompts
 #   bash install.sh --all             # core + every component, no prompts
 #   bash install.sh --select a,b,c    # core + only the listed component ids
+#   ACS_POLL_INTERVAL_SECONDS=10 bash install.sh --select polling_rate
 #   bash install.sh --list-components # machine-readable component list (no deploy)
 #   bash install.sh --help            # usage
 #   sudo bash install.sh              # also supported (clean-install chain)

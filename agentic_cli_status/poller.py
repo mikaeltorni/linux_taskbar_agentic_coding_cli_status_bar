@@ -2,10 +2,12 @@
 """Polling daemon that aggregates agentic CLI rate limits into a status file.
 
 On every tick the poller re-reads the config (so installer reconfiguration
-applies live), collects each enabled CLI's rate limits headlessly, optionally
-refreshes stale data through the tmux debug console, and atomically writes the
-merged snapshot to ``$XDG_STATE_HOME/agentic-cli-status/status.json``. The
-GNOME Shell extension watches that file and renders the taskbar indicator.
+applies live), collects each enabled CLI's rate limits, and atomically writes
+the merged snapshot to ``$XDG_STATE_HOME/agentic-cli-status/status.json``.
+Local Codex/Grok files are scanned directly; remote metadata calls and tmux
+slash-command refreshes run on background workers so they cannot delay the
+shared status cadence. The GNOME Shell extension watches the status file and
+renders every taskbar segment from that one snapshot.
 
 Usage:
     python3 -m agentic_cli_status.poller --once     # single tick, then exit
@@ -18,11 +20,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .acs_logging import LOGGER
 from .collectors import (
@@ -44,10 +48,106 @@ PANE_DIR_NAME = "panes"
 #: second-scale poll ticks cannot spam the console windows.
 TMUX_REFRESH_MIN_INTERVAL_SECONDS = 60
 
+TmuxRefreshRequest = Callable[[str, str], bool]
+
+
+class TmuxRefreshWorker:
+    """Run slow tmux slash-command captures outside the five-second poll tick.
+
+    Requests are deduplicated per ``(session, cli_id)`` while queued or
+    running. The single daemon thread intentionally serializes interaction
+    with the shared tmux session, then atomically stores each capture for the
+    next fast poll tick to consume.
+
+    Args:
+        home: Home directory whose state tree receives pane captures.
+        refresh_fn: Capture callable override used by tests.
+    """
+
+    def __init__(
+        self,
+        home: Path,
+        *,
+        refresh_fn: Callable[[str, str], str | None] = refresh_and_capture,
+    ) -> None:
+        self._home = home
+        self._refresh_fn = refresh_fn
+        self._queue: queue.Queue[tuple[str, str] | None] = queue.Queue()
+        self._pending: set[tuple[str, str]] = set()
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="agentic-cli-status-tmux-refresh",
+            daemon=True,
+        )
+        self._started = False
+
+    def start(self) -> None:
+        """Start the background capture thread once."""
+        if self._started:
+            return
+        self._started = True
+        self._thread.start()
+        LOGGER.info("background tmux refresh worker started")
+
+    def request(self, session: str, cli_id: str) -> bool:
+        """Queue one capture without waiting.
+
+        Args:
+            session: tmux session containing the CLI window.
+            cli_id: CLI window identifier.
+
+        Returns:
+            ``True`` when queued, or ``False`` when the same capture is
+            already queued/running or the worker is not active.
+        """
+        key = (session, cli_id)
+        with self._lock:
+            if not self._started or key in self._pending:
+                return False
+            self._pending.add(key)
+        self._queue.put(key)
+        LOGGER.debug("queued background tmux refresh for %s", cli_id)
+        return True
+
+    def close(self) -> None:
+        """Request worker shutdown without delaying service termination."""
+        if not self._started:
+            return
+        with self._lock:
+            self._started = False
+        self._queue.put(None)
+        self._thread.join(timeout=1.0)
+        if self._thread.is_alive():
+            LOGGER.info("background tmux refresh still exiting asynchronously")
+        else:
+            LOGGER.info("background tmux refresh worker stopped")
+
+    def _run(self) -> None:
+        """Process queued captures serially until the shutdown sentinel."""
+        while True:
+            request = self._queue.get()
+            if request is None:
+                self._queue.task_done()
+                return
+            session, cli_id = request
+            try:
+                pane_text = self._refresh_fn(session, cli_id)
+                if pane_text is not None:
+                    _save_pane_capture(self._home, cli_id, pane_text)
+            except Exception as exc:  # noqa: BLE001 - worker must survive a CLI
+                LOGGER.exception(
+                    "background tmux refresh failed for %s: %s", cli_id, exc
+                )
+            finally:
+                with self._lock:
+                    self._pending.discard(request)
+                self._queue.task_done()
+
 # Headless collector dispatch. Each entry receives the CLI's config dict so
 # per-CLI knobs (like Claude's endpoint interval) reach the collector.
 _HEADLESS_COLLECTORS = {
-    "codex": lambda home, last, cli_config, now: collect_codex(home),
+    "codex": lambda home, last, cli_config, now: collect_codex(home, now=now),
     "claude_code": lambda home, last, cli_config, now: collect_claude(
         home,
         last,
@@ -70,6 +170,134 @@ _HEADLESS_COLLECTORS = {
         daily_limit=cli_config.get("daily_limit"),
     ),
 }
+
+# Local Codex/Grok file reads stay in the fast tick. These HTTP-backed
+# collectors run independently so a network timeout cannot freeze every bar.
+REMOTE_HEADLESS_CLI_IDS = ("claude_code", "opencode_go", "openrouter")
+
+
+class HeadlessRefreshWorker:
+    """Run remote headless collectors without blocking the shared poll tick.
+
+    One daemon thread per remote CLI lets Claude, OpenCode Go, and OpenRouter
+    progress independently. Requests are deduplicated while running, and the
+    main poll loop consumes completed snapshots on its next five-second tick.
+
+    Args:
+        collect_fn: Optional collector dispatcher override used by tests.
+    """
+
+    def __init__(
+        self,
+        *,
+        collect_fn: Callable[
+            [str, Path, dict[str, Any] | None, dict[str, Any], float],
+            dict[str, Any],
+        ]
+        | None = None,
+    ) -> None:
+        self._collect_fn = collect_fn or self._collect
+        self._queue: queue.Queue[
+            tuple[str, Path, dict[str, Any] | None, dict[str, Any], float] | None
+        ] = queue.Queue()
+        self._pending: set[str] = set()
+        self._results: dict[str, dict[str, Any]] = {}
+        self._lock = threading.Lock()
+        self._threads = [
+            threading.Thread(
+                target=self._run,
+                name=f"agentic-cli-status-remote-{index}",
+                daemon=True,
+            )
+            for index in range(len(REMOTE_HEADLESS_CLI_IDS))
+        ]
+        self._started = False
+
+    @staticmethod
+    def _collect(
+        cli_id: str,
+        home: Path,
+        last: dict[str, Any] | None,
+        cli_config: dict[str, Any],
+        now: float,
+    ) -> dict[str, Any]:
+        """Dispatch one configured remote collector."""
+        return _HEADLESS_COLLECTORS[cli_id](home, last, cli_config, now)
+
+    def start(self) -> None:
+        """Start all remote collector threads once."""
+        if self._started:
+            return
+        self._started = True
+        for thread in self._threads:
+            thread.start()
+        LOGGER.info("background remote collector workers started")
+
+    def request(
+        self,
+        cli_id: str,
+        home: Path,
+        last: dict[str, Any] | None,
+        cli_config: dict[str, Any],
+        now: float,
+    ) -> bool:
+        """Queue one remote collection without waiting.
+
+        Returns ``False`` when that CLI already has a request in flight or the
+        worker is shutting down.
+        """
+        with self._lock:
+            if not self._started or cli_id in self._pending:
+                return False
+            self._pending.add(cli_id)
+        self._queue.put((cli_id, home, last, dict(cli_config), now))
+        return True
+
+    def take_result(self, cli_id: str) -> dict[str, Any] | None:
+        """Return and remove the latest completed snapshot for ``cli_id``."""
+        with self._lock:
+            return self._results.pop(cli_id, None)
+
+    def has_result(self, cli_id: str) -> bool:
+        """Return whether ``cli_id`` has a completed snapshot ready."""
+        with self._lock:
+            return cli_id in self._results
+
+    def close(self) -> None:
+        """Request shutdown without waiting on long network timeouts."""
+        if not self._started:
+            return
+        with self._lock:
+            self._started = False
+        for _thread in self._threads:
+            self._queue.put(None)
+        for thread in self._threads:
+            thread.join(timeout=1.0)
+        if any(thread.is_alive() for thread in self._threads):
+            LOGGER.info("background remote collectors still exiting asynchronously")
+        else:
+            LOGGER.info("background remote collector workers stopped")
+
+    def _run(self) -> None:
+        """Collect queued remote snapshots until a shutdown sentinel."""
+        while True:
+            request = self._queue.get()
+            if request is None:
+                self._queue.task_done()
+                return
+            cli_id, home, last, cli_config, now = request
+            try:
+                result = self._collect_fn(cli_id, home, last, cli_config, now)
+                with self._lock:
+                    self._results[cli_id] = result
+            except Exception as exc:  # noqa: BLE001 - worker must survive a CLI
+                LOGGER.exception(
+                    "background headless collection failed for %s: %s", cli_id, exc
+                )
+            finally:
+                with self._lock:
+                    self._pending.discard(cli_id)
+                self._queue.task_done()
 
 
 def status_path(home: Path | None = None) -> Path:
@@ -266,8 +494,20 @@ def _collect_grok_cli(
     home: Path,
     last: dict[str, Any] | None,
     now: float,
+    tmux_refresh_request: TmuxRefreshRequest | None = None,
 ) -> dict[str, Any]:
-    """Collect Grok via billing logs plus optional tmux console resolution."""
+    """Collect Grok via billing logs plus optional tmux console resolution.
+
+    Args:
+        cli_config: Grok source/staleness configuration.
+        tmux_config: Shared tmux enable/session configuration.
+        home: User home containing logs and saved pane captures.
+        last: Previous Grok snapshot.
+        now: Current poll epoch.
+        tmux_refresh_request: Optional non-blocking background refresh enqueue
+            function. When absent, capture remains synchronous for ``--once``
+            compatibility and focused tests.
+    """
     source_mode = cli_config["source"]
     stale_after = cli_config["stale_after_seconds"]
     tmux_enabled = tmux_config.get("enabled", True)
@@ -288,8 +528,11 @@ def _collect_grok_cli(
     )
     live_text: str | None = None
     if tmux_wanted:
-        last_tmux_attempt = now
-        live_text = refresh_and_capture(tmux_config["session"], "grok")
+        if tmux_refresh_request is None:
+            last_tmux_attempt = now
+            live_text = refresh_and_capture(tmux_config["session"], "grok")
+        elif tmux_refresh_request(tmux_config["session"], "grok"):
+            last_tmux_attempt = now
     saved_text, saved_at = (None, None)
     if source_mode in ("auto", "tmux") and tmux_enabled:
         saved_text, saved_at = _load_pane_capture(home, "grok")
@@ -320,6 +563,59 @@ def _collect_grok_cli(
     return snapshot
 
 
+def _merge_cli_pane(
+    snapshot: dict[str, Any],
+    *,
+    cli_id: str,
+    pane_text: str,
+    pane_observed_at: float,
+    source_mode: str,
+    stale_after: int,
+    last: dict[str, Any] | None,
+    now: float,
+) -> dict[str, Any]:
+    """Merge one newly captured generic CLI pane into a headless snapshot.
+
+    Args:
+        snapshot: Current headless/carried snapshot.
+        cli_id: CLI whose pane was captured.
+        pane_text: Captured pane contents.
+        pane_observed_at: Capture epoch (live tick or saved-file mtime).
+        source_mode: Configured ``auto``/``headless``/``tmux`` mode.
+        stale_after: Seconds after which the headless reading is stale.
+        last: Previous published snapshot for metadata transition logging.
+        now: Current poll epoch used for staleness evaluation.
+
+    Returns:
+        Snapshot with eligible pane windows and Codex reset metadata merged.
+    """
+    pane_snapshot = parse_pane(cli_id, pane_text, now=pane_observed_at)
+    if pane_snapshot.get("windows") and (
+        source_mode == "tmux"
+        or not snapshot.get("windows")
+        or _is_stale(snapshot, stale_after, now)
+    ):
+        pane_snapshot["plan"] = snapshot.get("plan") or pane_snapshot.get("plan")
+        pane_snapshot["observed_at"] = pane_observed_at
+        snapshot = pane_snapshot
+    if cli_id == "codex" and "resets_available" in pane_snapshot:
+        previous_count = (last or {}).get("resets_available", 0)
+        current_count = pane_snapshot["resets_available"]
+        if current_count > 0:
+            snapshot["resets_available"] = current_count
+        else:
+            snapshot.pop("resets_available", None)
+        snapshot["resets_checked_at"] = pane_observed_at
+        if previous_count != current_count:
+            LOGGER.info(
+                "codex reset allowance changed from %s to %s",
+                previous_count,
+                current_count,
+            )
+    snapshot["pane_checked_at"] = pane_observed_at
+    return snapshot
+
+
 def _collect_cli(
     cli_id: str,
     cli_config: dict[str, Any],
@@ -327,6 +623,8 @@ def _collect_cli(
     home: Path,
     last: dict[str, Any] | None,
     now: float,
+    tmux_refresh_request: TmuxRefreshRequest | None = None,
+    headless_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect one CLI's snapshot honoring its configured source mode.
 
@@ -337,13 +635,24 @@ def _collect_cli(
     :func:`_carry_fresher_reading`).
     """
     if cli_id == "grok":
-        return _collect_grok_cli(cli_config, tmux_config, home, last, now)
+        return _collect_grok_cli(
+            cli_config,
+            tmux_config,
+            home,
+            last,
+            now,
+            tmux_refresh_request,
+        )
 
     source_mode = cli_config["source"]
     stale_after = cli_config["stale_after_seconds"]
     snapshot: dict[str, Any] = {"windows": []}
     if source_mode in ("auto", "headless"):
-        snapshot = _HEADLESS_COLLECTORS[cli_id](home, last, cli_config, now)
+        snapshot = (
+            headless_snapshot
+            if headless_snapshot is not None
+            else _HEADLESS_COLLECTORS[cli_id](home, last, cli_config, now)
+        )
     snapshot = _carry_fresher_reading(snapshot, last)
     if cli_id == "codex":
         snapshot = _carry_codex_reset_metadata(snapshot, last)
@@ -376,54 +685,62 @@ def _collect_cli(
         for key in ("checked_at", "retry_after_until")
         if key in snapshot
     }
+    pane_text: str | None = None
+    pane_observed_at: float | None = None
     if tmux_wanted:
-        last_tmux_attempt = now
-        pane_text = refresh_and_capture(tmux_config["session"], cli_id)
-        if pane_text is not None:
-            _save_pane_capture(home, cli_id, pane_text)
-            pane_snapshot = parse_pane(cli_id, pane_text, now=now)
-            if pane_snapshot.get("windows"):
-                # In auto mode the pane refresh also nudges the CLI to update
-                # its local data, so the next tick's headless read is fresh.
-                if _is_stale(snapshot, stale_after, now):
-                    # The pane rendering carries no plan name; keep the one
-                    # the headless source reported.
-                    pane_snapshot["plan"] = snapshot.get("plan")
-                    snapshot = pane_snapshot
-            elif not snapshot.get("windows") and pane_snapshot.get("windows"):
-                snapshot = pane_snapshot
-            if cli_id == "codex" and "resets_available" in pane_snapshot:
-                previous_count = (last or {}).get("resets_available", 0)
-                current_count = pane_snapshot["resets_available"]
-                if current_count > 0:
-                    snapshot["resets_available"] = current_count
-                else:
-                    # Omit zero from the public status shape. This lets both
-                    # old and new extension versions hide a spent allowance
-                    # immediately, without requiring a Shell code reload.
-                    snapshot.pop("resets_available", None)
-                snapshot["resets_checked_at"] = now
-                if previous_count != current_count:
-                    LOGGER.info(
-                        "codex reset allowance changed from %s to %s",
-                        previous_count,
-                        current_count,
-                    )
+        if tmux_refresh_request is None:
+            last_tmux_attempt = now
+            pane_text = refresh_and_capture(tmux_config["session"], cli_id)
+            pane_observed_at = now
+            if pane_text is not None:
+                _save_pane_capture(home, cli_id, pane_text)
+        elif tmux_refresh_request(tmux_config["session"], cli_id):
+            last_tmux_attempt = now
+    if (
+        tmux_refresh_request is not None
+        and tmux_config.get("enabled", True)
+        and source_mode in ("auto", "tmux")
+    ):
+        saved_text, saved_at = _load_pane_capture(home, cli_id)
+        if (
+            saved_text is not None
+            and saved_at is not None
+            and saved_at > (last or {}).get("pane_checked_at", 0)
+            and now - saved_at <= stale_after
+        ):
+            pane_text = saved_text
+            pane_observed_at = saved_at
+    if pane_text is not None and pane_observed_at is not None:
+        snapshot = _merge_cli_pane(
+            snapshot,
+            cli_id=cli_id,
+            pane_text=pane_text,
+            pane_observed_at=pane_observed_at,
+            source_mode=source_mode,
+            stale_after=stale_after,
+            last=last,
+            now=now,
+        )
     snapshot = _carry_window_resets(snapshot, headless_snapshot, last)
     snapshot.update(endpoint_marks)
     if last_tmux_attempt is not None:
         # Carry the throttle timestamp across ticks (and pane replacements).
         snapshot["tmux_attempt_at"] = last_tmux_attempt
+    if last and "pane_checked_at" in last and "pane_checked_at" not in snapshot:
+        snapshot["pane_checked_at"] = last["pane_checked_at"]
     snapshot["stale"] = _is_stale(snapshot, stale_after, now)
     return snapshot
 
 
 def _save_pane_capture(home: Path, cli_id: str, text: str) -> None:
-    """Persist the last captured pane text for debugging (best-effort)."""
+    """Atomically persist the last captured pane text (best-effort)."""
     try:
         pane_dir = state_dir(home) / PANE_DIR_NAME
         pane_dir.mkdir(parents=True, exist_ok=True)
-        (pane_dir / f"{cli_id}.txt").write_text(text, encoding="utf-8")
+        target = pane_dir / f"{cli_id}.txt"
+        temporary = pane_dir / f".{cli_id}.txt.tmp"
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, target)
     except OSError as exc:
         LOGGER.warning("cannot save pane capture for %s: %s", cli_id, exc)
 
@@ -432,6 +749,8 @@ def poll_once(
     home: Path | None = None,
     previous: dict[str, Any] | None = None,
     now: float | None = None,
+    tmux_refresh_request: TmuxRefreshRequest | None = None,
+    headless_refresh_worker: HeadlessRefreshWorker | None = None,
 ) -> dict[str, Any]:
     """Run one poll tick and write the aggregated status file.
 
@@ -439,6 +758,12 @@ def poll_once(
         home: Home directory override (tests).
         previous: The previous aggregated status (for endpoint throttling).
         now: Current epoch override (tests).
+        tmux_refresh_request: Optional non-blocking background tmux enqueue
+            function used by daemon mode. ``None`` preserves synchronous
+            behavior for the one-shot command and focused callers.
+        headless_refresh_worker: Optional daemon-mode worker for HTTP-backed
+            collectors. Completed results are published and replacement work
+            is queued without delaying this tick.
 
     Returns:
         The aggregated status dictionary that was written.
@@ -461,8 +786,34 @@ def poll_once(
         if not cli_config["enabled"]:
             status["clis"][cli_id] = {"enabled": False}
             continue
+        last_cli = previous_clis.get(cli_id)
+        headless_snapshot = None
+        if (
+            headless_refresh_worker is not None
+            and cli_id in REMOTE_HEADLESS_CLI_IDS
+            and cli_config["source"] in ("auto", "headless")
+        ):
+            headless_snapshot = (
+                headless_refresh_worker.take_result(cli_id)
+                or last_cli
+                or {"windows": []}
+            )
+            headless_refresh_worker.request(
+                cli_id,
+                home,
+                headless_snapshot,
+                cli_config,
+                now,
+            )
         snapshot = _collect_cli(
-            cli_id, cli_config, config["tmux"], home, previous_clis.get(cli_id), now
+            cli_id,
+            cli_config,
+            config["tmux"],
+            home,
+            last_cli,
+            now,
+            tmux_refresh_request,
+            headless_snapshot,
         )
         snapshot["enabled"] = True
         status["clis"][cli_id] = snapshot
@@ -510,11 +861,24 @@ def _load_previous_status(home: Path) -> dict[str, Any] | None:
     return previous
 
 
+def _next_tick_delay(started_at: float, interval: int, now: float) -> float:
+    """Return seconds remaining until a start-to-start polling deadline.
+
+    Args:
+        started_at: Monotonic time when the current tick began.
+        interval: Configured polling interval in seconds.
+        now: Current monotonic time after the tick finished.
+    """
+    return max(0.0, started_at + interval - now)
+
+
 def run_daemon(home: Path | None = None) -> None:
     """Poll forever at the configured rate until SIGTERM/SIGINT.
 
     The config is re-read every tick, so polling-rate and per-CLI option
-    changes made by the installer apply without a service restart.
+    changes made by the installer apply without a service restart. Slow tmux
+    and remote HTTP refreshes are queued on background workers; the foreground
+    loop scans local sources and writes status on start-to-start deadlines.
     """
     LOGGER.info("agentic-cli-status poller starting (pid %d)", os.getpid())
     stop = {"requested": False}
@@ -525,18 +889,44 @@ def run_daemon(home: Path | None = None) -> None:
 
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
-    previous = _load_previous_status(home or Path.home())
-    while not stop["requested"]:
-        try:
-            previous = poll_once(home=home, previous=previous)
-        except Exception as exc:  # noqa: BLE001 - daemon must survive any tick
-            LOGGER.exception("poll tick failed: %s", exc)
-        interval = (previous or {}).get("poll_interval_seconds") or load_config()[
-            "poll_interval_seconds"
-        ]
-        deadline = time.time() + interval
-        while not stop["requested"] and time.time() < deadline:
-            time.sleep(1)
+    resolved_home = home or Path.home()
+    previous = _load_previous_status(resolved_home)
+    tmux_worker = TmuxRefreshWorker(resolved_home)
+    headless_worker = HeadlessRefreshWorker()
+    tmux_worker.start()
+    headless_worker.start()
+    overrun = False
+    try:
+        while not stop["requested"]:
+            tick_started = time.monotonic()
+            try:
+                previous = poll_once(
+                    home=home,
+                    previous=previous,
+                    tmux_refresh_request=tmux_worker.request,
+                    headless_refresh_worker=headless_worker,
+                )
+            except Exception as exc:  # noqa: BLE001 - daemon must survive any tick
+                LOGGER.exception("poll tick failed: %s", exc)
+            interval = (previous or {}).get("poll_interval_seconds") or load_config()[
+                "poll_interval_seconds"
+            ]
+            delay = _next_tick_delay(tick_started, interval, time.monotonic())
+            if delay == 0 and not overrun:
+                LOGGER.warning("poll tick exceeded configured %ss cadence", interval)
+                overrun = True
+            elif delay > 0 and overrun:
+                LOGGER.info("poll tick cadence recovered to %ss", interval)
+                overrun = False
+            deadline = time.monotonic() + delay
+            while not stop["requested"]:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(1.0, remaining))
+    finally:
+        tmux_worker.close()
+        headless_worker.close()
     LOGGER.info("agentic-cli-status poller stopped")
 
 

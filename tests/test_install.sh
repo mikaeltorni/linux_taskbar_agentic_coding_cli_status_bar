@@ -135,6 +135,30 @@ assert_file_contains "$CONFIG_FILE" '"endpoint_min_interval_seconds": 180' \
 assert_file_contains "$TMP_DIR/install-1.out" "seconds" \
   "Install output should state the polling rate is in seconds"
 
+# --- Non-interactive installer parameter overrides the shared cadence ------
+ACS_POLL_INTERVAL_SECONDS=7 run_installer --select polling_rate \
+  >"$TMP_DIR/install-poll-rate.out" 2>"$TMP_DIR/install-poll-rate.err" || {
+    FAIL=$((FAIL + 1)); echo "FAIL: polling-rate parameter install exited non-zero"; }
+PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: installer polling-rate parameter should persist"; }
+import json, sys
+config = json.load(open(sys.argv[1]))
+assert config["poll_interval_seconds"] == 7
+PY
+PASS=$((PASS + 1))
+
+# Restore the requested default for the remaining installer assertions.
+ACS_POLL_INTERVAL_SECONDS=5 run_installer --select polling_rate \
+  >"$TMP_DIR/install-poll-default.out" 2>"$TMP_DIR/install-poll-default.err" || {
+    FAIL=$((FAIL + 1)); echo "FAIL: restoring default polling rate exited non-zero"; }
+if ACS_POLL_INTERVAL_SECONDS=2 run_installer --select polling_rate \
+  >"$TMP_DIR/install-poll-invalid.out" 2>"$TMP_DIR/install-poll-invalid.err"; then
+  FAIL=$((FAIL + 1)); echo "FAIL: invalid polling-rate parameter should fail"
+else
+  PASS=$((PASS + 1))
+fi
+assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 5' \
+  "Invalid polling-rate parameter should preserve the prior value"
+
 UNIT_FILE="$TARGET_HOME/.config/systemd/user/agentic-cli-status.service"
 assert_file_exists "$UNIT_FILE" "Should install the systemd user unit"
 assert_file_contains "$CALL_LOG" "systemctl --user enable --now agentic-cli-status.service" \

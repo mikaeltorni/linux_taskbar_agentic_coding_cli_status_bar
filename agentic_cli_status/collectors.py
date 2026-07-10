@@ -182,7 +182,7 @@ def _tail_lines(path: Path, max_bytes: int = TAIL_READ_BYTES) -> list[str]:
 # Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
 # ---------------------------------------------------------------------------
 
-def collect_codex(home: Path) -> dict[str, Any]:
+def collect_codex(home: Path, *, now: float | None = None) -> dict[str, Any]:
     """Collect Codex rate limits from the newest session rollout file.
 
     Scans up to :data:`CODEX_SCAN_DAYS` of ``~/.codex/sessions`` day
@@ -195,7 +195,11 @@ def collect_codex(home: Path) -> dict[str, Any]:
 
     Args:
         home: The user's home directory.
+        now: Current epoch used to distinguish active windows from windows
+            whose reset has already passed. Defaults to the system clock.
     """
+    if now is None:
+        now = time.time()
     sessions = home / ".codex" / "sessions"
     if not sessions.is_dir():
         return _snapshot("codex_sessions", error="no ~/.codex/sessions directory")
@@ -203,13 +207,13 @@ def collect_codex(home: Path) -> dict[str, Any]:
     for day_dir in day_dirs[:CODEX_SCAN_DAYS]:
         files = sorted(day_dir.glob("rollout-*.jsonl"), reverse=True)
         for rollout in files:
-            found = _codex_last_rate_limits(rollout)
+            found = _codex_last_rate_limits(rollout, now=now)
             if found is not None:
                 return found
     return _snapshot("codex_sessions", error="no rate_limits events found")
 
 
-def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
+def _codex_last_rate_limits(rollout: Path, *, now: float) -> dict[str, Any] | None:
     """Return the snapshot for the newest state of each rate-limit window.
 
     Codex (v0.142+) can run several concurrent 5h ``primary`` windows at once
@@ -218,23 +222,28 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
     final ``rate_limits`` event therefore reports whichever window happened to
     log last, which makes the bar jump to ~100% left (a spurious "reset") whenever
     a fresh concurrent window is active. Keep the most-depleted reading across
-    genuinely distinct reset windows, but first coalesce reset epochs that are
-    only seconds apart and retain the newest snapshot in that logical window.
-    Codex emits those near-identical epochs for one rolling account window
-    across concurrent sessions; otherwise a stale 100%-used snapshot can mask
-    a newer post-limit reading until the next reset.
+    genuinely distinct *active* reset windows, but first coalesce reset epochs
+    that are only seconds apart and retain the newest snapshot in that logical
+    window. Codex emits those near-identical epochs for one rolling account
+    window across concurrent sessions. Expired windows are excluded whenever
+    an active replacement exists; otherwise an old exhausted window can mask
+    the post-reset reading indefinitely.
+
+    Args:
+        rollout: Codex JSONL session rollout to inspect.
+        now: Current epoch used to identify expired reset windows.
     """
     # Codex (v0.142+) can open several concurrent 5h windows at once, each
     # with its own resets_at, and later activity on a lightly-used window lands
     # *after* the heavily-used one in the file. Picking the literal final event
     # would then report the fresh window and make the bar jump to ~100% left (a
-    # spurious "reset"). Track the most-depleted window per label instead: the
-    # window you are actively draining accrues usage fastest, so the highest
-    # used_percent is the relevant one for a budget bar, and it is immune to the
-    # ordering artifact. A reset epoch can drift by a few seconds between
-    # snapshots of the same rolling account window, so first collapse those
-    # near-identical epochs to their latest event. Only then choose the most
-    # depleted truly distinct window for the budget bar.
+    # spurious "reset"). Track the most-depleted active window per label
+    # instead: the window you are actively draining accrues usage fastest, so
+    # the highest used_percent is the relevant one for a budget bar, and it is
+    # immune to the ordering artifact. A reset epoch can drift by a few seconds
+    # between snapshots of the same rolling account window, so first collapse
+    # those near-identical epochs to their latest event. Only then choose the
+    # most depleted truly distinct, unexpired window for the budget bar.
     candidates: dict[str, list[dict[str, Any]]] = {}
     plan_type: str | None = None
     try:
@@ -295,8 +304,14 @@ def _codex_last_rate_limits(rollout: Path) -> dict[str, Any] | None:
     windows = []
     selected: dict[str, dict[str, Any]] = {}
     for label, label_candidates in candidates.items():
+        active_candidates = [
+            candidate
+            for candidate in label_candidates
+            if candidate["resets_at"] is None or candidate["resets_at"] > now
+        ]
+        selectable = active_candidates or label_candidates
         selected[label] = max(
-            label_candidates,
+            selectable,
             key=lambda candidate: (
                 candidate["used_percent"],
                 candidate["observed_at"],

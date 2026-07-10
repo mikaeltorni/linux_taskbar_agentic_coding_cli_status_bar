@@ -731,11 +731,17 @@ acs_openrouter_status() {
 # Polling rate component
 # ---------------------------------------------------------------------------
 
-# acs_apply_polling_rate - Persist the current (or default) polling rate; the
-# install action simply ensures the key exists with a valid value.
+# acs_apply_polling_rate - Persist the current/default polling rate, or the
+# optional non-interactive ACS_POLL_INTERVAL_SECONDS installer parameter.
 acs_apply_polling_rate() {
-  acs_config_set "poll_interval_seconds" "$(acs_config_get poll_interval_seconds)"
-  msg "Polling rate: every $(acs_config_get poll_interval_seconds) seconds."
+  local value
+  value="${ACS_POLL_INTERVAL_SECONDS:-$(acs_config_get poll_interval_seconds)}"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 5 || value > 3600 )); then
+    msg "ACS_POLL_INTERVAL_SECONDS must be a whole number from 5 to 3600." >&2
+    return 1
+  fi
+  acs_config_set "poll_interval_seconds" "$value"
+  msg "Polling rate: every ${value} seconds."
 }
 
 # acs_configure_polling_rate - Prompt for how often the CLIs are checked,

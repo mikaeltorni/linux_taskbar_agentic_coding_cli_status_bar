@@ -51,6 +51,7 @@ SLASH_COMMANDS = {
 #: Polling rate bounds, in SECONDS. Local file reads are cheap, so the floor
 #: is low; slower sources protect themselves (the Claude endpoint keeps its
 #: own >=180s floor and tmux refreshes are rate-limited separately).
+DEFAULT_POLL_INTERVAL_SECONDS = 5
 MIN_POLL_INTERVAL_SECONDS = 5
 MAX_POLL_INTERVAL_SECONDS = 3600
 
@@ -86,7 +87,7 @@ MAX_OPENROUTER_DAILY_LIMIT = 100_000
 OPENROUTER_MODEL_SLUG_DEFAULT = "tencent/hy3:free"
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "poll_interval_seconds": 5,
+    "poll_interval_seconds": DEFAULT_POLL_INTERVAL_SECONDS,
     "tmux": {
         "enabled": True,
         "session": "agentic-cli-status",

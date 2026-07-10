@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -473,6 +474,175 @@ class TestPollOnce:
         # After the throttle window it attempts again.
         poller.poll_once(home=sandbox_home, previous=second, now=NOW + 61)
         assert attempts.count("codex") == codex_attempts + 1
+
+    def test_background_tmux_request_returns_without_waiting(
+        self, sandbox_home
+    ):
+        """A slow slash-command capture must not block the five-second tick."""
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_capture(session, cli_id):
+            entered.set()
+            release.wait(timeout=2)
+            return "5h limit: 12% used\nWeekly limit: 34% used\n"
+
+        worker = poller.TmuxRefreshWorker(sandbox_home, refresh_fn=slow_capture)
+        worker.start()
+        try:
+            started = time.monotonic()
+            assert worker.request("agentic-cli-status", "codex") is True
+            assert time.monotonic() - started < 0.25
+            assert entered.wait(timeout=1)
+            assert worker.request("agentic-cli-status", "codex") is False
+        finally:
+            release.set()
+            worker.close()
+
+        pane_text, _ = poller._load_pane_capture(sandbox_home, "codex")
+        assert "12% used" in pane_text
+
+    def test_async_tmux_capture_is_consumed_on_next_fast_tick(
+        self, sandbox_home, monkeypatch
+    ):
+        """Every bar consumes completed background captures without blocking."""
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        for cli_id in acs_config.CLI_IDS:
+            cfg["clis"][cli_id]["enabled"] = cli_id == "codex"
+        acs_config.save_config(cfg)
+        write_codex_rollout(
+            sandbox_home,
+            "2026/07/03",
+            "rollout-new.jsonl",
+            [codex_token_count_event(57, 43)],
+        )
+        requests = []
+
+        def request(session, cli_id):
+            requests.append((session, cli_id))
+            return True
+
+        def blocking_capture(*args, **kwargs):
+            raise AssertionError("fast tick must not capture tmux synchronously")
+
+        monkeypatch.setattr(poller, "refresh_and_capture", blocking_capture)
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        first = poller.poll_once(
+            home=sandbox_home,
+            now=NOW,
+            tmux_refresh_request=request,
+        )
+        assert requests == [("agentic-cli-status", "codex")]
+
+        pane = poller.state_dir(sandbox_home) / "panes" / "codex.txt"
+        pane.parent.mkdir(parents=True, exist_ok=True)
+        pane.write_text(
+            "5h limit: 57% used\nWeekly limit: 43% used\n1 reset available\n",
+            encoding="utf-8",
+        )
+        second = poller.poll_once(
+            home=sandbox_home,
+            previous=first,
+            now=NOW + 5,
+            tmux_refresh_request=request,
+        )
+
+        assert second["clis"]["codex"]["resets_available"] == 1
+        assert second["clis"]["codex"]["resets_checked_at"] > NOW
+        assert requests == [("agentic-cli-status", "codex")]
+
+    def test_background_remote_collection_does_not_block_shared_tick(
+        self, sandbox_home
+    ):
+        """A stalled remote bar must not pause Codex, Grok, or status writes."""
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_collect(cli_id, home, last, cli_config, now):
+            entered.set()
+            release.wait(timeout=2)
+            return {
+                "source": "test_remote",
+                "observed_at": now,
+                "plan": None,
+                "windows": [
+                    {"label": "day", "used_percent": 42.0, "resets_at": None}
+                ],
+                "error": None,
+                "checked_at": now,
+            }
+
+        worker = poller.HeadlessRefreshWorker(collect_fn=slow_collect)
+        worker.start()
+        try:
+            started = time.monotonic()
+            assert worker.request(
+                "openrouter", sandbox_home, None, {}, NOW
+            ) is True
+            assert time.monotonic() - started < 0.25
+            assert entered.wait(timeout=1)
+            assert worker.request(
+                "openrouter", sandbox_home, None, {}, NOW
+            ) is False
+        finally:
+            release.set()
+            worker.close()
+
+        result = worker.take_result("openrouter")
+        assert result["windows"][0]["used_percent"] == 42.0
+
+    def test_fast_tick_publishes_completed_remote_result(
+        self, sandbox_home, monkeypatch
+    ):
+        """Remote results reach their bar on the next common five-second tick."""
+        cfg = _configure(sandbox_home)
+        for cli_id in acs_config.CLI_IDS:
+            cfg["clis"][cli_id]["enabled"] = cli_id == "openrouter"
+        acs_config.save_config(cfg)
+        completed = threading.Event()
+
+        def collect(cli_id, home, last, cli_config, now):
+            result = {
+                "source": "test_remote",
+                "observed_at": now,
+                "plan": None,
+                "windows": [
+                    {"label": "day", "used_percent": 42.0, "resets_at": None}
+                ],
+                "error": None,
+                "checked_at": now,
+            }
+            completed.set()
+            return result
+
+        worker = poller.HeadlessRefreshWorker(collect_fn=collect)
+        worker.start()
+        try:
+            first = poller.poll_once(
+                home=sandbox_home,
+                now=NOW,
+                headless_refresh_worker=worker,
+            )
+            assert first["clis"]["openrouter"]["windows"] == []
+            assert completed.wait(timeout=1)
+            deadline = time.monotonic() + 1
+            while (
+                not worker.has_result("openrouter")
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.001)
+            assert worker.has_result("openrouter")
+            second = poller.poll_once(
+                home=sandbox_home,
+                previous=first,
+                now=NOW + 5,
+                headless_refresh_worker=worker,
+            )
+        finally:
+            worker.close()
+
+        assert second["clis"]["openrouter"]["windows"][0]["used_percent"] == 42.0
 
     def test_grok_live_capture_authoritative_over_billing(
         self, sandbox_home, monkeypatch
@@ -1130,3 +1300,10 @@ class TestCarryWindowResets:
         ]}
         result = poller._carry_window_resets(snap, None, {"windows": []})
         assert result is snap
+
+
+class TestDaemonCadence:
+    def test_deadline_is_measured_from_tick_start(self):
+        """Two seconds of work leaves three seconds before the next 5s tick."""
+        assert poller._next_tick_delay(100.0, 5, 102.0) == 3.0
+        assert poller._next_tick_delay(100.0, 5, 106.0) == 0.0

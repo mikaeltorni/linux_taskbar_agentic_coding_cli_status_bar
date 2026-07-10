@@ -28,6 +28,9 @@ with each window's remaining budget, plan, and reset time.
 Codex's manual-reset allowance remains visible from the last explicit
 `/usage` report when newer Codex versions replace that report with an activity
 heatmap that does not expose reset metadata.
+When concurrent Codex sessions record several distinct rolling windows, the
+poller uses the most depleted active window and ignores exhausted candidates
+after their reset time, so an old pre-reset snapshot cannot mask current usage.
 
 ## How It Works
 
@@ -37,14 +40,21 @@ Two cooperating parts, connected only by a JSON file:
    `agentic-cli-status.service`) collects each enabled CLI's rate limits on a
    configurable interval — expressed **in seconds**, default every 5 — and
    atomically writes `~/.local/state/agentic-cli-status/status.json`. Slow
-   sources protect themselves independently of the tick rate: the Claude
-   endpoint is called at most every 180 s and tmux refreshes run at most once
-   per minute per CLI.
+   sources run on background workers and protect themselves independently of
+   the tick rate: the Claude endpoint is called at most every 180 s and tmux
+   refreshes run at most once per minute per CLI. A slow endpoint or slash
+   command therefore cannot pause the common five-second status-file cadence.
 2. **GNOME Shell extension** (`agentic-cli-status@local`) watches that file
    with a file monitor plus a fallback timer paced at the same configured
    polling rate (`poll_interval_seconds` is echoed into `status.json`), so
    the indicator refreshes at the installed rate even if a monitor event is
    missed. It never talks to a CLI or the network itself.
+
+The shared cadence defaults to 5 seconds. Configure it interactively through
+the installer's `polling_rate` row, or non-interactively with
+`ACS_POLL_INTERVAL_SECONDS=10 bash install.sh --select polling_rate`. The same
+value drives every CLI scan, each status-file write, and the extension fallback
+timer; slower billing/network refreshes retain their independent safety limits.
 
 ### Data sources (headless first — zero token cost)
 

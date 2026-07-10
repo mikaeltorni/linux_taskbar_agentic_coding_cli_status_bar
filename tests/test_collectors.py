@@ -159,6 +159,55 @@ class TestCollectCodex:
         }
         assert result["observed_at"] == pytest.approx(1783639460, abs=2)
 
+    def test_ignores_exhausted_window_after_its_reset_has_passed(
+        self, sandbox_home
+    ):
+        """An expired exhausted window must not mask the active replacement."""
+        events = [
+            {
+                "timestamp": "1970-01-01T00:15:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 100.0,
+                            "resets_at": 950,
+                        },
+                        "secondary": {
+                            "used_percent": 48.0,
+                            "resets_at": 3000,
+                        },
+                        "plan_type": "plus",
+                    }
+                },
+            },
+            {
+                "timestamp": "1970-01-01T00:16:40Z",
+                "type": "event_msg",
+                "payload": {
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 8.0,
+                            "resets_at": 2000,
+                        },
+                        "secondary": {
+                            "used_percent": 49.0,
+                            "resets_at": 3000,
+                        },
+                        "plan_type": "plus",
+                    }
+                },
+            },
+        ]
+        write_codex_rollout(sandbox_home, "1970/01/01", "rollout-x.jsonl", events)
+
+        result = collectors.collect_codex(sandbox_home, now=1000.0)
+
+        assert result["windows"] == [
+            {"label": "5h", "used_percent": 8.0, "resets_at": 2000},
+            {"label": "week", "used_percent": 49.0, "resets_at": 3000},
+        ]
+
     def test_skips_window_missing_used_percent(self, sandbox_home):
         # A window object without a usable used_percent must not be published
         # (it would otherwise default to 0.0 and render as 100% left).
@@ -1178,4 +1227,3 @@ class TestTailLines:
         write_grok_log(sandbox_home, "grok.log", records)
         result = collectors.collect_grok(sandbox_home)
         assert result["windows"][0]["used_percent"] == 66.0
-

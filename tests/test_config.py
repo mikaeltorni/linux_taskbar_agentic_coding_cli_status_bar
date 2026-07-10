@@ -11,7 +11,11 @@ class TestLoadConfig:
     def test_defaults_when_missing(self, sandbox_home):
         cfg = acs_config.load_config()
         # The polling rate is expressed in SECONDS and defaults to 5.
-        assert cfg["poll_interval_seconds"] == 5
+        assert acs_config.DEFAULT_POLL_INTERVAL_SECONDS == 5
+        assert (
+            cfg["poll_interval_seconds"]
+            == acs_config.DEFAULT_POLL_INTERVAL_SECONDS
+        )
         assert set(cfg["clis"]) == set(acs_config.CLI_IDS)
         default_on = {"codex", "claude_code", "grok", "opencode_go", "openrouter"}
         for cli in acs_config.CLI_IDS:
