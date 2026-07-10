@@ -85,8 +85,11 @@ In `auto` source mode the console doubles as a refresher: when a CLI's
 headless data is older than its staleness threshold, the poller types the
 CLI's rate-limit slash command (see table above) into its window, captures the
 rendered pane as a fallback reading, and stores the capture under
-`~/.local/state/agentic-cli-status/panes/<cli>.txt` for debugging. Only slash
-commands are ever typed — never a prompt.
+`~/.local/state/agentic-cli-status/panes/<cli>.txt` for debugging. Codex is a
+special case: a newly captured `/status` report replaces an equally new or
+older rollout percentage snapshot because Codex can reset or reconcile limits
+without appending a matching local `token_count` event. Only slash commands
+are ever typed — never a prompt.
 
 Console windows are created with `ATTS_SUPPRESS_ANNOUNCEMENTS=1` and
 `CODEX_AGENT_SKIP_TRACKER=1` in their environment so the idle TUIs stay

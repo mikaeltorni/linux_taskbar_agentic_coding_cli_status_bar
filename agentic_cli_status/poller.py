@@ -333,8 +333,9 @@ def _carry_fresher_reading(
     carried = dict(snapshot)
     for key in ("source", "observed_at", "windows"):
         carried[key] = last.get(key)
-    if "resets_available" in last:
-        carried["resets_available"] = last["resets_available"]
+    for key in ("resets_available", "resets_checked_at"):
+        if key in last:
+            carried[key] = last[key]
     if not carried.get("plan"):
         carried["plan"] = last.get("plan")
     return carried
@@ -588,17 +589,52 @@ def _merge_cli_pane(
 
     Returns:
         Snapshot with eligible pane windows and Codex reset metadata merged.
+
+    A newly captured Codex ``/status`` report is allowed to replace a
+    non-stale rollout snapshot when it was observed at least as recently.
+    Codex can reset or reconcile account limits without appending a matching
+    ``token_count`` event to the rollout selected by the headless scan, so
+    treating the pane as a metadata-only source leaves the bar stuck on the
+    pre-reset percentages.
     """
     pane_snapshot = parse_pane(cli_id, pane_text, now=pane_observed_at)
-    if pane_snapshot.get("windows") and (
+    pane_has_reset_metadata = "resets_available" in pane_snapshot
+    pane_is_newer = pane_observed_at >= (snapshot.get("observed_at") or 0)
+    prior_reset_metadata = {
+        key: snapshot[key]
+        for key in ("resets_available", "resets_checked_at")
+        if key in snapshot
+    }
+    use_pane = (
         source_mode == "tmux"
         or not snapshot.get("windows")
         or _is_stale(snapshot, stale_after, now)
-    ):
+        or (
+            cli_id == "codex"
+            and source_mode == "auto"
+            and pane_is_newer
+        )
+    )
+    if pane_snapshot.get("windows") and use_pane:
+        if (
+            cli_id == "codex"
+            and source_mode == "auto"
+            and snapshot.get("windows")
+            and pane_is_newer
+        ):
+            LOGGER.info(
+                "codex pane reading superseded rollout snapshot: %s -> %s",
+                snapshot.get("windows"),
+                pane_snapshot.get("windows"),
+            )
         pane_snapshot["plan"] = snapshot.get("plan") or pane_snapshot.get("plan")
         pane_snapshot["observed_at"] = pane_observed_at
+        if cli_id == "codex" and "resets_available" not in pane_snapshot:
+            # A heatmap-style /usage capture may omit the allowance even
+            # though the previous /usage response established it.
+            pane_snapshot.update(prior_reset_metadata)
         snapshot = pane_snapshot
-    if cli_id == "codex" and "resets_available" in pane_snapshot:
+    if cli_id == "codex" and pane_has_reset_metadata:
         previous_count = (last or {}).get("resets_available", 0)
         current_count = pane_snapshot["resets_available"]
         if current_count > 0:
@@ -630,8 +666,10 @@ def _collect_cli(
 
     ``headless``/``auto`` try the local-data collector first; ``auto`` and
     ``tmux`` fall back to (or rely on) a slash-command refresh in the tmux
-    console window followed by a pane capture. Whichever reading is newest —
-    this tick's or the previous one's — wins (see
+    console window followed by a pane capture. A newly captured Codex pane
+    report supersedes a rollout snapshot observed at the same or an older
+    time because it includes post-reset server state. Whichever reading is
+    newest — this tick's or the previous one's — wins (see
     :func:`_carry_fresher_reading`).
     """
     if cli_id == "grok":

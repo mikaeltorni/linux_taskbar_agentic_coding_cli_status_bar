@@ -273,10 +273,17 @@ class TestPollOnce:
         pane_file = poller.state_dir(sandbox_home) / "panes" / "codex.txt"
         assert pane_file.read_text() == pane_text
 
-    def test_fresh_codex_headless_data_merges_periodic_reset_allowance(
+    def test_fresh_codex_pane_replaces_rollout_percentages_and_keeps_reset_allowance(
         self, sandbox_home, monkeypatch
     ):
-        """Auto mode polls /usage metadata without replacing fresher windows."""
+        """A fresh Codex /status report replaces stale rollout percentages.
+
+        Codex can reset or reconcile limits without appending a matching
+        ``token_count`` event to the rollout selected by the headless scan.
+        The pane capture is the authoritative live report in that case, while
+        its optional reset allowance must still survive later captures that do
+        not repeat the allowance.
+        """
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
@@ -298,8 +305,8 @@ class TestPollOnce:
         monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
         first = poller.poll_once(home=sandbox_home, now=NOW)
         codex = first["clis"]["codex"]
-        assert codex["source"] == "codex_sessions"
-        assert codex["windows"][0]["used_percent"] == 57.0
+        assert codex["source"] == "tmux_pane"
+        assert codex["windows"][0]["used_percent"] == 1.0
         assert codex["resets_available"] == 1
         assert codex["resets_checked_at"] == NOW
         assert captures.count("codex") == 1
@@ -308,12 +315,16 @@ class TestPollOnce:
         # authoritative /usage result until the next metadata refresh.
         second = poller.poll_once(home=sandbox_home, previous=first, now=NOW + 5)
         assert second["clis"]["codex"]["resets_available"] == 1
+        assert second["clis"]["codex"]["source"] == "tmux_pane"
+        assert second["clis"]["codex"]["windows"][0]["used_percent"] == 1.0
         assert captures.count("codex") == 1
 
         # A later /usage heatmap has no allowance metadata, so retain the last
         # authoritative count rather than treating the missing text as zero.
         third = poller.poll_once(home=sandbox_home, previous=second, now=NOW + 61)
         assert third["clis"]["codex"]["resets_available"] == 1
+        assert third["clis"]["codex"]["source"] == "tmux_pane"
+        assert third["clis"]["codex"]["windows"][0]["used_percent"] == 1.0
 
         def _capture_without_reset(session, cli_id):
             return (
@@ -538,7 +549,7 @@ class TestPollOnce:
         pane = poller.state_dir(sandbox_home) / "panes" / "codex.txt"
         pane.parent.mkdir(parents=True, exist_ok=True)
         pane.write_text(
-            "5h limit: 57% used\nWeekly limit: 43% used\n1 reset available\n",
+            "5h limit: 1% used\nWeekly limit: 2% used\n1 reset available\n",
             encoding="utf-8",
         )
         second = poller.poll_once(
@@ -550,6 +561,8 @@ class TestPollOnce:
 
         assert second["clis"]["codex"]["resets_available"] == 1
         assert second["clis"]["codex"]["resets_checked_at"] > NOW
+        assert second["clis"]["codex"]["source"] == "tmux_pane"
+        assert second["clis"]["codex"]["windows"][0]["used_percent"] == 1.0
         assert requests == [("agentic-cli-status", "codex")]
 
     def test_background_remote_collection_does_not_block_shared_tick(
