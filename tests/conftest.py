@@ -192,7 +192,7 @@ OPENCODE_GO_HTML_FIXTURE = (
 
 OPENROUTER_ANALYTICS_FIXTURE = [
     {
-        "model": "tencent/hy3-20260706",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
         "variant": "free",
         "request_count": "420",
     },
@@ -207,10 +207,10 @@ OPENROUTER_ACTIVITY_FIXTURE = {
     "data": [
         {
             "date": "2026-07-08",
-            "model": "tencent/hy3:free",
-            "model_permaslug": "tencent/hy3:free",
+            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "model_permaslug": "nvidia/nemotron-3-ultra-550b-a55b:free",
             "endpoint_id": "ep-1",
-            "provider_name": "Tencent",
+            "provider_name": "Nvidia",
             "requests": 420,
             "usage": 0.0,
             "byok_usage_inference": 0.0,
@@ -233,10 +233,10 @@ OPENROUTER_ACTIVITY_FIXTURE = {
         },
         {
             "date": "2026-07-07",
-            "model": "tencent/hy3:free",
-            "model_permaslug": "tencent/hy3:free",
+            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "model_permaslug": "nvidia/nemotron-3-ultra-550b-a55b:free",
             "endpoint_id": "ep-1",
-            "provider_name": "Tencent",
+            "provider_name": "Nvidia",
             "requests": 999,
             "usage": 0.0,
             "byok_usage_inference": 0.0,
