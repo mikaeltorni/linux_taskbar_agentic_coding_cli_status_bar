@@ -624,12 +624,12 @@ acs_configure_openrouter_management_key() {
 # acs_configure_openrouter_model - Prompt for the monitored model slug + limit.
 acs_configure_openrouter_model() {
   local current_slug current_limit slug limit
-  current_slug="$(acs_config_get clis.openrouter.model_slug 2>/dev/null || echo tencent/hy3:free)"
+  current_slug="$(acs_config_get clis.openrouter.model_slug 2>/dev/null || echo nvidia/nemotron-3-super-120b-a12b:free)"
   current_limit="$(acs_config_get clis.openrouter.daily_limit 2>/dev/null || echo 1000)"
   while true; do
     slug=""
     read -r -e -i "$current_slug" \
-      -p "OpenRouter model slug to monitor (e.g. tencent/hy3:free): " slug </dev/tty || return 1
+      -p "OpenRouter model slug to monitor (e.g. nvidia/nemotron-3-super-120b-a12b:free): " slug </dev/tty || return 1
     if [ -n "$slug" ]; then
       break
     fi

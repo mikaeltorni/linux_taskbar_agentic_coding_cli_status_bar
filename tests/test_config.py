@@ -75,7 +75,7 @@ class TestLoadConfig:
     def test_openrouter_defaults_and_validation(self, sandbox_home):
         openrouter = acs_config.load_config()["clis"]["openrouter"]
         assert openrouter["source"] == "headless"
-        assert openrouter["model_slug"] == "tencent/hy3:free"
+        assert openrouter["model_slug"] == "nvidia/nemotron-3-super-120b-a12b:free"
         assert openrouter["daily_limit"] == 1000
         assert openrouter["fetch_min_interval_seconds"] == 60
         path = acs_config.config_path()
@@ -97,7 +97,7 @@ class TestLoadConfig:
         fixed = acs_config.load_config()["clis"]["openrouter"]
         assert fixed["fetch_min_interval_seconds"] == 60
         assert fixed["daily_limit"] == 1000
-        assert fixed["model_slug"] == "tencent/hy3:free"
+        assert fixed["model_slug"] == "nvidia/nemotron-3-super-120b-a12b:free"
 
     def test_claude_endpoint_interval_defaults_and_floor(self, sandbox_home):
         """The Claude endpoint interval defaults to 180 s and floors at 60 s."""

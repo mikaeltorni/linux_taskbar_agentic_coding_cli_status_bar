@@ -83,8 +83,9 @@ OPENROUTER_DAILY_LIMIT_DEFAULT = 1000
 MIN_OPENROUTER_DAILY_LIMIT = 1
 MAX_OPENROUTER_DAILY_LIMIT = 100_000
 
-#: Default model slug (Tencent Hy3 free tier).
-OPENROUTER_MODEL_SLUG_DEFAULT = "tencent/hy3:free"
+#: Default model slug (OpenRouter free agent default; keep in sync with ACC
+#: OPENROUTER_CODEX_MODEL).
+OPENROUTER_MODEL_SLUG_DEFAULT = "nvidia/nemotron-3-super-120b-a12b:free"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "poll_interval_seconds": DEFAULT_POLL_INTERVAL_SECONDS,

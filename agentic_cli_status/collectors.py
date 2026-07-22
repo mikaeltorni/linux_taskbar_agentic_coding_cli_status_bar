@@ -1098,7 +1098,7 @@ def model_matches_slug(item_model: str, model_slug: str) -> bool:
     """Return whether an activity row's model matches the configured slug.
 
     Honors exact ``model`` equality first, then allows short slugs such as
-    ``hy3`` to match ``tencent/hy3:free``.
+    ``nemotron-3-super`` to match ``nvidia/nemotron-3-super-120b-a12b:free``.
     """
     if not item_model or not model_slug:
         return False
