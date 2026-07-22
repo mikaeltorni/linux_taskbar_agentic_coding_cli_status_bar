@@ -192,7 +192,7 @@ OPENCODE_GO_HTML_FIXTURE = (
 
 OPENROUTER_ANALYTICS_FIXTURE = [
     {
-        "model": "nvidia/nemotron-3-super-120b-a12b-20230311",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
         "variant": "free",
         "request_count": "420",
     },
@@ -207,8 +207,8 @@ OPENROUTER_ACTIVITY_FIXTURE = {
     "data": [
         {
             "date": "2026-07-08",
-            "model": "nvidia/nemotron-3-super-120b-a12b:free",
-            "model_permaslug": "nvidia/nemotron-3-super-120b-a12b:free",
+            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "model_permaslug": "nvidia/nemotron-3-ultra-550b-a55b:free",
             "endpoint_id": "ep-1",
             "provider_name": "Nvidia",
             "requests": 420,
@@ -233,8 +233,8 @@ OPENROUTER_ACTIVITY_FIXTURE = {
         },
         {
             "date": "2026-07-07",
-            "model": "nvidia/nemotron-3-super-120b-a12b:free",
-            "model_permaslug": "nvidia/nemotron-3-super-120b-a12b:free",
+            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "model_permaslug": "nvidia/nemotron-3-ultra-550b-a55b:free",
             "endpoint_id": "ep-1",
             "provider_name": "Nvidia",
             "requests": 999,

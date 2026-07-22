@@ -1093,16 +1093,16 @@ class TestCollectOpenRouter:
 
         total = collectors.openrouter_requests_today(
             OPENROUTER_ACTIVITY_FIXTURE,
-            "nvidia/nemotron-3-super-120b-a12b:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
             "2026-07-08",
         )
         assert total == 420
 
-    def test_short_slug_matches_super_free(self):
+    def test_short_slug_matches_ultra_free(self):
         from tests.conftest import OPENROUTER_ACTIVITY_FIXTURE
 
         total = collectors.openrouter_requests_today(
-            OPENROUTER_ACTIVITY_FIXTURE, "nemotron-3-super", "2026-07-08"
+            OPENROUTER_ACTIVITY_FIXTURE, "nemotron-3-ultra", "2026-07-08"
         )
         assert total == 420
 
@@ -1112,7 +1112,7 @@ class TestCollectOpenRouter:
         now = 1783502400.0  # 2026-07-08 09:20 UTC
         windows = collectors.openrouter_window_from_activity(
             OPENROUTER_ACTIVITY_FIXTURE,
-            "nvidia/nemotron-3-super-120b-a12b:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
             now,
             daily_limit=1000,
         )
@@ -1132,7 +1132,7 @@ class TestCollectOpenRouter:
 
         total = collectors.openrouter_requests_from_analytics(
             OPENROUTER_ANALYTICS_FIXTURE,
-            "nvidia/nemotron-3-super-120b-a12b:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
         )
         assert total == 420
 
@@ -1151,7 +1151,7 @@ class TestCollectOpenRouter:
             sandbox_home,
             fetch_fn=fetch_fn,
             now=now,
-            model_slug="nvidia/nemotron-3-super-120b-a12b:free",
+            model_slug="nvidia/nemotron-3-ultra-550b-a55b:free",
             daily_limit=1000,
         )
         assert result["error"] is None
@@ -1160,7 +1160,7 @@ class TestCollectOpenRouter:
             (
                 "sk-or-v1-test-management-key",
                 "2026-07-08",
-                "nvidia/nemotron-3-super-120b-a12b:free",
+                "nvidia/nemotron-3-ultra-550b-a55b:free",
             )
         ]
         assert result["windows"][0]["used_percent"] == 42.0

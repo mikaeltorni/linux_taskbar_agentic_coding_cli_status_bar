@@ -85,7 +85,7 @@ MAX_OPENROUTER_DAILY_LIMIT = 100_000
 
 #: Default model slug (OpenRouter free agent default; keep in sync with ACC
 #: OPENROUTER_CODEX_MODEL).
-OPENROUTER_MODEL_SLUG_DEFAULT = "nvidia/nemotron-3-super-120b-a12b:free"
+OPENROUTER_MODEL_SLUG_DEFAULT = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "poll_interval_seconds": DEFAULT_POLL_INTERVAL_SECONDS,

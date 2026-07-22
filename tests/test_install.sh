@@ -226,7 +226,7 @@ config = json.load(open(sys.argv[1]))
 or_cli = config["clis"]["openrouter"]
 assert or_cli["enabled"] is True
 assert or_cli["source"] == "headless"
-assert or_cli["model_slug"] == "nvidia/nemotron-3-super-120b-a12b:free"
+assert or_cli["model_slug"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
 assert or_cli["daily_limit"] == 1000
 PY
 run_installer --uninstall openrouter_monitor >"$TMP_DIR/uninstall-or.out" 2>&1 || {
