@@ -14,6 +14,7 @@ from tests.conftest import (
     GROK_POST_RESET_PERIOD_END,
     OPENCODE_GO_HTML_FIXTURE,
     codex_token_count_event,
+    grok_balance_exhausted_record,
     grok_billing_record,
     grok_billing_record_no_percent,
     write_claude_credentials,
@@ -383,6 +384,88 @@ class TestCollectGrok:
     def test_no_billing_records_reports_error(self, sandbox_home):
         write_grok_log(sandbox_home, "grok.log", [{"msg": "startup"}])
         result = collectors.collect_grok(sandbox_home)
+        assert "billing" in result["error"]
+
+    def test_balance_exhausted_after_billing_reports_zero_left(
+        self, sandbox_home
+    ):
+        """A 402 'balance exhausted' newer than the last billing → 100% used.
+
+        Grok never logs a fresh ``fetched credits config`` for the turn that
+        drains the remainder, so without detecting the 402 the collector would
+        keep reporting the last pre-exhaustion percentage (e.g. 98% used) and
+        the bar could never reach 0% left. The exhaustion event stamps the
+        observation time; the weekly reset epoch still comes from the last
+        billing period.
+        """
+        write_grok_log(
+            sandbox_home,
+            "grok.log",
+            [
+                grok_billing_record(98.0, ts="2026-07-23T05:06:02.095Z"),
+                grok_balance_exhausted_record(ts="2026-07-23T05:14:23.977Z"),
+            ],
+        )
+        result = collectors.collect_grok(sandbox_home)
+        assert result["error"] is None
+        assert result["windows"] == [
+            {
+                "label": "week",
+                "used_percent": 100.0,
+                "resets_at": GROK_BILLING_PERIOD_END,
+            }
+        ]
+        assert result["observed_at"] == collectors._to_epoch(
+            "2026-07-23T05:14:23.977Z"
+        )
+
+    def test_billing_after_exhaust_supersedes_it(self, sandbox_home):
+        """A billing fetch after the 402 (e.g. post weekly-reset) wins.
+
+        After the period rolls over Grok fetches fresh billing for the new
+        week; that record is newer than the prior exhaustion, so the collector
+        must report the new (low) usage rather than staying pinned at 0% left.
+        """
+        write_grok_log(
+            sandbox_home,
+            "grok.log",
+            [
+                grok_billing_record(100.0, ts="2026-07-23T05:06:02.095Z"),
+                grok_balance_exhausted_record(ts="2026-07-23T05:14:23.977Z"),
+                grok_billing_record_no_percent(
+                    ts="2026-07-23T06:10:00.000Z",
+                    period_start="2026-07-23T06:04:00.368952+00:00",
+                    period_end="2026-07-30T06:04:00.368952+00:00",
+                ),
+            ],
+        )
+        result = collectors.collect_grok(sandbox_home)
+        assert result["windows"] == [
+            {
+                "label": "week",
+                "used_percent": 0.0,
+                "resets_at": collectors._to_epoch(
+                    "2026-07-30T06:04:00.368952+00:00"
+                ),
+            }
+        ]
+
+    def test_exhausted_without_billing_anchor_reports_no_records(
+        self, sandbox_home
+    ):
+        """An exhaustion record alone cannot anchor a window (no reset epoch).
+
+        Without a billing record there is no weekly period to read the reset
+        from, so the collector falls through to "no billing records found";
+        the poller then carries the last good reading rather than guessing.
+        """
+        write_grok_log(
+            sandbox_home,
+            "grok.log",
+            [grok_balance_exhausted_record(ts="2026-07-23T05:14:23.977Z")],
+        )
+        result = collectors.collect_grok(sandbox_home)
+        assert result["windows"] == []
         assert "billing" in result["error"]
 
 

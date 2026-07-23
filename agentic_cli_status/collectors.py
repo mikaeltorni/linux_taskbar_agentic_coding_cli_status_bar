@@ -21,9 +21,16 @@ plan tokens:
   and accidentally rotate the single-use refresh token out from under it. The
   rotated credentials are written back atomically.
 - **Grok** — the CLI logs a ``billing: fetched credits config`` record (with
-  ``creditUsagePercent`` and the weekly period) to ``~/.grok/logs/*.log``
+  ``creditUsagePercent`` and the weekly period) to its unified log
+  (``~/.grok/logs/unified.jsonl``; historically a per-process ``*.log``)
   every time it starts or refreshes billing. The collector parses the newest
-  record.
+  record, and trusts it over the tmux ``/usage`` pane: the pane's persistent
+  ``Weekly limit left`` border freezes between refreshes, while every billing
+  fetch is logged. When a newer ``balance exhausted`` 402 error record follows
+  the last billing fetch (with no later billing record), Grok has spent the
+  remainder it never re-logs, so the window is reported as 100% used
+  (0% left) until the next billing fetch — after the weekly reset —
+  supersedes it.
 - **OpenCode Go** — the ``opencode-go-usage`` plugin scrapes embedded
   ``rollingUsage``/``weeklyUsage``/``monthlyUsage`` JSON from the workspace
   ``/go`` page on ``opencode.ai``. The collector performs the same headless
@@ -836,15 +843,36 @@ def _claude_windows(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Grok: billing records in ~/.grok/logs/*.log
+# Grok: billing records in ~/.grok/logs/unified.jsonl (historically *.log)
 # ---------------------------------------------------------------------------
+
+#: Substring in a Grok log record's ``ctx.error`` that signals the weekly
+#: credit balance is fully spent — a 402 ``Payment Required`` from the Grok
+#: Build backend (``... Grok Build usage balance exhausted``). Grok does not
+#: publish a follow-up ``fetched credits config`` record for the failed turn,
+#: so without this marker the freshest billing record would keep reporting
+#: the last pre-exhaustion percentage (e.g. 98% used) and the bar could never
+#: reach 0% left even after the balance is drained.
+_GROK_BALANCE_EXHAUSTED = "balance exhausted"
+
 
 def collect_grok(home: Path) -> dict[str, Any]:
     """Collect Grok credit usage from the newest CLI billing log record.
 
     Grok CLI logs ``billing: fetched credits config`` with
-    ``creditUsagePercent`` and the weekly usage period whenever it starts, so
-    the newest record mirrors the TUI ``/usage`` view.
+    ``creditUsagePercent`` and the weekly usage period to its unified log
+    whenever it starts or refreshes billing, so the newest record mirrors the
+    TUI ``/usage`` view. The billing log is Grok's authoritative live source:
+    the persistent ``Weekly limit left`` border in the tmux ``/usage`` pane
+    freezes between refreshes (and current Grok builds do not submit
+    ``/usage`` via ``send-keys`` the way older ones did), so the poller trusts
+    the log over the pane.
+
+    A newer ``balance exhausted`` 402 error record (see
+    :data:`_GROK_BALANCE_EXHAUSTED`) that follows the last billing fetch —
+    with no later billing record — means the balance is fully spent, so the
+    window is reported as 100% used (0% left) until the next billing fetch
+    supersedes it (typically after the weekly reset).
 
     Args:
         home: The user's home directory.
@@ -865,27 +893,43 @@ def collect_grok(home: Path) -> dict[str, Any]:
 
 
 def _grok_last_billing(log_file: Path) -> dict[str, Any] | None:
-    """Return the snapshot for the last billing record in one grok log file."""
-    last: dict[str, Any] | None = None
-    last_ts: float | None = None
+    """Return the snapshot for the last billing record in one grok log file.
+
+    Also detects a newer ``balance exhausted`` 402 error record (see
+    :data:`_GROK_BALANCE_EXHAUSTED`): when one follows the last billing fetch
+    with no later billing record, the weekly balance is fully spent and the
+    window is reported as 100% used (0% left) — the same state the Grok TUI
+    reaches once it has spent the remainder Grok never re-logs as a billing
+    record. A later billing fetch (e.g. after the weekly reset) supersedes the
+    exhaustion marker, so the reading self-heals.
+    """
+    last_ctx: dict[str, Any] | None = None
+    last_billing_ts: float | None = None
+    last_exhaust_ts: float | None = None
     try:
         for line in _tail_lines(log_file):
-            if "fetched credits config" not in line:
-                continue
             try:
                 record = json.loads(line)
             except ValueError:
                 continue
             ctx = record.get("ctx") or {}
-            if isinstance(ctx.get("config"), dict):
-                last = ctx
-                last_ts = _to_epoch(record.get("ts"))
+            if isinstance(ctx.get("config"), dict) and "fetched credits config" in line:
+                last_ctx = ctx
+                last_billing_ts = _to_epoch(record.get("ts"))
+                continue
+            error = ctx.get("error")
+            if isinstance(error, str) and _GROK_BALANCE_EXHAUSTED in error.lower():
+                exhaust_ts = _to_epoch(record.get("ts"))
+                if exhaust_ts is not None and (
+                    last_exhaust_ts is None or exhaust_ts > last_exhaust_ts
+                ):
+                    last_exhaust_ts = exhaust_ts
     except OSError as exc:
         LOGGER.error("cannot read grok log %s: %s", log_file, exc)
         return None
-    if last is None:
+    if last_ctx is None:
         return None
-    billing = last["config"]
+    billing = last_ctx["config"]
     # Grok omits ``creditUsagePercent`` from ``fetched credits config`` records
     # published right after a weekly reset, when the brand-new period has seen
     # no usage yet. That is a real, fresh reading of a 0%-used (100% left)
@@ -905,11 +949,31 @@ def _grok_last_billing(log_file: Path) -> dict[str, Any] | None:
     )
     if resets_at is None:
         resets_at = _to_epoch(billing.get("billingPeriodEnd"))
-    observed = float(last_ts) if last_ts is not None else log_file.stat().st_mtime
+    observed = (
+        float(last_billing_ts) if last_billing_ts is not None else log_file.stat().st_mtime
+    )
+    exhausted = (
+        last_exhaust_ts is not None
+        and (last_billing_ts is None or last_exhaust_ts > last_billing_ts)
+    )
+    if exhausted:
+        # The balance is drained past the last logged percentage; report 0%
+        # left (100% used) and stamp the observation at the exhaustion event
+        # so the bar moves the moment Grok records the 402, not the next time
+        # it happens to re-fetch billing.
+        used = 100.0
+        observed = float(last_exhaust_ts)
+        LOGGER.info(
+            "grok credit balance exhausted (402 at %s newer than last "
+            "billing fetch at %s); reporting 0%% left until the next "
+            "billing fetch",
+            last_exhaust_ts,
+            last_billing_ts,
+        )
     return _snapshot(
         "grok_logs",
         observed_at=observed,
-        plan=last.get("subscriptionTier"),
+        plan=last_ctx.get("subscriptionTier"),
         windows=[{"label": "week", "used_percent": used, "resets_at": resets_at}],
     )
 

@@ -126,6 +126,33 @@ def grok_billing_record(
     }
 
 
+def grok_balance_exhausted_record(
+    ts: str = "2026-07-23T05:14:23.977Z",
+) -> dict:
+    """Build a Grok 'balance exhausted' 402 error log record.
+
+    Grok's backend answers a turn that outruns the remaining weekly credit
+    with ``API error (status 402 Payment Required): Grok Build usage balance
+    exhausted``. Grok logs that as an ``agent response failed`` record but
+    never publishes a matching ``fetched credits config`` for the spent turn,
+    so the collector must detect this marker to reach 0% left instead of
+    re-displaying the last pre-exhaustion percentage.
+    """
+    return {
+        "ts": ts,
+        "src": "grok-pager",
+        "lvl": "error",
+        "msg": "agent response failed",
+        "ctx": {
+            "error": (
+                "Internal error: {\n  \"message\": \"API error "
+                "(status 402 Payment Required): Grok Build usage "
+                "balance exhausted\",\n  \"http_status\": 402\n}"
+            ),
+        },
+    }
+
+
 def grok_billing_record_no_percent(
     ts: str = "2026-07-09T09:10:47.647Z",
     tier: str = "SuperGrok",

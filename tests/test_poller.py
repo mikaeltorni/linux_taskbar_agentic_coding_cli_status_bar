@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from agentic_cli_status import config as acs_config
+from agentic_cli_status import collectors
 from agentic_cli_status import poller
 from tests.conftest import (
     GROK_BILLING_PERIOD_END,
@@ -657,17 +658,25 @@ class TestPollOnce:
 
         assert second["clis"]["openrouter"]["windows"][0]["used_percent"] == 42.0
 
-    def test_grok_live_capture_authoritative_over_billing(
+    def test_grok_billing_authoritative_over_live_pane(
         self, sandbox_home, monkeypatch
     ):
-        """A successful live /usage capture wins without any saved pane."""
+        """The billing log wins over a live /usage pane even when both parse.
+
+        The tmux ``/usage`` border freezes between refreshes and current Grok
+        builds do not submit ``/usage`` via ``send-keys``, so a captured pane
+        can lag the billing log by hours (e.g. stuck at 5% left while the log
+        shows the balance nearly exhausted). The poller must therefore trust
+        the freshest billing record, not the pane.
+        """
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
+        billing_ts = "2026-07-08T10:00:00.000Z"
         write_grok_log(
             sandbox_home,
             "grok.log",
-            [grok_billing_record(99, ts="2026-07-08T10:00:00.000Z")],
+            [grok_billing_record(99, ts=billing_ts)],
         )
         pane_text = (
             "╰────────────────── Weekly limit left: 45% · Composer 2.5 "
@@ -681,10 +690,10 @@ class TestPollOnce:
         monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
         status = poller.poll_once(home=sandbox_home, now=NOW)
         grok = status["clis"]["grok"]
-        assert grok["source"] == "tmux_pane"
-        assert grok["windows"][0]["used_percent"] == 55.0
-        assert grok["windows"][0]["resets_at"] != 1783577040
-        assert grok["observed_at"] == NOW
+        assert grok["source"] == "grok_logs"
+        assert grok["windows"][0]["used_percent"] == 99.0
+        assert grok["windows"][0]["resets_at"] == GROK_BILLING_PERIOD_END
+        assert grok["observed_at"] == collectors._to_epoch(billing_ts)
 
     def test_grok_headless_ignores_fresher_prior_tmux_reading(
         self, sandbox_home, monkeypatch
@@ -741,10 +750,15 @@ class TestPollOnce:
         assert grok["source"] == "grok_logs"
         assert grok["windows"][0]["used_percent"] == 99.0
 
-    def test_grok_console_backfills_reset_from_billing_when_pane_omits_it(
+    def test_grok_billing_authoritative_period_reset_from_log(
         self, sandbox_home, monkeypatch
     ):
-        """Pane usage wins; billing period end fills a missing resets_at."""
+        """Billing wins and carries its own weekly reset epoch from the log.
+
+        The pane's bare ``Weekly limit left: 0%`` carries no reset clock, but
+        billing is authoritative and already names the period end, so the
+        published window keeps its reset date even when the pane is captured.
+        """
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
@@ -763,14 +777,15 @@ class TestPollOnce:
         monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
         status = poller.poll_once(home=sandbox_home, now=NOW)
         grok = status["clis"]["grok"]
-        assert grok["source"] == "tmux_pane"
-        assert grok["windows"][0]["used_percent"] == 100.0
+        assert grok["source"] == "grok_logs"
+        assert grok["windows"][0]["used_percent"] == 72.0
         assert grok["windows"][0]["resets_at"] == GROK_BILLING_PERIOD_END
 
-    def test_grok_uses_saved_pane_when_live_capture_unparseable(
+    def test_grok_billing_wins_over_unparseable_live_and_saved_pane(
         self, sandbox_home, monkeypatch
     ):
-        """A saved pane is used when the live tmux capture carries no usage text."""
+        """Billing wins even when the live capture is unparseable and a fresh
+        saved pane exists; the pane is only a fallback when billing is empty."""
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
@@ -794,9 +809,11 @@ class TestPollOnce:
         monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
         status = poller.poll_once(home=sandbox_home, now=NOW)
         grok = status["clis"]["grok"]
-        assert grok["source"] == "tmux_pane"
-        assert grok["windows"][0]["used_percent"] == 55.0
-        assert grok["observed_at"] == saved_at
+        assert grok["source"] == "grok_logs"
+        assert grok["windows"][0]["used_percent"] == 99.0
+        assert grok["observed_at"] == collectors._to_epoch(
+            "2026-07-08T10:00:00.000Z"
+        )
 
     def test_grok_falls_back_when_saved_pane_stale(
         self, sandbox_home, monkeypatch
@@ -1006,17 +1023,23 @@ class TestPollOnce:
         assert grok["source"] == "grok_logs"
         assert grok["windows"][0]["used_percent"] == 99.0
 
-    def test_grok_once_cli_live_capture_twice(
+    def test_grok_once_cli_billing_authoritative_twice(
         self, sandbox_home, monkeypatch
     ):
-        """``main(['--once'])`` twice uses live capture (no saved pane)."""
+        """``main(['--once'])`` twice publishes billing even with a live pane.
+
+        Billing is Grok's authoritative source, so both one-shot ticks report
+        the billing-log percentage (99% used) and the billing observation time,
+        independent of the live /usage capture.
+        """
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
+        billing_ts = "2026-07-08T10:00:00.000Z"
         write_grok_log(
             sandbox_home,
             "grok.log",
-            [grok_billing_record(99, ts="2026-07-08T10:00:00.000Z")],
+            [grok_billing_record(99, ts=billing_ts)],
         )
         monkeypatch.setattr(
             poller,
@@ -1037,19 +1060,23 @@ class TestPollOnce:
         assert poller.main(["--once"]) == 0
         second = json.loads(poller.status_path(sandbox_home).read_text())
 
+        billing_observed = collectors._to_epoch(billing_ts)
         for status in (first, second):
             grok = status["clis"]["grok"]
-            assert grok["source"] == "tmux_pane"
-            assert grok["windows"][0]["used_percent"] == 55.0
-            assert grok["windows"][0]["resets_at"] != 1783577040
+            assert grok["source"] == "grok_logs"
+            assert grok["windows"][0]["used_percent"] == 99.0
+            assert grok["observed_at"] == billing_observed
         assert first["generated_at"] != second["generated_at"]
-        assert first["clis"]["grok"]["observed_at"] == NOW
-        assert second["clis"]["grok"]["observed_at"] == NOW + 5
 
     def test_grok_once_cli_uses_saved_pane_twice(
         self, sandbox_home, monkeypatch
     ):
-        """``poller --once`` reads saved pane captures without in-process carry."""
+        """``poller --once`` reads billing twice without in-process carry.
+
+        With billing authoritative, two one-shot ticks both report the same
+        billing-log reading (used percent and reset epoch) regardless of a
+        stale saved pane on disk.
+        """
         cfg = _configure(sandbox_home)
         cfg["tmux"]["enabled"] = True
         acs_config.save_config(cfg)
@@ -1082,9 +1109,9 @@ class TestPollOnce:
 
         for status in (first, second):
             grok = status["clis"]["grok"]
-            assert grok["source"] == "tmux_pane"
-            assert grok["windows"][0]["used_percent"] == 55.0
-            assert grok["windows"][0]["resets_at"] != 1783577040
+            assert grok["source"] == "grok_logs"
+            assert grok["windows"][0]["used_percent"] == 99.0
+            assert grok["windows"][0]["resets_at"] == GROK_BILLING_PERIOD_END
         assert first["generated_at"] != second["generated_at"]
         assert (
             first["clis"]["grok"]["observed_at"]
@@ -1125,6 +1152,7 @@ os.environ["XDG_CONFIG_HOME"] = {str(sandbox_home / ".config")!r}
 os.environ["XDG_STATE_HOME"] = {str(sandbox_home / ".local/state")!r}
 
 import agentic_cli_status.poller as poller
+import agentic_cli_status.collectors as collectors
 
 PANE = {GROK_PANE_45_LEFT!r}
 poller.refresh_and_capture = lambda session, cli_id: PANE if cli_id == "grok" else None
@@ -1134,6 +1162,7 @@ poll_epoch = {{"value": {NOW!r}}}
 poller.time.time = lambda: poll_epoch["value"]
 
 scratch = Path({str(scratch)!r})
+billing_observed = collectors._to_epoch("2026-07-08T10:00:00.000Z")
 for idx in (1, 2):
     if idx == 2:
         poll_epoch["value"] = {NOW + 5!r}
@@ -1143,9 +1172,9 @@ for idx in (1, 2):
         json.dumps(status, indent=2) + "\\n", encoding="utf-8"
     )
 grok = status["clis"]["grok"]
-assert grok["source"] == "tmux_pane"
-assert grok["windows"][0]["used_percent"] == 55.0
-assert grok["observed_at"] == {NOW + 5!r}
+assert grok["source"] == "grok_logs"
+assert grok["windows"][0]["used_percent"] == 99.0
+assert grok["observed_at"] == billing_observed
 """,
             encoding="utf-8",
         )
@@ -1157,10 +1186,12 @@ assert grok["observed_at"] == {NOW + 5!r}
             check=False,
         )
         assert proc.returncode == 0, proc.stderr
+        billing_observed = collectors._to_epoch("2026-07-08T10:00:00.000Z")
         first = json.loads((scratch / "grok_poll_1.json").read_text())
         second = json.loads((scratch / "grok_poll_2.json").read_text())
-        assert first["clis"]["grok"]["observed_at"] == NOW
-        assert second["clis"]["grok"]["observed_at"] == NOW + 5
+        assert first["clis"]["grok"]["source"] == "grok_logs"
+        assert first["clis"]["grok"]["observed_at"] == billing_observed
+        assert second["clis"]["grok"]["observed_at"] == billing_observed
         assert first["generated_at"] != second["generated_at"]
 
 
@@ -1190,22 +1221,22 @@ class TestResolveGrokSnapshot:
             ),
             pytest.param(
                 {
-                    "id": "auto_live_authoritative",
+                    "id": "auto_billing_authoritative_over_live",
                     "billing": _grok_billing(99.0, 1_780_000.0),
                     "live_text": GROK_PANE_45_LEFT,
                     "source_mode": "auto",
                     "tmux_enabled": True,
                     "tmux_throttled": False,
-                    "expect_source": "tmux_pane",
-                    "expect_used": 55.0,
-                    "expect_observed_at": NOW,
-                    "expect_resets_at_not": 1783577040,
+                    "expect_source": "grok_logs",
+                    "expect_used": 99.0,
+                    "expect_observed_at": 1_780_000.0,
+                    "expect_resets_at": None,
                 },
-                id="auto_live_authoritative",
+                id="auto_billing_authoritative_over_live",
             ),
             pytest.param(
                 {
-                    "id": "saved_stale_falls_back_to_billing",
+                    "id": "saved_stale_ignored_billing_wins",
                     "billing": _grok_billing(99.0, 1_780_000.0),
                     "saved_text": GROK_PANE_45_LEFT,
                     "saved_at": NOW - 2000,
@@ -1217,11 +1248,11 @@ class TestResolveGrokSnapshot:
                     "expect_observed_at": 1_780_000.0,
                     "expect_resets_at": None,
                 },
-                id="saved_stale_falls_back_to_billing",
+                id="saved_stale_ignored_billing_wins",
             ),
             pytest.param(
                 {
-                    "id": "throttle_carries_fresh_last_console",
+                    "id": "throttle_billing_beats_fresh_last_console",
                     "billing": _grok_billing(99.0, 1_780_000.0),
                     "last": {
                         "source": "tmux_pane",
@@ -1233,12 +1264,12 @@ class TestResolveGrokSnapshot:
                     "source_mode": "auto",
                     "tmux_enabled": True,
                     "tmux_throttled": True,
-                    "expect_source": "tmux_pane",
-                    "expect_used": 55.0,
-                    "expect_observed_at": NOW - 120,
-                    "expect_resets_at": 42,
+                    "expect_source": "grok_logs",
+                    "expect_used": 99.0,
+                    "expect_observed_at": 1_780_000.0,
+                    "expect_resets_at": None,
                 },
-                id="throttle_carries_fresh_last_console",
+                id="throttle_billing_beats_fresh_last_console",
             ),
             pytest.param(
                 {

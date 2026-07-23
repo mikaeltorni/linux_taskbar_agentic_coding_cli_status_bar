@@ -432,10 +432,19 @@ def resolve_grok_snapshot(
 ) -> dict[str, Any]:
     """Merge Grok billing and console readings with a fixed priority.
 
+    The billing log is Grok's authoritative live source: every billing fetch
+    is logged with ``creditUsagePercent`` (and balance-exhaustion 402 errors
+    are detected — see :func:`collect_grok`). The tmux ``/usage`` pane is
+    only a fallback: its persistent ``Weekly limit left`` border freezes
+    between refreshes, and current Grok builds do not submit ``/usage`` via
+    ``send-keys`` the way older ones did, so the border can lag the billing
+    log for hours and leave the bar stuck on a stale percentage (e.g. 5% left
+    while the log already shows the balance exhausted).
+
     Priority (first match wins):
 
-    1. ``headless`` source or tmux disabled → billing only (ignore live,
-       saved, and prior console readings).
+    1. ``headless`` source, tmux disabled, or billing has windows → billing
+       (authoritative; ignores live, saved, and prior console readings).
     2. Live tmux text parses to windows → console (``observed_at`` = ``now``).
     3. Saved pane fresh (mtime within ``stale_after``) → console
        (``observed_at`` = file mtime).
@@ -445,7 +454,7 @@ def resolve_grok_snapshot(
     """
     plan = billing.get("plan")
 
-    if source_mode == "headless" or not tmux_enabled:
+    if source_mode == "headless" or not tmux_enabled or billing.get("windows"):
         return dict(billing)
 
     def _from_pane(text: str, observed_at: float) -> dict[str, Any] | None:
