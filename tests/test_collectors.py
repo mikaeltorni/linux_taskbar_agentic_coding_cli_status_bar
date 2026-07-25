@@ -270,6 +270,120 @@ class TestCollectCodex:
         result = collectors.collect_codex(sandbox_home)
         assert [w["used_percent"] for w in result["windows"]] == [11.0, 12.0]
 
+    def test_free_plan_monthly_primary_labeled_month(self, sandbox_home):
+        """Free / no-subscription Codex publishes a single ~30-day window.
+
+        Live free rollouts use primary window_minutes 43200, secondary null,
+        and plan_type free. That window must be labeled ``month`` (not ``5h``).
+        """
+        events = [
+            {
+                "timestamp": "2026-06-20T12:52:50Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {"total_token_usage": {"total_tokens": 1}},
+                    "rate_limits": {
+                        "limit_id": "codex",
+                        "primary": {
+                            "used_percent": 10.0,
+                            "window_minutes": 43200,
+                            "resets_at": 1784541181,
+                        },
+                        "secondary": None,
+                        "credits": None,
+                        "plan_type": "free",
+                    },
+                },
+            },
+        ]
+        write_codex_rollout(sandbox_home, "2026/06/20", "rollout-free.jsonl", events)
+
+        result = collectors.collect_codex(sandbox_home)
+
+        assert result["error"] is None
+        assert result["plan"] == "free"
+        assert result["windows"] == [
+            {
+                "label": "month",
+                "used_percent": 10.0,
+                "resets_at": 1784541181,
+            }
+        ]
+
+    def test_plus_plan_keeps_5h_and_week_labels(self, sandbox_home):
+        """Subscribed Codex still publishes primary 5h + secondary week."""
+        write_codex_rollout(
+            sandbox_home,
+            "2026/07/03",
+            "rollout-plus.jsonl",
+            [codex_token_count_event(57, 43)],
+        )
+
+        result = collectors.collect_codex(sandbox_home)
+
+        by_label = {window["label"]: window for window in result["windows"]}
+        assert result["plan"] == "plus"
+        assert list(by_label) == ["5h", "week"]
+        assert by_label["5h"] == {
+            "label": "5h",
+            "used_percent": 57.0,
+            "resets_at": 1783080635,
+        }
+        assert by_label["week"] == {
+            "label": "week",
+            "used_percent": 43.0,
+            "resets_at": 1783577400,
+        }
+
+    def test_primary_only_week_length_window_labeled_week(self, sandbox_home):
+        """A longer primary window is labeled from its duration, not forced to 5h.
+
+        Plus accounts can emit primary window_minutes 10080 with secondary null;
+        that must publish as ``week``.
+        """
+        events = [
+            {
+                "timestamp": "2026-07-19T21:41:01Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {"total_token_usage": {"total_tokens": 1}},
+                    "rate_limits": {
+                        "limit_id": "codex",
+                        "primary": {
+                            "used_percent": 93.0,
+                            "window_minutes": 10080,
+                            "resets_at": 1784998206,
+                        },
+                        "secondary": None,
+                        "plan_type": "plus",
+                    },
+                },
+            },
+        ]
+        write_codex_rollout(sandbox_home, "2026/07/19", "rollout-week.jsonl", events)
+
+        result = collectors.collect_codex(sandbox_home)
+
+        assert result["plan"] == "plus"
+        assert result["windows"] == [
+            {
+                "label": "week",
+                "used_percent": 93.0,
+                "resets_at": 1784998206,
+            }
+        ]
+
+    def test_codex_window_label_maps_known_durations(self):
+        """Duration→label mapping covers 5h, week, and month buckets."""
+        assert collectors._codex_window_label(300, key="primary") == "5h"
+        assert collectors._codex_window_label(10080, key="primary") == "week"
+        assert collectors._codex_window_label(43200, key="primary") == "month"
+        # Missing minutes falls back to payload-key legacy labels.
+        assert collectors._codex_window_label(None, key="primary") == "5h"
+        assert collectors._codex_window_label(None, key="secondary") == "week"
+
 
 class TestParseCodexPane:
     def test_reads_available_resets_from_usage(self):

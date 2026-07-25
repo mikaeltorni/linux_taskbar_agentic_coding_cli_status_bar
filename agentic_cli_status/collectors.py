@@ -189,12 +189,60 @@ def _tail_lines(path: Path, max_bytes: int = TAIL_READ_BYTES) -> list[str]:
 # Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
 # ---------------------------------------------------------------------------
 
+#: Known Codex rolling-window durations (minutes) → status-bar labels.
+#: Free / no-subscription accounts use a ~30-day primary (43200); Plus keeps
+#: the classic ~5h primary (300) plus ~weekly secondary (10080). Labels are
+#: derived from duration rather than payload key so a week-length primary is
+#: not mislabeled as ``5h``.
+_CODEX_WINDOW_DURATION_LABELS: tuple[tuple[int, str], ...] = (
+    (300, "5h"),
+    (10080, "week"),
+    (43200, "month"),
+)
+
+
+def _codex_window_label(
+    window_minutes: float | int | None, *, key: str
+) -> str:
+    """Map a Codex rate-limit window duration to a status-bar label.
+
+    Prefer ``window_minutes`` when present: nearest of the known anchors
+    (300→``5h``, 10080→``week``, 43200→``month``). When duration is missing
+    or unusable, fall back to the legacy payload-key mapping
+    (``primary``→``5h``, ``secondary``→``week``) so older rollouts without
+    minutes still publish.
+
+    Args:
+        window_minutes: Rolling window length in minutes from the Codex
+            ``rate_limits`` payload, or ``None`` when absent.
+        key: Payload key (``primary`` or ``secondary``) used only as a
+            fallback when ``window_minutes`` cannot be used.
+
+    Returns:
+        One of ``5h``, ``week``, or ``month``.
+    """
+    if window_minutes is not None:
+        try:
+            minutes = float(window_minutes)
+        except (TypeError, ValueError):
+            minutes = None
+        if minutes is not None and minutes > 0:
+            label = min(
+                _CODEX_WINDOW_DURATION_LABELS,
+                key=lambda item: abs(item[0] - minutes),
+            )[1]
+            return label
+    return "5h" if key == "primary" else "week"
+
+
 def collect_codex(home: Path, *, now: float | None = None) -> dict[str, Any]:
     """Collect Codex rate limits from the newest session rollout file.
 
     Scans up to :data:`CODEX_SCAN_DAYS` of ``~/.codex/sessions`` day
     directories newest-first and returns the newest state of each rate-limit
-    window. Codex may run several concurrent 5h windows at once (Codex
+    window. Labels come from each window's ``window_minutes`` (5h / week /
+    month), so free-tier monthly and primary-only weekly shapes publish
+    correctly. Codex may run several concurrent 5h windows at once (Codex
     v0.142+), so the collector tracks the most-depleted genuinely distinct
     reset window rather than the literal final ``token_count`` event;
     otherwise a freshly-opened concurrent window logged last would make the
@@ -236,6 +284,11 @@ def _codex_last_rate_limits(rollout: Path, *, now: float) -> dict[str, Any] | No
     an active replacement exists; otherwise an old exhausted window can mask
     the post-reset reading indefinitely.
 
+    Window labels are derived from each entry's ``window_minutes`` (see
+    :func:`_codex_window_label`) so free monthly (~43200) and primary-only
+    weekly (~10080) shapes are not hard-mapped to ``5h`` / ``week`` by payload
+    key alone.
+
     Args:
         rollout: Codex JSONL session rollout to inspect.
         now: Current epoch used to identify expired reset windows.
@@ -267,7 +320,7 @@ def _codex_last_rate_limits(rollout: Path, *, now: float) -> dict[str, Any] | No
                 continue
             ts = _to_epoch(event.get("timestamp"))
             observed_at = ts if ts is not None else rollout.stat().st_mtime
-            for key, label in (("primary", "5h"), ("secondary", "week")):
+            for key in ("primary", "secondary"):
                 window = limits.get(key)
                 if not isinstance(window, dict):
                     continue
@@ -277,6 +330,7 @@ def _codex_last_rate_limits(rollout: Path, *, now: float) -> dict[str, Any] | No
                 used = _to_percent(window.get("used_percent"))
                 if used is None:
                     continue
+                label = _codex_window_label(window.get("window_minutes"), key=key)
                 reset = _to_epoch(window.get("resets_at"))
                 candidate = {
                     "used_percent": used,
@@ -336,6 +390,13 @@ def _codex_last_rate_limits(rollout: Path, *, now: float) -> dict[str, Any] | No
     if not windows:
         return None
     newest_observed = max(candidate["observed_at"] for candidate in selected.values())
+    labels = [window["label"] for window in windows]
+    LOGGER.debug(
+        "codex rate_limits from %s plan=%s labels=%s",
+        rollout.name,
+        plan_type,
+        labels,
+    )
     return _snapshot(
         "codex_sessions",
         observed_at=newest_observed,

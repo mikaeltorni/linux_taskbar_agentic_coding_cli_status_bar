@@ -18,7 +18,7 @@ ISC_REPO_NAME="linux_taskbar_agentic_coding_cli_status_bar"
 ISC_REPO_LABEL="Agentic coding CLI rate-limit status bar"
 
 ISC_COMPONENTS=(
-  "codex_monitor|Codex rate limits (5h + weekly, /usage data)|on|acs_install_codex|acs_detect_codex|acs_uninstall_codex|Monitored CLIs||acs_configure_codex|acs_codex_status"
+  "codex_monitor|Codex rate limits (5h + weekly, free monthly; /usage data)|on|acs_install_codex|acs_detect_codex|acs_uninstall_codex|Monitored CLIs||acs_configure_codex|acs_codex_status"
   "claude_code_monitor|Claude Code rate limits (5h + weekly, /usage data)|on|acs_install_claude_code|acs_detect_claude_code|acs_uninstall_claude_code|Monitored CLIs||acs_configure_claude_code|acs_claude_code_status"
   "grok_monitor|Grok CLI credit usage (weekly, /usage data)|on|acs_install_grok|acs_detect_grok|acs_uninstall_grok|Monitored CLIs||acs_configure_grok|acs_grok_status"
   "opencode_go_monitor|OpenCode Go usage (→ credentials + rolling/weekly/monthly)|on|acs_install_opencode_go|acs_detect_opencode_go|acs_uninstall_opencode_go|Monitored CLIs||acs_configure_opencode_go|acs_opencode_go_status"
