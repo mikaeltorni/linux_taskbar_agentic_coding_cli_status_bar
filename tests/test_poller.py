@@ -274,6 +274,65 @@ class TestPollOnce:
         pane_file = poller.state_dir(sandbox_home) / "panes" / "codex.txt"
         assert pane_file.read_text() == pane_text
 
+    def test_codex_monthly_pane_replaces_stale_weekly_rollout(
+        self, sandbox_home, monkeypatch
+    ):
+        """When short-window limits are inactive, /status monthly must win.
+
+        Stale rollouts can still hold a prior Plus weekly primary after the
+        account falls back to a monthly quota. The live /status panel is the
+        truth for which windows are active.
+        """
+        cfg = _configure(sandbox_home)
+        cfg["tmux"]["enabled"] = True
+        acs_config.save_config(cfg)
+        # Primary-only weekly-length window as seen in post-limit rollouts.
+        write_codex_rollout(
+            sandbox_home,
+            "2026/07/03",
+            "rollout-week.jsonl",
+            [
+                {
+                    "timestamp": "2026-07-03T10:41:25.148Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {"total_token_usage": {"total_tokens": 1}},
+                        "rate_limits": {
+                            "limit_id": "codex",
+                            "primary": {
+                                "used_percent": 93.0,
+                                "window_minutes": 10080,
+                                "resets_at": 1784998206,
+                            },
+                            "secondary": None,
+                            "plan_type": "plus",
+                        },
+                    },
+                }
+            ],
+        )
+        pane_text = (
+            " Token activity   last 12 months\n"
+            "│  Account:              user@example.com (Plus)                │\n"
+            "│  Monthly limit:        [████████████████████] 100% left              │\n"
+            "│                        (resets 10:03 on 24 Aug)                      │\n"
+        )
+
+        def _capture(session, cli_id):
+            return pane_text if cli_id == "codex" else None
+
+        monkeypatch.setattr(poller, "refresh_and_capture", _capture)
+        monkeypatch.setattr(poller, "ensure_console", lambda *a, **k: True)
+        status = poller.poll_once(home=sandbox_home, now=NOW)
+        codex = status["clis"]["codex"]
+        assert codex["source"] == "tmux_pane"
+        assert [(w["label"], w["used_percent"]) for w in codex["windows"]] == [
+            ("month", 0.0),
+        ]
+        assert all(w["label"] != "week" for w in codex["windows"])
+        assert all(w["label"] != "5h" for w in codex["windows"])
+
     def test_fresh_codex_pane_replaces_rollout_percentages_and_keeps_reset_allowance(
         self, sandbox_home, monkeypatch
     ):

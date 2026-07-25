@@ -88,8 +88,9 @@ def resolve_cli_binary(cli_id: str) -> str | None:
 CAPTURE_DELAY_SECONDS = 4.0
 
 #: A rendered Codex rate-limit line ("5h limit: … 99% left", "Weekly limit:
-#: … 7% left"). Its presence means the async /status panel has finished
-#: rendering, so the retry loop can stop re-requesting it.
+#: … 7% left", "Monthly limit: … 100% left"). Its presence means the async
+#: /status panel has finished rendering, so the retry loop can stop
+#: re-requesting it.
 _CODEX_RATE_LIMIT_LINE = re.compile(r"\blimit\b[^\n]*\d+\s*%", re.I)
 
 #: How many times to (re)request Codex /status while its async refresh settles.
@@ -203,7 +204,8 @@ def _capture_pane(target: str) -> str | None:
 def _capture_codex_status(target: str, sleeper: Any) -> str | None:
     """Request Codex /status until its rate-limit panel renders, and capture it.
 
-    /status is authoritative for the 5h and weekly windows but is async on a
+    /status is authoritative for active rate-limit windows (5h, weekly, and/or
+    monthly when no short-window subscription is active) but is async on a
     cold process: the first call only answers "refresh requested; run /status
     again shortly". Resend up to :data:`_CODEX_STATUS_ATTEMPTS` times, stopping
     as soon as a rate-limit line appears, and return the last capture either
@@ -247,8 +249,9 @@ def refresh_and_capture(
         # Across Codex versions /usage renders either a reset-redemption menu
         # or a daily-activity heatmap — it carries the earned-reset allowance
         # but not reliably the rate-limit windows. /status is the authoritative
-        # 5h + weekly breakdown, so always capture it too and parse the union;
-        # never navigate into the reset-redemption action.
+        # breakdown (5h + weekly when subscribed; monthly when those windows
+        # are inactive), so always capture it too and parse the union; never
+        # navigate into the reset-redemption action.
         status_text = _capture_codex_status(target, sleeper)
         if status_text:
             text = f"{text.rstrip()}\n{status_text}"

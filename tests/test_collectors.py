@@ -1061,6 +1061,43 @@ class TestParsePane:
             ("week", 51.0),
         ]
 
+    def test_codex_status_pane_monthly_only_when_subscription_inactive(self):
+        """Inactive short-window plans expose only Monthly limit on /status.
+
+        Real capture shape (v0.141+): Account may still say Plus while the
+        panel lists a single monthly quota with a wrapped reset line. That
+        window must parse as ``month`` with used = 100 - left, and must not
+        confuse heatmap text containing the word "months".
+        """
+        now = dt.datetime(2026, 7, 25, 10, 0).astimezone().timestamp()
+        text = (
+            " Token activity   last 12 months\n"
+            " Lifetime 3.02B · Peak 287M\n"
+            "│  Account:              user@example.com (Plus)                │\n"
+            "│  Monthly limit:        [████████████████████] 100% left              │\n"
+            "│                        (resets 10:03 on 24 Aug)                      │\n"
+        )
+        result = collectors.parse_pane("codex", text, now=now)
+        assert result["error"] is None
+        assert [(w["label"], w["used_percent"]) for w in result["windows"]] == [
+            ("month", 0.0),
+        ]
+        assert result["windows"][0]["resets_at"] == int(
+            dt.datetime(2026, 8, 24, 10, 3).astimezone().timestamp()
+        )
+
+    def test_codex_status_pane_subscribed_5h_week_ignores_absent_month(self):
+        """Subscribed 5h+weekly panes must keep publishing those windows only."""
+        text = (
+            "│  5h limit:             [████████████████████] 99% left (resets 20:12) │\n"
+            "│  Weekly limit:         [██████████░░░░░░░░░░] 49% left                │\n"
+            "│                        (resets 09:10 on 9 Jul)                        │\n"
+        )
+        result = collectors.parse_pane("codex", text, now=5.0)
+        labels = [w["label"] for w in result["windows"]]
+        assert labels == ["5h", "week"]
+        assert "month" not in labels
+
     def test_codex_pane_parses_reset_times_into_epochs(self):
         # On boot the tmux /status fallback is the only Codex source, so its
         # reset phrases must survive as real epochs (not be dropped to null).

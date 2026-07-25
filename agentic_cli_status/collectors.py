@@ -1429,6 +1429,10 @@ _PANE_WINDOW_KEYWORDS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
     "codex": [
         ("5h", re.compile(r"5h(?:our)?\s+limit", re.I)),
         ("week", re.compile(r"week(?:ly)?\s+limit", re.I)),
+        # Inactive / free-tier accounts show a monthly quota instead of 5h+week
+        # (live "/status": "Monthly limit: … NN% left"). Keep after 5h/week so
+        # subscribed panes still publish the short windows when all three appear.
+        ("month", re.compile(r"month(?:ly)?\s+limit", re.I)),
     ],
     "claude_code": [
         ("5h", re.compile(r"current\s+session|5-?h(?:our)?\s+limit", re.I)),
