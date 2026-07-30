@@ -2,7 +2,7 @@
 
 GNOME taskbar indicator that displays the current rate-limit / usage status of
 the major agentic coding CLIs — **Codex**, **Claude Code**, **Grok CLI**, and
-**OpenCode Go** — polled in the background **without consuming plan limits**. Cline is
+**OpenCode Go** (opt-in, off by default) — polled in the background **without consuming plan limits**. Cline is
 deliberately not monitored: it has no `/usage`-style rate-limit surface yet.
 
 The top bar shows one compact colored segment per CLI with the percentage of
@@ -115,7 +115,7 @@ package, extension, default config) always runs; the components are:
 | `codex_monitor` | on | Codex monitoring; reconfigure source mode + staleness |
 | `claude_code_monitor` | on | Claude Code monitoring; same options |
 | `grok_monitor` | on | Grok CLI monitoring; same options |
-| `opencode_go_monitor` | on | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
+| `opencode_go_monitor` | **off (opt-in)** | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
 | `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |
 | `tmux_console` | on | The background tmux debug console / refresher |
 | `startup_service` | on | Poller starts at login (`systemd --user`) and keeps running |
@@ -126,6 +126,15 @@ action or `bash install.sh --configure-component <id>`):
 - **source** — `auto` (headless first, tmux pane fallback when stale),
   `headless` (never touch tmux), or `tmux` (pane capture only).
 - **stale_after_seconds** — age after which headless data counts as stale.
+
+**OpenCode Go is opt-in.** A default `bash install.sh` run leaves it disabled:
+no `opencode.ai` scraping, no plugin registration, and no OpenCode segment in
+the taskbar. Enable it on demand with:
+
+```bash
+bash install.sh --select opencode_go_monitor     # enable + configure it
+bash install.sh --uninstall opencode_go_monitor  # turn it back off
+```
 
 **OpenCode Go credentials** (for `opencode_go_monitor`): in the installer menu,
 highlight **OpenCode Go usage** and press **→** (right arrow) to configure

@@ -100,7 +100,10 @@ class TestPollOnce:
 
     def test_opencode_go_twice_writes_three_windows(self, sandbox_home, monkeypatch):
         """Two poll ticks with a fixture opener produce stable opencode_go windows."""
-        _configure(sandbox_home)
+        # OpenCode Go is opt-in (disabled by default), so enable it explicitly.
+        cfg = _configure(sandbox_home)
+        cfg["clis"]["opencode_go"]["enabled"] = True
+        acs_config.save_config(cfg)
         write_opencode_go_credentials(sandbox_home)
         calls = []
 
