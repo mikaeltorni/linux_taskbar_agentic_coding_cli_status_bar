@@ -110,8 +110,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "source": "auto",
             "stale_after_seconds": 1800,
         },
+        # OpenCode Go is opt-in: shipped disabled so a default installation
+        # never scrapes opencode.ai. Enable it with
+        # ``bash install.sh --select opencode_go_monitor``.
         "opencode_go": {
-            "enabled": True,
+            "enabled": False,
             "source": "auto",
             "stale_after_seconds": 1800,
             "fetch_min_interval_seconds": OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS,

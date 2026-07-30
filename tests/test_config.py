@@ -17,11 +17,17 @@ class TestLoadConfig:
             == acs_config.DEFAULT_POLL_INTERVAL_SECONDS
         )
         assert set(cfg["clis"]) == set(acs_config.CLI_IDS)
-        default_on = {"codex", "claude_code", "grok", "opencode_go", "openrouter"}
+        # OpenCode Go is opt-in: it is shipped disabled so a default install
+        # never scrapes opencode.ai or needs workspace credentials.
+        default_on = {"codex", "claude_code", "grok", "openrouter"}
         for cli in acs_config.CLI_IDS:
             assert cfg["clis"][cli]["enabled"] is (cli in default_on)
             expected_source = "headless" if cli == "openrouter" else "auto"
             assert cfg["clis"][cli]["source"] == expected_source
+
+    def test_opencode_go_is_disabled_by_default(self, sandbox_home):
+        """OpenCode Go must stay opt-in (enable via the installer component)."""
+        assert acs_config.load_config()["clis"]["opencode_go"]["enabled"] is False
 
     def test_cline_is_not_monitored(self):
         assert "cline" not in acs_config.CLI_IDS

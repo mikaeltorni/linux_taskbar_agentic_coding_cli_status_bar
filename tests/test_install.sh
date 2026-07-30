@@ -123,8 +123,10 @@ done
 PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'CHECK' || { FAIL=$((FAIL + 1)); echo "FAIL: default install must enable all default-on CLIs"; }
 import json, sys
 config = json.load(open(sys.argv[1]))
-for cli in ("codex", "claude_code", "grok", "opencode_go", "openrouter"):
+for cli in ("codex", "claude_code", "grok", "openrouter"):
     assert config["clis"][cli]["enabled"] is True, cli
+# OpenCode Go is opt-in and must stay off after a default install.
+assert config["clis"]["opencode_go"]["enabled"] is False
 CHECK
 PASS=$((PASS + 1))
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
@@ -247,8 +249,10 @@ run_installer >"$TMP_DIR/reinstall.out" 2>&1 || { FAIL=$((FAIL + 1)); echo "FAIL
 PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'CHECK' || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall must re-enable disabled default-on CLIs"; }
 import json, sys
 config = json.load(open(sys.argv[1]))
-for cli in ("codex", "claude_code", "grok", "opencode_go", "openrouter"):
+for cli in ("codex", "claude_code", "grok", "openrouter"):
     assert config["clis"][cli]["enabled"] is True, cli
+# A default install must NOT re-enable the opt-in OpenCode Go monitor.
+assert config["clis"]["opencode_go"]["enabled"] is False
 CHECK
 PASS=$((PASS + 1))
 
