@@ -32,8 +32,13 @@ USER_BUS="unix:path=${RUNTIME_DIR}/bus"
 DISPLAY_VAL="${DISPLAY:-:0}"
 EXTENSION_UUID="agentic-cli-status@local"
 EXTENSION_SRC="$SCRIPT_DIR/agentic-cli-status@local"
+# Optional, separately installable Agent Command Center model status bar. It is
+# its own GNOME Shell extension so it can be enabled/disabled independently of
+# the rate-limit indicator above (component: model_status_bar).
+MODEL_STATUS_UUID="acc-model-status@local"
+MODEL_STATUS_SRC="$SCRIPT_DIR/acc-model-status@local"
 export TARGET_USER TARGET_UID TARGET_HOME SCRIPT_DIR RUNTIME_DIR USER_BUS \
-  DISPLAY_VAL EXTENSION_UUID EXTENSION_SRC
+  DISPLAY_VAL EXTENSION_UUID EXTENSION_SRC MODEL_STATUS_UUID MODEL_STATUS_SRC
 
 source "$SCRIPT_DIR/lib/logging.sh"
 

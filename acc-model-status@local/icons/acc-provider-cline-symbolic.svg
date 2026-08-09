@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Cline provider mark for acc-model-status@local. Symbolic: a single
+     monochrome path so GNOME Shell recolors it with the panel foreground. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <g fill="#2e3436">
+    <path d="M2 2.6 6.7 7.3 2 12 3.4 13.4 9.5 7.3 3.4 1.2 Z M8.6 11.5 14.4 11.5 14.4 13.4 8.6 13.4 Z"/>
+  </g>
+</svg>

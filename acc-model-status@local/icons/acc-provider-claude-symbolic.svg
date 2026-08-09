@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Claude provider mark for acc-model-status@local. Symbolic: a single
+     monochrome path so GNOME Shell recolors it with the panel foreground. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <g fill="#2e3436">
+    <path d="M8 1.2 L9.1 6.1 L14 4.3 L10.6 8 L14 11.7 L9.1 9.9 L8 14.8 L6.9 9.9 L2 11.7 L5.4 8 L2 4.3 L6.9 6.1 Z"/>
+  </g>
+</svg>

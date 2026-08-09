@@ -156,6 +156,24 @@ the poller honors `Retry-After` and keeps showing the last good reading.
 All options live in `~/.config/agentic-cli-status/config.json`; the poller
 re-reads it every tick, so changes apply without a service restart.
 
+### Optional: Agent Command Center model status bar
+
+A second, independent taskbar extension (`acc-model-status@local`) shows one
+icon per agent provider with the number of Agent Command Center agents of that
+provider that are **currently running**, plus a menu listing those agents. It
+is opt-in and unrelated to the rate-limit indicator or the CLI status line:
+
+```bash
+bash install.sh --select model_status_bar     # install just this component
+bash install.sh --uninstall model_status_bar  # remove it again
+```
+
+It has no poller of its own: it renders
+`~/.local/state/codex-agent-tracker/model_status_bar.json`, which the Agent
+Command Center monitor publishes (honoring `CODEX_AGENT_TRACKER_STATE_DIR`).
+Segments are green while agents run, yellow when an agent needs input, gray
+when idle, and dimmed when the payload stops being refreshed.
+
 ## Usage
 
 ```bash
@@ -181,6 +199,8 @@ agentic_cli_status/          Python poller package (deployed to ~/.local/share/a
   tmux_console.py            Debug console: session/window management, slash-command refresh
   poller.py                  Aggregating tick loop; writes status.json atomically
 agentic-cli-status@local/    GNOME Shell extension (file-monitor + poll-rate-paced timer + renderer only)
+acc-model-status@local/      Optional ACC model status bar extension (provider icons + running counts)
+  icons/                     Symbolic provider marks (Claude, Codex, Grok, Qwen, … + generic fallback)
 installer/components.sh      Component manifest (shared installer framework)
 lib/status_setup.sh          Install functions (core deploy, per-CLI config, service, tmux)
 systemd/agentic-cli-status.service  User unit template (WantedBy=default.target)

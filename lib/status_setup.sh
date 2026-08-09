@@ -861,3 +861,81 @@ acs_uninstall_startup_service() {
 acs_detect_startup_service() {
   [ -f "$TARGET_HOME/.config/systemd/user/$ACS_SERVICE_NAME" ]
 }
+
+# ---------------------------------------------------------------------------
+# Optional component: Agent Command Center model status bar
+# ---------------------------------------------------------------------------
+# acc-model-status@local is a standalone GNOME Shell extension, deliberately
+# kept out of install_agentic_status_core so users who only want the rate-limit
+# indicator never get it. It renders the model_status_bar.json document that the
+# Agent Command Center monitor publishes; this repo ships no poller for it.
+
+# The deployment copy list for the model status bar extension. Every provider
+# icon must be listed: tests/test_model_status_bar.py asserts this array matches
+# the files on disk, so a new provider mark can never ship half-installed.
+ACS_MODEL_STATUS_FILES=(
+  "extension.js"
+  "metadata.json"
+  "stylesheet.css"
+  "icons/acc-provider-api-symbolic.svg"
+  "icons/acc-provider-claude-symbolic.svg"
+  "icons/acc-provider-cline-symbolic.svg"
+  "icons/acc-provider-codex-symbolic.svg"
+  "icons/acc-provider-generic-symbolic.svg"
+  "icons/acc-provider-grok-symbolic.svg"
+  "icons/acc-provider-nvidia-symbolic.svg"
+  "icons/acc-provider-opencode-symbolic.svg"
+  "icons/acc-provider-openrouter-symbolic.svg"
+  "icons/acc-provider-qwen-symbolic.svg"
+)
+
+# acs_model_status_dir - Echo the installed extension directory in the target
+# home. Returns: prints the absolute path.
+acs_model_status_dir() {
+  printf '%s\n' "$TARGET_HOME/.local/share/gnome-shell/extensions/$MODEL_STATUS_UUID"
+}
+
+# acs_install_model_status_bar - Deploy and enable the model status bar
+# extension. Idempotent: re-running refreshes the installed copies. Missing
+# source files abort the component instead of installing a broken extension.
+acs_install_model_status_bar() {
+  local ext_dst file
+  ext_dst="$(acs_model_status_dir)"
+  msg "Deploying model status bar extension $MODEL_STATUS_UUID"
+  acs_log INFO "installing $MODEL_STATUS_UUID from $MODEL_STATUS_SRC"
+  run_as_target mkdir -p "$ext_dst/icons"
+  for file in "${ACS_MODEL_STATUS_FILES[@]}"; do
+    if [ ! -f "$MODEL_STATUS_SRC/$file" ]; then
+      msg "Missing extension file $MODEL_STATUS_UUID/$file; aborting deploy." >&2
+      acs_log ERROR "missing source file $MODEL_STATUS_SRC/$file"
+      return 1
+    fi
+    run_as_target cp "$MODEL_STATUS_SRC/$file" "$ext_dst/$file"
+  done
+
+  if run_as_target env XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+      DBUS_SESSION_BUS_ADDRESS="$USER_BUS" DISPLAY="$DISPLAY_VAL" \
+      gnome-extensions enable "$MODEL_STATUS_UUID" 2>/dev/null; then
+    msg "Model status bar enabled: $MODEL_STATUS_UUID"
+  else
+    msg "Could not enable $MODEL_STATUS_UUID now (no Shell session?); it activates on next login."
+  fi
+  msg "Model status bar deployed. New extension code loads after the next Shell reload/login."
+}
+
+# acs_uninstall_model_status_bar - Disable and remove the extension, leaving the
+# Agent Command Center payload and the rate-limit indicator untouched.
+acs_uninstall_model_status_bar() {
+  run_as_target env XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+    DBUS_SESSION_BUS_ADDRESS="$USER_BUS" DISPLAY="$DISPLAY_VAL" \
+    gnome-extensions disable "$MODEL_STATUS_UUID" 2>/dev/null || true
+  run_as_target rm -rf "$(acs_model_status_dir)"
+  acs_log INFO "removed $MODEL_STATUS_UUID"
+  msg "Model status bar removed (takes effect after the next Shell reload/login)."
+}
+
+# acs_detect_model_status_bar - Installed when the extension's entry point is
+# deployed in the target home.
+acs_detect_model_status_bar() {
+  [ -f "$(acs_model_status_dir)/extension.js" ]
+}

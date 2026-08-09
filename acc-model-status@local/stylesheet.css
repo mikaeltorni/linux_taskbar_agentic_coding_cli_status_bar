@@ -1,0 +1,55 @@
+/* stylesheet.css — acc-model-status@local
+ *
+ * Layout and state styling for the per-provider model status segments.
+ *   ams-box       the panel button's horizontal segment container
+ *   ams-segment   one provider segment (icon + count)
+ *   ams-icon      provider icon sizing
+ *   ams-count     the running-agent count next to the icon
+ *   ams-active    at least one agent of that provider is running
+ *   ams-idle      the provider has live agents but none running
+ *   ams-attention an agent of that provider needs user input
+ *   ams-empty     placeholder shown when no agent terminals exist
+ *   ams-stale     payload older than the freshness threshold
+ */
+
+.ams-box {
+  spacing: 2px;
+}
+
+.ams-segment {
+  margin: 0 3px;
+  spacing: 2px;
+}
+
+.ams-icon {
+  icon-size: 16px;
+}
+
+.ams-count {
+  font-weight: bold;
+}
+
+.ams-active {
+  color: #8ff0a4;
+}
+
+.ams-idle {
+  color: #9a9996;
+}
+
+.ams-attention {
+  color: #f8e45c;
+}
+
+.ams-empty {
+  color: #9a9996;
+  opacity: 0.7;
+}
+
+.ams-stale {
+  opacity: 0.5;
+}
+
+.ams-menu-heading {
+  font-weight: bold;
+}
