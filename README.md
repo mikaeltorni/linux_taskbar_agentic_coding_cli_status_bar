@@ -160,12 +160,14 @@ re-reads it every tick, so changes apply without a service restart.
 
 A second, independent taskbar extension (`acc-model-status@local`) shows one
 icon per agent provider with the number of Agent Command Center agents of that
-provider that are **currently running on the active workspace**, plus a menu
-listing only the agent terminals open on that workspace. Switching workspaces,
-moving a terminal, opening or closing one, and changing its ACC-managed title
-updates the bar immediately. Detached tmux sessions remain in ACC but are not
-shown until their terminal window is opened. The extension is opt-in and
-unrelated to the rate-limit indicator or the CLI status line:
+provider that are **currently running in open terminal windows**, plus a menu
+listing those windows across every GNOME workspace. The menu is grouped in
+workspace-number order and rows on the active workspace have a translucent teal
+background. Switching workspaces, moving a terminal, opening or closing one,
+and changing its ACC-managed title updates the bar immediately. Detached tmux
+sessions remain in ACC but are not shown until their terminal window is opened.
+The extension is opt-in and unrelated to the rate-limit indicator or the CLI
+status line:
 
 ```bash
 bash install.sh --select model_status_bar     # install just this component
@@ -175,10 +177,10 @@ bash install.sh --uninstall model_status_bar  # remove it again
 It has no poller of its own: it renders
 `~/.local/state/codex-agent-tracker/model_status_bar.json`, which the Agent
 Command Center monitor publishes (honoring `CODEX_AGENT_TRACKER_STATE_DIR`).
-It joins those agent rows to GNOME's live window titles and workspace metadata;
-no subprocess or tmux polling is involved. Segments are green while agents run,
-yellow when an agent needs input, gray when idle, and dimmed when the payload
-stops being refreshed.
+It joins those agent rows to GNOME's live window titles and actual workspace
+metadata; no subprocess or tmux polling is involved. Segments are green while
+agents run, yellow when an agent needs input, gray when idle, and dimmed when
+the payload stops being refreshed.
 
 ## Usage
 
