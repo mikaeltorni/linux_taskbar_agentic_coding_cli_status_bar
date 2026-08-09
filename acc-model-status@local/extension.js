@@ -7,9 +7,10 @@
  * Separation of concerns (same contract as agentic-cli-status@local):
  *   - Agent Command Center's monitor OWNS the data: it publishes the document
  *     `model_status_bar.json` into the tracker state directory.
- *   - This extension ONLY renders that document. It never scans tmux, never
- *     spawns a subprocess, and never talks to the network; it watches the file
- *     with a Gio file monitor plus a slow safety-net poll.
+ *   - This extension joins that document to GNOME Shell's live window metadata
+ *     so only agent terminals open on the active workspace are rendered. It
+ *     never scans tmux, spawns a subprocess, or talks to the network; it watches
+ *     the file and Shell window/workspace signals directly.
  *
  * Components:
  *   AccModelStatusButton  panel button: segment box + agent list menu
@@ -42,6 +43,9 @@ const STALE_SECONDS = 180;
 const MAX_MENU_AGENTS = 8;
 /** Fallback icon for providers this extension ships no artwork for. */
 const FALLBACK_ICON = 'acc-provider-generic-symbolic';
+/** Phases contributing to the scoped provider counters. */
+const RUNNING_PHASES = new Set(['RUNNING']);
+const ATTENTION_PHASES = new Set(['WAITING', 'INTERRUPTED']);
 /**
  * Agent phase palette — the SAME colors the phrase automation notes menu uses
  * for its agent badges (AGENT_PHASE_BADGE_COLORS in
@@ -143,6 +147,110 @@ function ageSeconds(iso) {
     return Math.max(0, (Date.now() - stamp) / 1000);
 }
 
+/**
+ * Normalize user-visible identity text for stable title matching.
+ *
+ * @param {*} value - payload field or Shell window title.
+ * @returns {string} case-folded text with whitespace collapsed.
+ */
+function normalizedIdentity(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+/**
+ * Return how strongly one ACC agent row matches one terminal window title.
+ *
+ * ACC owns Kitty titles in the form ``description - project - worktree``.
+ * The payload carries that same summarized description, plus session/tmux
+ * identities. Exact identity markers win; the normal title prefix is the
+ * fallback. Placeholder rows such as ``(codex)`` intentionally do not match.
+ *
+ * @param {object} agent - agent metadata from the ACC payload.
+ * @param {string} title - title read from Meta.Window.
+ * @returns {number} positive match score, or zero for no match.
+ */
+function agentWindowMatchScore(agent, title) {
+    const windowTitle = normalizedIdentity(title);
+    if (!windowTitle)
+        return 0;
+
+    const sessionId = normalizedIdentity(agent.session_id);
+    if (sessionId && windowTitle.includes(sessionId))
+        return 30000 + sessionId.length;
+    const tmuxName = normalizedIdentity(agent.tmux_name);
+    if (tmuxName && windowTitle.includes(tmuxName))
+        return 20000 + tmuxName.length;
+
+    const agentTitle = normalizedIdentity(agent.title);
+    if (!agentTitle || /^\([^)]+\)$/.test(agentTitle))
+        return 0;
+    if (windowTitle !== agentTitle && !windowTitle.startsWith(`${agentTitle} - `))
+        return 0;
+
+    let score = 10000 + agentTitle.length;
+    const worktree = String(agent.worktree || '').replace(/\/+$/, '');
+    const projectSlug = normalizedIdentity(worktree.split('/').pop());
+    if (projectSlug && windowTitle.includes(` - ${projectSlug} - `))
+        score += 1000;
+    return score;
+}
+
+/**
+ * Filter the all-workspace ACC payload against titles of open windows here.
+ *
+ * Matching is one-to-one: a single terminal window can select at most one
+ * payload row. This matters when historical sessions share the same summary;
+ * one open window must never resurrect every matching detached session.
+ * Provider and footer counts are recomputed from the selected rows.
+ *
+ * @param {object} payload - normalized document from {@link readPayload}.
+ * @param {string[]} windowTitles - titles on the active GNOME workspace.
+ * @returns {object} payload containing only agents backed by those windows.
+ */
+function scopePayloadToWindowTitles(payload, windowTitles) {
+    const candidates = [];
+    for (const provider of payload.providers) {
+        const agents = Array.isArray(provider.agents) ? provider.agents : [];
+        for (const agent of agents)
+            candidates.push({provider, agent});
+    }
+
+    const selected = new Set();
+    for (const title of windowTitles) {
+        let best = null;
+        let bestScore = 0;
+        for (const candidate of candidates) {
+            if (selected.has(candidate.agent))
+                continue;
+            const score = agentWindowMatchScore(candidate.agent, title);
+            if (score > bestScore) {
+                best = candidate;
+                bestScore = score;
+            }
+        }
+        if (best)
+            selected.add(best.agent);
+    }
+
+    const providers = [];
+    let totalLive = 0;
+    let totalRunning = 0;
+    for (const provider of payload.providers) {
+        const sourceAgents = Array.isArray(provider.agents) ? provider.agents : [];
+        const agents = sourceAgents.filter(agent => selected.has(agent));
+        if (agents.length === 0)
+            continue;
+        const running = agents.filter(agent =>
+            RUNNING_PHASES.has(String(agent.phase || '').trim().toUpperCase())).length;
+        const attention = agents.filter(agent =>
+            ATTENTION_PHASES.has(String(agent.phase || '').trim().toUpperCase())).length;
+        providers.push({...provider, agents, live: agents.length, running, attention});
+        totalLive += agents.length;
+        totalRunning += running;
+    }
+    return {...payload, providers, totalLive, totalRunning};
+}
+
 const AccModelStatusButton = GObject.registerClass(
 class AccModelStatusButton extends PanelMenu.Button {
     /**
@@ -157,11 +265,14 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._monitor = null;
         this._pollId = 0;
         this._refreshId = 0;
+        this._shellSignals = [];
+        this._windowSignals = new Map();
 
         this._box = new St.BoxLayout({style_class: 'ams-box panel-status-menu-box'});
         this.add_child(this._box);
 
         this._startWatching();
+        this._startWindowWatching();
         this._refresh();
     }
 
@@ -183,6 +294,62 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._refresh();
             return GLib.SOURCE_CONTINUE;
         });
+    }
+
+    /** Connect one Shell signal and retain it for deterministic teardown. */
+    _connectShell(object, signal, callback) {
+        this._shellSignals.push([object, object.connect(signal, callback)]);
+    }
+
+    /** Watch active-workspace changes and the lifecycle of every Shell window. */
+    _startWindowWatching() {
+        this._connectShell(global.workspace_manager, 'active-workspace-changed', () =>
+            this._queueRefresh());
+        this._connectShell(global.display, 'window-created', (_display, win) => {
+            this._trackWindow(win);
+            this._queueRefresh();
+        });
+        for (const actor of global.get_window_actors()) {
+            if (actor.meta_window)
+                this._trackWindow(actor.meta_window);
+        }
+    }
+
+    /**
+     * Track identity/workspace changes for one window until it is unmanaged.
+     *
+     * @param {Meta.Window} win - live Shell window.
+     */
+    _trackWindow(win) {
+        if (!win || this._windowSignals.has(win))
+            return;
+        const ids = [
+            win.connect('workspace-changed', () => this._queueRefresh()),
+            win.connect('notify::title', () => this._queueRefresh()),
+            win.connect('unmanaged', () => {
+                const stored = this._windowSignals.get(win) || [];
+                for (const id of stored)
+                    win.disconnect(id);
+                this._windowSignals.delete(win);
+                this._queueRefresh();
+            }),
+        ];
+        this._windowSignals.set(win, ids);
+    }
+
+    /** Return titles of every open window located on the active workspace. */
+    _activeWorkspaceWindowTitles() {
+        const activeWorkspace = global.workspace_manager.get_active_workspace();
+        const windowTitles = [];
+        for (const actor of global.get_window_actors()) {
+            const win = actor.meta_window;
+            if (!win || !win.located_on_workspace(activeWorkspace))
+                continue;
+            const title = win.get_title();
+            if (title)
+                windowTitles.push(title);
+        }
+        return windowTitles;
     }
 
     /** Coalesce monitor event bursts (create/write/close) into one redraw. */
@@ -214,7 +381,11 @@ class AccModelStatusButton extends PanelMenu.Button {
 
     /** Re-read the payload and repaint the panel segments and the menu. */
     _refresh() {
-        const payload = readPayload(this._file);
+        const published = readPayload(this._file);
+        const windowTitles = this._activeWorkspaceWindowTitles();
+        const payload = published
+            ? scopePayloadToWindowTitles(published, windowTitles)
+            : null;
         this._box.destroy_all_children();
         this.menu.removeAll();
 
@@ -243,7 +414,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         }));
         this._box.add_child(segment);
         this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-            payload ? 'No agent terminals' : 'Agent Command Center not publishing',
+            payload ? 'No agent terminals on this workspace' : 'Agent Command Center not publishing',
             {reactive: false}));
     }
 
@@ -383,6 +554,14 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._monitor.cancel();
             this._monitor = null;
         }
+        for (const [object, id] of this._shellSignals)
+            object.disconnect(id);
+        this._shellSignals = [];
+        for (const [win, ids] of this._windowSignals) {
+            for (const id of ids)
+                win.disconnect(id);
+        }
+        this._windowSignals.clear();
         super.destroy();
     }
 });
