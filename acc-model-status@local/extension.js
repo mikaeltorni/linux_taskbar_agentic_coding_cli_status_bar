@@ -506,6 +506,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         workspaceEntries.sort(compareWorkspaceEntries);
 
         let previousWorkspace = null;
+        let workspaceSection = null;
         for (const entry of workspaceEntries) {
             const workspace = Number(entry.agent.workspace) || 0;
             if (workspace !== previousWorkspace) {
@@ -517,10 +518,15 @@ class AccModelStatusButton extends PanelMenu.Button {
                     : 'Workspace unknown';
                 const heading = new PopupMenu.PopupMenuItem(headingText, {reactive: false});
                 heading.label.add_style_class_name('ams-menu-heading');
-                this.menu.addMenuItem(heading);
+                workspaceSection = new PopupMenu.PopupMenuSection();
+                workspaceSection.actor.add_style_class_name('ams-workspace-block');
+                if (current)
+                    workspaceSection.actor.add_style_class_name('ams-current-workspace-block');
+                workspaceSection.addMenuItem(heading);
+                this.menu.addMenuItem(workspaceSection);
                 previousWorkspace = workspace;
             }
-            this.menu.addMenuItem(this._agentMenuItem(entry.agent, entry.provider));
+            workspaceSection.addMenuItem(this._agentMenuItem(entry.agent, entry.provider));
         }
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -549,8 +555,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             reactive: false,
             can_focus: false,
         });
-        if (agent.current_workspace)
-            item.add_style_class_name('ams-current-workspace');
         const row = new St.BoxLayout({style_class: 'ams-agent-row'});
 
         const projectTag = String(agent.project_tag || '').trim();
