@@ -566,9 +566,10 @@ class AccModelStatusButton extends PanelMenu.Button {
             }));
         }
 
-        row.add_child(new St.Label({
-            text: `${provider.label || provider.kind || 'Agent'}`,
-            style_class: 'ams-provider',
+        row.add_child(new St.Icon({
+            gicon: this._icon(provider.icon),
+            style_class: 'ams-menu-provider-icon system-status-icon',
+            accessible_name: `${provider.label || provider.kind || 'Agent'}`,
             y_align: Clutter.ActorAlign.CENTER,
         }));
 
