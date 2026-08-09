@@ -118,3 +118,37 @@ def test_styles_used_by_the_extension_exist_in_the_stylesheet():
                   "ams-attention", "ams-empty", "ams-stale"):
         assert f".{style}" in css, style
         assert style in EXTENSION_JS, style
+
+
+def _phase_palette() -> dict[str, str]:
+    """Return the PHASE_COLORS map declared by the extension."""
+    match = re.search(r"const PHASE_COLORS = \{(.*?)\n\};", EXTENSION_JS, re.S)
+    assert match, "PHASE_COLORS not found in extension.js"
+    return dict(re.findall(r"(\w+):\s*'#([0-9a-f]{6})'", match.group(1)))
+
+
+def test_phase_palette_matches_the_notes_menu_colors():
+    """The menu must color phases exactly like the phrase automation notes UI."""
+    palette = _phase_palette()
+    # Mirrors AGENT_PHASE_BADGE_COLORS in phrase_automation notes_display.py.
+    for phase, color in {
+        "RUNNING": "e6c200",
+        "ATTN": "ffb454",
+        "DONE": "22c55e",
+        "DRAFT": "84c32f",
+        "STOPPED": "ef4444",
+        "INTERRUPTED": "c084fc",
+        "TRANSFERRED": "c45c5c",
+        "UNKNOWN": "7f8ea3",
+    }.items():
+        assert palette.get(phase) == color, phase
+
+
+def test_agent_rows_carry_workspace_tag_and_colored_phase_badge():
+    row = re.search(r"    _agentMenuItem\(agent\) \{(.*?)\n    \}", EXTENSION_JS, re.S)
+    assert row, "_agentMenuItem() not found"
+    body = row.group(1)
+    # W<n> tag first, then the phase badge painted from the shared palette.
+    assert "`W${workspace}`" in body
+    assert body.index("ams-workspace") < body.index("ams-phase")
+    assert "phaseColor(phase)" in body

@@ -10,6 +10,11 @@
  *   ams-attention an agent of that provider needs user input
  *   ams-empty     placeholder shown when no agent terminals exist
  *   ams-stale     payload older than the freshness threshold
+ *   ams-agent-row one agent line in the drop-down (tag + phase + title)
+ *   ams-workspace the W<n> GNOME-workspace tag leading the row
+ *   ams-phase     the phase badge (inline color from the notes palette)
+ *   ams-agent-title    the summarized agent title
+ *   ams-agent-origin   project/branch the agent runs in (muted)
  */
 
 .ams-box {
@@ -52,4 +57,25 @@
 
 .ams-menu-heading {
   font-weight: bold;
+}
+
+.ams-agent-row {
+  spacing: 8px;
+}
+
+.ams-workspace {
+  font-weight: bold;
+  color: #5cc8ff;
+}
+
+.ams-phase {
+  font-weight: bold;
+}
+
+.ams-agent-title {
+  color: #eceff4;
+}
+
+.ams-agent-origin {
+  color: #9aa3b2;
 }

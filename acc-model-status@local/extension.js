@@ -42,6 +42,35 @@ const STALE_SECONDS = 180;
 const MAX_MENU_AGENTS = 8;
 /** Fallback icon for providers this extension ships no artwork for. */
 const FALLBACK_ICON = 'acc-provider-generic-symbolic';
+/**
+ * Agent phase palette — the SAME colors the phrase automation notes menu uses
+ * for its agent badges (AGENT_PHASE_BADGE_COLORS in
+ * src/overlay/notes_display.py). Keep the two in sync: a status looks the same
+ * whether you read it in the notes overlay or in this panel menu.
+ */
+const PHASE_COLORS = {
+    RUNNING: '#e6c200',
+    ATTN: '#ffb454',
+    WAITING: '#ffb454',
+    DONE: '#22c55e',
+    DRAFT: '#84c32f',
+    STOPPED: '#ef4444',
+    INTERRUPTED: '#c084fc',
+    TRANSFERRED: '#c45c5c',
+    UNKNOWN: '#7f8ea3',
+};
+
+/**
+ * Color for one agent phase.
+ *
+ * @param {string} phase - phase key from the payload (any case).
+ * @returns {string} CSS color; unknown phases render in the muted grey the
+ *     notes menu uses for UNKNOWN.
+ */
+function phaseColor(phase) {
+    const key = String(phase || '').trim().toUpperCase();
+    return PHASE_COLORS[key] || PHASE_COLORS.UNKNOWN;
+}
 
 /**
  * Resolve the published payload path.
@@ -265,19 +294,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             this.menu.addMenuItem(heading);
 
             const agents = Array.isArray(provider.agents) ? provider.agents : [];
-            for (const agent of agents.slice(0, MAX_MENU_AGENTS)) {
-                const parts = [];
-                if (agent.phase)
-                    parts.push(`[${agent.phase}]`);
-                if (agent.title)
-                    parts.push(agent.title);
-                if (agent.project)
-                    parts.push(`· ${agent.project}`);
-                if (agent.branch)
-                    parts.push(`(${agent.branch})`);
-                this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-                    `    ${parts.join(' ')}`.trimEnd(), {reactive: false}));
-            }
+            for (const agent of agents.slice(0, MAX_MENU_AGENTS))
+                this.menu.addMenuItem(this._agentMenuItem(agent));
             if (agents.length > MAX_MENU_AGENTS) {
                 this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
                     `    … ${agents.length - MAX_MENU_AGENTS} more`, {reactive: false}));
@@ -289,6 +307,66 @@ class AccModelStatusButton extends PanelMenu.Button {
             ? `Stale — last update ${payload.updatedAt || 'unknown'}`
             : `${payload.totalRunning} running / ${payload.totalLive} live`;
         this.menu.addMenuItem(new PopupMenu.PopupMenuItem(footer, {reactive: false}));
+    }
+
+    /**
+     * Build one agent row: workspace tag, colored phase badge, title, origin.
+     *
+     * The row mirrors the notes menu: ``W2`` for the GNOME workspace the
+     * agent's project lives on (omitted when unknown), then the phase in the
+     * shared notes palette (DONE green, RUNNING yellow, STOPPED red …).
+     *
+     * @param {object} agent - agent entry from the payload.
+     * @returns {PopupMenu.PopupBaseMenuItem} the non-reactive row.
+     */
+    _agentMenuItem(agent) {
+        const item = new PopupMenu.PopupBaseMenuItem({
+            reactive: false,
+            can_focus: false,
+        });
+        const row = new St.BoxLayout({style_class: 'ams-agent-row'});
+
+        const workspace = Number(agent.workspace) || 0;
+        if (workspace > 0) {
+            row.add_child(new St.Label({
+                text: `W${workspace}`,
+                style_class: 'ams-workspace',
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
+        }
+
+        const phase = String(agent.phase || 'UNKNOWN').trim().toUpperCase();
+        const badge = new St.Label({
+            text: phase,
+            style_class: 'ams-phase',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        badge.set_style(`color: ${phaseColor(phase)};`);
+        row.add_child(badge);
+
+        if (agent.title) {
+            row.add_child(new St.Label({
+                text: `${agent.title}`,
+                style_class: 'ams-agent-title',
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
+        }
+
+        const origin = [];
+        if (agent.project)
+            origin.push(`${agent.project}`);
+        if (agent.branch)
+            origin.push(`(${agent.branch})`);
+        if (origin.length > 0) {
+            row.add_child(new St.Label({
+                text: origin.join(' '),
+                style_class: 'ams-agent-origin',
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
+        }
+
+        item.add_child(row);
+        return item;
     }
 
     /** Tear down timers and the file monitor before the actor goes away. */
