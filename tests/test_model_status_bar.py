@@ -5,7 +5,7 @@ component, so three things must stay in lockstep:
   * the copy list in lib/status_setup.sh and the files on disk (a missing icon
     would install a bar with blank segments),
   * the component manifest entry (opt-in, own section, real functions),
-  * the extension's rendering contract (payload-only, no polling of tmux).
+  * the extension's rendering contract (payload + live Shell windows, no tmux).
 """
 
 from __future__ import annotations
@@ -94,13 +94,48 @@ def _code_only(text: str) -> str:
     return re.sub(r"^\s*//.*$", "", text, flags=re.M)
 
 
-def test_extension_only_renders_the_published_payload():
+def test_extension_uses_payload_without_external_polling():
     code = _code_only(EXTENSION_JS)
     assert "model_status_bar.json" in code
     assert "CODEX_AGENT_TRACKER_STATE_DIR" in code
-    # Rendering only: no subprocesses, no tmux scraping, no network.
-    for forbidden in ("spawn_", "Soup", "tmux", "subprocess"):
+    # Rendering only: no subprocesses, tmux commands, or network clients. The
+    # payload's tmux_name identity field is allowed for title matching.
+    for forbidden in ("GLib.spawn", "Gio.Subprocess", "Soup", "subprocess"):
         assert forbidden not in code, forbidden
+
+
+def test_extension_scopes_payload_to_open_windows_on_active_workspace():
+    """Only payload agents matched to live windows on this workspace render."""
+    code = _code_only(EXTENSION_JS)
+    for required in (
+        "global.workspace_manager.get_active_workspace()",
+        "global.get_window_actors()",
+        "win.located_on_workspace(activeWorkspace)",
+        "win.get_title()",
+        "scopePayloadToWindowTitles(payload, windowTitles)",
+    ):
+        assert required in code, required
+    # Scoped counts must be recomputed, never copied from the all-workspace
+    # payload published by ACC.
+    assert "live: agents.length" in code
+    assert "const running = agents.filter(agent =>" in code
+    assert "const attention = agents.filter(agent =>" in code
+    assert "providers.push({...provider, agents, live: agents.length, running, attention})" in code
+
+
+def test_extension_refreshes_when_workspace_or_window_identity_changes():
+    """Workspace switches, moves, opens, closes, and title updates are live."""
+    code = _code_only(EXTENSION_JS)
+    for signal in (
+        "active-workspace-changed",
+        "window-created",
+        "workspace-changed",
+        "notify::title",
+        "unmanaged",
+    ):
+        assert f"'{signal}'" in code, signal
+    assert "this._shellSignals" in code
+    assert "this._windowSignals" in code
 
 
 def test_extension_releases_timers_and_monitor_on_destroy():
@@ -109,6 +144,9 @@ def test_extension_releases_timers_and_monitor_on_destroy():
     body = destroy.group(1)
     assert body.count("GLib.source_remove") == 2
     assert "this._monitor.cancel()" in body
+    assert "object.disconnect(id)" in body
+    assert "win.disconnect(id)" in body
+    assert "this._windowSignals.clear()" in body
     assert "super.destroy()" in body
 
 
