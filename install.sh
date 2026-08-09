@@ -58,6 +58,9 @@ msg() {
 # Returns: 0 once isc_activate_components has run.
 load_component_framework() {
   local d
+  # Idempotent: both the readonly-arg router and main() call this.
+  [[ -n "${ACS_FRAMEWORK_LOADED:-}" ]] && return 0
+  ACS_FRAMEWORK_LOADED=1
   for d in "${ISC_FUNCTIONS_DIR:-}" \
            "$SCRIPT_DIR/../linux_installation_scripts_functions" \
            "$HOME/projects/linux_installation_scripts_functions"; do
@@ -93,18 +96,21 @@ main() {
   component_main "$@"
 }
 
-# Listing/help must print only their own output (the master installer parses
-# --list-components); skip the core deploy and completion message for those.
-case "${1:-}" in
-  --list-components|--export-selection|--detect|--help|-h|--uninstall|--uninstall=*)
-    load_component_framework
-    source "$SCRIPT_DIR/lib/status_setup.sh"
-    source "$SCRIPT_DIR/installer/components.sh"
-    component_main "$@"
-    exit $?
-    ;;
-esac
-
+# Listing/help/configure must print only their own output and must not deploy
+# the core (the master installer parses --list-components,
+# --list-configurable-components, and --list-component-config-values).
+#
+# Route them through the framework's shared helper rather than a hand-maintained
+# flag list: the local list omitted --list-configurable-components,
+# --list-select-configure-components, --list-component-config-values, and
+# --configure-component, so the master's _cs_repo_exposes_flag could not detect
+# them and this repository's six nested configure screens (per-CLI monitors and
+# the polling rate) were unreachable from the aggregate menu. The helper also
+# matches the flag anywhere in argv, not just argv[1].
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  load_component_framework
+  source "$SCRIPT_DIR/lib/status_setup.sh"
+  source "$SCRIPT_DIR/installer/components.sh"
+  if isc_route_readonly_args "$@"; then exit $?; fi
   main "$@"
 fi
