@@ -10,9 +10,9 @@
  *   ams-attention an agent of that provider needs user input
  *   ams-empty     placeholder shown when no agent terminals exist
  *   ams-stale     payload older than the freshness threshold
- *   ams-agent-row one agent line in the drop-down (tag + phase + title)
+ *   ams-agent-row one agent line in the drop-down (project + phase + title)
  *   ams-current-workspace translucent highlight for rows visible right now
- *   ams-workspace the W<n> GNOME-workspace tag leading the row
+ *   ams-project-tag Phrase Automation's compact project label leading the row
  *   ams-provider  provider label within a workspace-grouped row
  *   ams-phase     the phase badge (inline color from the notes palette)
  *   ams-agent-title    the summarized agent title
@@ -70,7 +70,7 @@
   border-radius: 6px;
 }
 
-.ams-workspace {
+.ams-project-tag {
   font-weight: bold;
   color: #5cc8ff;
 }

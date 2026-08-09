@@ -198,14 +198,17 @@ def test_phase_palette_matches_the_notes_menu_colors():
         assert palette.get(phase) == color, phase
 
 
-def test_agent_rows_carry_workspace_tag_and_colored_phase_badge():
+def test_agent_rows_carry_project_tag_and_colored_phase_badge():
     row = re.search(r"    _agentMenuItem\(agent, provider\) \{(.*?)\n    \}", EXTENSION_JS, re.S)
     assert row, "_agentMenuItem() not found"
     body = row.group(1)
-    # W<n> tag first, then provider and phase metadata; current rows use the
-    # workspace highlight class declared in the stylesheet.
-    assert "`W${workspace}`" in body
-    assert body.index("ams-workspace") < body.index("ams-phase")
+    # The persisted Phrase Automation project label comes first; workspace
+    # numbers belong in group headings and must not be repeated on every row.
+    assert "agent.project_tag" in body
+    assert "ams-project-tag" in body
+    assert "`W${workspace}`" not in body
+    assert "ams-workspace" not in body
+    assert body.index("ams-project-tag") < body.index("ams-phase")
     assert "ams-provider" in body
     assert "ams-current-workspace" in body
     assert "phaseColor(phase)" in body

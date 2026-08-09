@@ -368,9 +368,9 @@ class AccModelStatusButton extends PanelMenu.Button {
     /**
      * Return every open window's title, actual workspace, and current marker.
      *
-     * GNOME workspace indexes are zero-based; menu tags are one-based (W1,
-     * W2, ...). A sticky window is considered part of the current workspace
-     * because that is where it is presently visible.
+     * GNOME workspace indexes are zero-based; menu headings are one-based.
+     * A sticky window is considered part of the current workspace because
+     * that is where it is presently visible.
      */
     _openWindowDescriptors() {
         const activeWorkspace = global.workspace_manager.get_active_workspace();
@@ -532,11 +532,13 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Build one agent row: workspace tag, colored phase badge, title, origin.
+     * Build one agent row: project tag, colored phase badge, title, origin.
      *
-     * The row mirrors the notes menu: ``W2`` for the GNOME workspace the
-     * agent's project lives on (omitted when unknown), then the phase in the
-     * shared notes palette (DONE green, RUNNING yellow, STOPPED red …).
+     * The leading tag is Phrase Automation's persisted compact project label
+     * (for example ``INS`` for installation_scripts), omitted when ACC could
+     * not match the agent path to a project. Workspace numbers stay in the
+     * group headings. The phase uses the shared notes palette (DONE green,
+     * RUNNING yellow, STOPPED red …).
      *
      * @param {object} agent - agent entry enriched from its live window.
      * @param {object} provider - provider metadata owning the agent.
@@ -551,11 +553,11 @@ class AccModelStatusButton extends PanelMenu.Button {
             item.add_style_class_name('ams-current-workspace');
         const row = new St.BoxLayout({style_class: 'ams-agent-row'});
 
-        const workspace = Number(agent.workspace) || 0;
-        if (workspace > 0) {
+        const projectTag = String(agent.project_tag || '').trim();
+        if (projectTag) {
             row.add_child(new St.Label({
-                text: `W${workspace}`,
-                style_class: 'ams-workspace',
+                text: projectTag,
+                style_class: 'ams-project-tag',
                 y_align: Clutter.ActorAlign.CENTER,
             }));
         }
