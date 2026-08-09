@@ -1,7 +1,7 @@
 {
   "uuid": "acc-model-status@local",
   "name": "ACC Model Status",
-  "description": "Optional taskbar indicator showing Agent Command Center providers and agents with open terminal windows on the active workspace.",
+  "description": "Optional taskbar indicator showing Agent Command Center providers and open agent windows across every workspace.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version": 2
+  "version": 3
 }

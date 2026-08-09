@@ -8,9 +8,9 @@
  *   - Agent Command Center's monitor OWNS the data: it publishes the document
  *     `model_status_bar.json` into the tracker state directory.
  *   - This extension joins that document to GNOME Shell's live window metadata
- *     so only agent terminals open on the active workspace are rendered. It
- *     never scans tmux, spawns a subprocess, or talks to the network; it watches
- *     the file and Shell window/workspace signals directly.
+ *     so only agents with an open terminal window are rendered, across every
+ *     workspace. It never scans tmux, spawns a subprocess, or talks to the
+ *     network; it watches the file and Shell window/workspace signals directly.
  *
  * Components:
  *   AccModelStatusButton  panel button: segment box + agent list menu
@@ -39,8 +39,6 @@ const STATE_DIR_ENV = 'CODEX_AGENT_TRACKER_STATE_DIR';
 const POLL_SECONDS = 15;
 /** Payload older than this is rendered dimmed — the monitor is not publishing. */
 const STALE_SECONDS = 180;
-/** Agents listed per provider in the menu before collapsing into a summary. */
-const MAX_MENU_AGENTS = 8;
 /** Fallback icon for providers this extension ships no artwork for. */
 const FALLBACK_ICON = 'acc-provider-generic-symbolic';
 /** Phases contributing to the scoped provider counters. */
@@ -195,8 +193,27 @@ function agentWindowMatchScore(agent, title) {
     return score;
 }
 
+/** Return a numeric workspace sort key, placing unknown workspaces last. */
+function workspaceSortValue(workspace) {
+    const number = Number(workspace) || 0;
+    return number > 0 ? number : Number.MAX_SAFE_INTEGER;
+}
+
+/** Sort workspace-menu entries by real workspace, then provider and title. */
+function compareWorkspaceEntries(left, right) {
+    const workspaceDifference = workspaceSortValue(left.agent.workspace) -
+        workspaceSortValue(right.agent.workspace);
+    if (workspaceDifference !== 0)
+        return workspaceDifference;
+    const providerDifference = String(left.provider.label || '').localeCompare(
+        String(right.provider.label || ''));
+    if (providerDifference !== 0)
+        return providerDifference;
+    return String(left.agent.title || '').localeCompare(String(right.agent.title || ''));
+}
+
 /**
- * Filter the all-workspace ACC payload against titles of open windows here.
+ * Match the ACC payload to every open agent window, preserving real workspace.
  *
  * Matching is one-to-one: a single terminal window can select at most one
  * payload row. This matters when historical sessions share the same summary;
@@ -204,10 +221,10 @@ function agentWindowMatchScore(agent, title) {
  * Provider and footer counts are recomputed from the selected rows.
  *
  * @param {object} payload - normalized document from {@link readPayload}.
- * @param {string[]} windowTitles - titles on the active GNOME workspace.
- * @returns {object} payload containing only agents backed by those windows.
+ * @param {object[]} windows - live Shell window descriptors.
+ * @returns {object} payload containing only agents backed by open windows.
  */
-function scopePayloadToWindowTitles(payload, windowTitles) {
+function scopePayloadToWindows(payload, windows) {
     const candidates = [];
     for (const provider of payload.providers) {
         const agents = Array.isArray(provider.agents) ? provider.agents : [];
@@ -215,21 +232,21 @@ function scopePayloadToWindowTitles(payload, windowTitles) {
             candidates.push({provider, agent});
     }
 
-    const selected = new Set();
-    for (const title of windowTitles) {
+    const selected = new Map();
+    for (const window of windows) {
         let best = null;
         let bestScore = 0;
         for (const candidate of candidates) {
             if (selected.has(candidate.agent))
                 continue;
-            const score = agentWindowMatchScore(candidate.agent, title);
+            const score = agentWindowMatchScore(candidate.agent, window.title);
             if (score > bestScore) {
                 best = candidate;
                 bestScore = score;
             }
         }
         if (best)
-            selected.add(best.agent);
+            selected.set(best.agent, window);
     }
 
     const providers = [];
@@ -237,7 +254,18 @@ function scopePayloadToWindowTitles(payload, windowTitles) {
     let totalRunning = 0;
     for (const provider of payload.providers) {
         const sourceAgents = Array.isArray(provider.agents) ? provider.agents : [];
-        const agents = sourceAgents.filter(agent => selected.has(agent));
+        const agents = sourceAgents
+            .filter(agent => selected.has(agent))
+            .map(agent => {
+                const match = selected.get(agent);
+                return {
+                    ...agent,
+                    workspace: match.workspace,
+                    current_workspace: match.current,
+                };
+            })
+            .sort((left, right) => compareWorkspaceEntries(
+                {provider, agent: left}, {provider, agent: right}));
         if (agents.length === 0)
             continue;
         const running = agents.filter(agent =>
@@ -337,19 +365,33 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._windowSignals.set(win, ids);
     }
 
-    /** Return titles of every open window located on the active workspace. */
-    _activeWorkspaceWindowTitles() {
+    /**
+     * Return every open window's title, actual workspace, and current marker.
+     *
+     * GNOME workspace indexes are zero-based; menu tags are one-based (W1,
+     * W2, ...). A sticky window is considered part of the current workspace
+     * because that is where it is presently visible.
+     */
+    _openWindowDescriptors() {
         const activeWorkspace = global.workspace_manager.get_active_workspace();
-        const windowTitles = [];
+        const activeWorkspaceNumber = activeWorkspace.index() + 1;
+        const windows = [];
         for (const actor of global.get_window_actors()) {
             const win = actor.meta_window;
-            if (!win || !win.located_on_workspace(activeWorkspace))
+            if (!win)
                 continue;
             const title = win.get_title();
-            if (title)
-                windowTitles.push(title);
+            if (!title)
+                continue;
+            const workspaceObject = win.get_workspace();
+            let workspace = workspaceObject ? workspaceObject.index() + 1 : 0;
+            const current = win.located_on_workspace(activeWorkspace);
+            if (current && typeof win.is_on_all_workspaces === 'function' &&
+                win.is_on_all_workspaces())
+                workspace = activeWorkspaceNumber;
+            windows.push({title, workspace, current});
         }
-        return windowTitles;
+        return windows;
     }
 
     /** Coalesce monitor event bursts (create/write/close) into one redraw. */
@@ -382,9 +424,9 @@ class AccModelStatusButton extends PanelMenu.Button {
     /** Re-read the payload and repaint the panel segments and the menu. */
     _refresh() {
         const published = readPayload(this._file);
-        const windowTitles = this._activeWorkspaceWindowTitles();
+        const windows = this._openWindowDescriptors();
         const payload = published
-            ? scopePayloadToWindowTitles(published, windowTitles)
+            ? scopePayloadToWindows(published, windows)
             : null;
         this._box.destroy_all_children();
         this.menu.removeAll();
@@ -414,7 +456,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         }));
         this._box.add_child(segment);
         this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-            payload ? 'No agent terminals on this workspace' : 'Agent Command Center not publishing',
+            payload ? 'No open agent terminals' : 'Agent Command Center not publishing',
             {reactive: false}));
     }
 
@@ -449,30 +491,39 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Build the drop-down: a heading per provider plus its agents.
+     * Build the drop-down: all open agents grouped in workspace order.
      *
      * @param {object} payload - normalized payload.
      * @param {boolean} stale - whether the payload is stale.
      */
     _renderMenu(payload, stale) {
+        const workspaceEntries = [];
         for (const provider of payload.providers) {
-            const label = typeof provider.label === 'string' ? provider.label : 'Unknown';
-            const running = Number(provider.running) || 0;
-            const live = Number(provider.live) || 0;
-            const heading = new PopupMenu.PopupMenuItem(
-                `${label} — ${running} running / ${live} live`, {reactive: false});
-            heading.label.add_style_class_name('ams-menu-heading');
-            this.menu.addMenuItem(heading);
-
             const agents = Array.isArray(provider.agents) ? provider.agents : [];
-            for (const agent of agents.slice(0, MAX_MENU_AGENTS))
-                this.menu.addMenuItem(this._agentMenuItem(agent));
-            if (agents.length > MAX_MENU_AGENTS) {
-                this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-                    `    … ${agents.length - MAX_MENU_AGENTS} more`, {reactive: false}));
-            }
-            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            for (const agent of agents)
+                workspaceEntries.push({provider, agent});
         }
+        workspaceEntries.sort(compareWorkspaceEntries);
+
+        let previousWorkspace = null;
+        for (const entry of workspaceEntries) {
+            const workspace = Number(entry.agent.workspace) || 0;
+            if (workspace !== previousWorkspace) {
+                if (previousWorkspace !== null)
+                    this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+                const current = Boolean(entry.agent.current_workspace);
+                const headingText = workspace > 0
+                    ? `Workspace ${workspace}${current ? ' — current' : ''}`
+                    : 'Workspace unknown';
+                const heading = new PopupMenu.PopupMenuItem(headingText, {reactive: false});
+                heading.label.add_style_class_name('ams-menu-heading');
+                this.menu.addMenuItem(heading);
+                previousWorkspace = workspace;
+            }
+            this.menu.addMenuItem(this._agentMenuItem(entry.agent, entry.provider));
+        }
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         const footer = stale
             ? `Stale — last update ${payload.updatedAt || 'unknown'}`
@@ -487,14 +538,17 @@ class AccModelStatusButton extends PanelMenu.Button {
      * agent's project lives on (omitted when unknown), then the phase in the
      * shared notes palette (DONE green, RUNNING yellow, STOPPED red …).
      *
-     * @param {object} agent - agent entry from the payload.
+     * @param {object} agent - agent entry enriched from its live window.
+     * @param {object} provider - provider metadata owning the agent.
      * @returns {PopupMenu.PopupBaseMenuItem} the non-reactive row.
      */
-    _agentMenuItem(agent) {
+    _agentMenuItem(agent, provider) {
         const item = new PopupMenu.PopupBaseMenuItem({
             reactive: false,
             can_focus: false,
         });
+        if (agent.current_workspace)
+            item.add_style_class_name('ams-current-workspace');
         const row = new St.BoxLayout({style_class: 'ams-agent-row'});
 
         const workspace = Number(agent.workspace) || 0;
@@ -505,6 +559,12 @@ class AccModelStatusButton extends PanelMenu.Button {
                 y_align: Clutter.ActorAlign.CENTER,
             }));
         }
+
+        row.add_child(new St.Label({
+            text: `${provider.label || provider.kind || 'Agent'}`,
+            style_class: 'ams-provider',
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
 
         const phase = String(agent.phase || 'UNKNOWN').trim().toUpperCase();
         const badge = new St.Label({

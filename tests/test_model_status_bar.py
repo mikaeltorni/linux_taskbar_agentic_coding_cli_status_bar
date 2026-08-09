@@ -104,23 +104,39 @@ def test_extension_uses_payload_without_external_polling():
         assert forbidden not in code, forbidden
 
 
-def test_extension_scopes_payload_to_open_windows_on_active_workspace():
-    """Only payload agents matched to live windows on this workspace render."""
+def test_extension_scopes_payload_to_open_windows_across_all_workspaces():
+    """Every open agent window renders with its actual GNOME workspace."""
     code = _code_only(EXTENSION_JS)
     for required in (
         "global.workspace_manager.get_active_workspace()",
         "global.get_window_actors()",
+        "win.get_workspace()",
         "win.located_on_workspace(activeWorkspace)",
         "win.get_title()",
-        "scopePayloadToWindowTitles(payload, windowTitles)",
+        "scopePayloadToWindows(payload, windows)",
+        "workspace: match.workspace",
+        "current_workspace: match.current",
     ):
         assert required in code, required
-    # Scoped counts must be recomputed, never copied from the all-workspace
-    # payload published by ACC.
+    # Counts cover matched open windows across every workspace and are never
+    # copied from ACC's payload of live/detached sessions.
     assert "live: agents.length" in code
     assert "const running = agents.filter(agent =>" in code
     assert "const attention = agents.filter(agent =>" in code
     assert "providers.push({...provider, agents, live: agents.length, running, attention})" in code
+
+
+def test_menu_is_workspace_sorted_and_marks_the_current_workspace():
+    code = _code_only(EXTENSION_JS)
+    assert "workspaceEntries.sort(compareWorkspaceEntries)" in code
+    assert "Workspace ${workspace}" in code
+    assert "current ? ' — current' : ''" in code
+    assert "ams-current-workspace" in code
+
+    css = (EXT_DIR / "stylesheet.css").read_text(encoding="utf-8")
+    current = re.search(r"\.ams-current-workspace\s*\{(.*?)\}", css, re.S)
+    assert current, "current workspace highlight style missing"
+    assert re.search(r"background-color:\s*rgba\([^;]+,\s*0\.35\)", current.group(1))
 
 
 def test_extension_refreshes_when_workspace_or_window_identity_changes():
@@ -183,10 +199,13 @@ def test_phase_palette_matches_the_notes_menu_colors():
 
 
 def test_agent_rows_carry_workspace_tag_and_colored_phase_badge():
-    row = re.search(r"    _agentMenuItem\(agent\) \{(.*?)\n    \}", EXTENSION_JS, re.S)
+    row = re.search(r"    _agentMenuItem\(agent, provider\) \{(.*?)\n    \}", EXTENSION_JS, re.S)
     assert row, "_agentMenuItem() not found"
     body = row.group(1)
-    # W<n> tag first, then the phase badge painted from the shared palette.
+    # W<n> tag first, then provider and phase metadata; current rows use the
+    # workspace highlight class declared in the stylesheet.
     assert "`W${workspace}`" in body
     assert body.index("ams-workspace") < body.index("ams-phase")
+    assert "ams-provider" in body
+    assert "ams-current-workspace" in body
     assert "phaseColor(phase)" in body
