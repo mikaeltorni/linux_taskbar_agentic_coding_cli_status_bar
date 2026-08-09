@@ -1,0 +1,120 @@
+"""Contract tests for the optional ACC model status bar extension.
+
+The extension (acc-model-status@local) is deployed by its own installer
+component, so three things must stay in lockstep:
+  * the copy list in lib/status_setup.sh and the files on disk (a missing icon
+    would install a bar with blank segments),
+  * the component manifest entry (opt-in, own section, real functions),
+  * the extension's rendering contract (payload-only, no polling of tmux).
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+EXT_DIR = REPO_ROOT / "acc-model-status@local"
+SETUP = (REPO_ROOT / "lib" / "status_setup.sh").read_text(encoding="utf-8")
+EXTENSION_JS = (EXT_DIR / "extension.js").read_text(encoding="utf-8")
+
+
+def _copy_list() -> list[str]:
+    """Parse the ACS_MODEL_STATUS_FILES array from lib/status_setup.sh."""
+    match = re.search(r"ACS_MODEL_STATUS_FILES=\((.*?)\n\)", SETUP, re.S)
+    assert match, "ACS_MODEL_STATUS_FILES array not found in lib/status_setup.sh"
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def _manifest_entry() -> list[str]:
+    """Return the model_status_bar manifest entry split into its fields."""
+    text = (REPO_ROOT / "installer" / "components.sh").read_text(encoding="utf-8")
+    match = re.search(r'^\s*"(model_status_bar\|[^"]+)"\s*$', text, re.M)
+    assert match, "model_status_bar entry missing from installer/components.sh"
+    return match.group(1).split("|")
+
+
+def test_copy_list_matches_extension_files():
+    on_disk = sorted(
+        str(p.relative_to(EXT_DIR))
+        for p in EXT_DIR.rglob("*")
+        if p.is_file()
+    )
+    assert sorted(_copy_list()) == on_disk
+
+
+def test_every_shipped_icon_is_a_symbolic_svg():
+    icons = [name for name in _copy_list() if name.startswith("icons/")]
+    assert len(icons) >= 5
+    for icon in icons:
+        assert re.fullmatch(r"icons/acc-provider-[a-z0-9]+-symbolic\.svg", icon), icon
+        assert "<svg" in (EXT_DIR / icon).read_text(encoding="utf-8")
+
+
+def test_generic_fallback_icon_is_shipped():
+    assert "icons/acc-provider-generic-symbolic.svg" in _copy_list()
+    assert "acc-provider-generic-symbolic" in EXTENSION_JS
+
+
+def test_component_is_optional_and_wired_to_real_functions():
+    fields = _manifest_entry()
+    component_id, _label, default, install_fn, detect_fn, uninstall_fn, section = fields[:7]
+
+    assert component_id == "model_status_bar"
+    assert default == "off", "the model status bar must stay opt-in"
+    assert section == "Taskbar extensions", "it is separate from the poller sections"
+    for func in (install_fn, detect_fn, uninstall_fn):
+        assert re.search(rf"^{re.escape(func)}\(\) \{{", SETUP, re.M), func
+
+
+def test_installer_exports_the_extension_source_and_uuid():
+    install_sh = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+    assert 'MODEL_STATUS_UUID="acc-model-status@local"' in install_sh
+    assert 'MODEL_STATUS_SRC="$SCRIPT_DIR/acc-model-status@local"' in install_sh
+    assert "MODEL_STATUS_UUID MODEL_STATUS_SRC" in install_sh
+
+
+def test_core_deploy_does_not_install_the_model_status_bar():
+    core = re.search(r"install_agentic_status_core\(\) \{(.*?)\n\}", SETUP, re.S)
+    assert core, "core deploy function not found"
+    assert "MODEL_STATUS" not in core.group(1)
+
+
+def test_metadata_declares_uuid_and_supported_shell_versions():
+    metadata = json.loads((EXT_DIR / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["uuid"] == "acc-model-status@local"
+    assert EXT_DIR.name == metadata["uuid"], "directory name must match the UUID"
+    assert "48" in metadata["shell-version"]
+
+
+def _code_only(text: str) -> str:
+    """Strip block and line comments so prose never satisfies a code assertion."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"^\s*//.*$", "", text, flags=re.M)
+
+
+def test_extension_only_renders_the_published_payload():
+    code = _code_only(EXTENSION_JS)
+    assert "model_status_bar.json" in code
+    assert "CODEX_AGENT_TRACKER_STATE_DIR" in code
+    # Rendering only: no subprocesses, no tmux scraping, no network.
+    for forbidden in ("spawn_", "Soup", "tmux", "subprocess"):
+        assert forbidden not in code, forbidden
+
+
+def test_extension_releases_timers_and_monitor_on_destroy():
+    destroy = re.search(r"    destroy\(\) \{(.*?)\n    \}", EXTENSION_JS, re.S)
+    assert destroy, "destroy() not found"
+    body = destroy.group(1)
+    assert body.count("GLib.source_remove") == 2
+    assert "this._monitor.cancel()" in body
+    assert "super.destroy()" in body
+
+
+def test_styles_used_by_the_extension_exist_in_the_stylesheet():
+    css = (EXT_DIR / "stylesheet.css").read_text(encoding="utf-8")
+    for style in ("ams-box", "ams-segment", "ams-count", "ams-active", "ams-idle",
+                  "ams-attention", "ams-empty", "ams-stale"):
+        assert f".{style}" in css, style
+        assert style in EXTENSION_JS, style

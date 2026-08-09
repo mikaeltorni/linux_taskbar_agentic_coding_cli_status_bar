@@ -1,0 +1,7 @@
+{
+  "uuid": "acc-model-status@local",
+  "name": "ACC Model Status",
+  "description": "Optional taskbar indicator showing one icon per agent provider (Claude, Codex, Grok, Qwen, …) with how many Agent Command Center agents are currently running.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1
+}

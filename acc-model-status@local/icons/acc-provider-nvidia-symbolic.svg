@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NVIDIA provider mark for acc-model-status@local. Symbolic: a single
+     monochrome path so GNOME Shell recolors it with the panel foreground. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <g fill="#2e3436">
+    <path d="M8 3.1c3.4 0 6.1 2 7.2 4.9-1.1 2.9-3.8 4.9-7.2 4.9S1.9 10.9.8 8C1.9 5.1 4.6 3.1 8 3.1Zm0 1.9A3 3 0 1 0 8 11 3 3 0 0 0 8 5Zm0 1.4A1.6 1.6 0 1 1 8 9.6 1.6 1.6 0 0 1 8 6.4Z"/>
+  </g>
+</svg>
