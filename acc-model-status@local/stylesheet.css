@@ -11,7 +11,8 @@
  *   ams-empty     placeholder shown when no agent terminals exist
  *   ams-stale     payload older than the freshness threshold
  *   ams-agent-row one agent line in the drop-down (project + phase + title)
- *   ams-current-workspace translucent highlight for rows visible right now
+ *   ams-workspace-block one heading plus all rows on the same workspace
+ *   ams-current-workspace-block continuous highlight for the active workspace
  *   ams-project-tag Phrase Automation's compact project label leading the row
  *   ams-provider  provider label within a workspace-grouped row
  *   ams-phase     the phase badge (inline color from the notes palette)
@@ -65,9 +66,12 @@
   spacing: 8px;
 }
 
-.ams-current-workspace {
-  background-color: rgba(25, 190, 180, 0.35);
+.ams-workspace-block {
   border-radius: 6px;
+}
+
+.ams-current-workspace-block {
+  background-color: rgba(25, 190, 180, 0.35);
 }
 
 .ams-project-tag {

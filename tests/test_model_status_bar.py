@@ -131,10 +131,13 @@ def test_menu_is_workspace_sorted_and_marks_the_current_workspace():
     assert "workspaceEntries.sort(compareWorkspaceEntries)" in code
     assert "Workspace ${workspace}" in code
     assert "current ? ' — current' : ''" in code
-    assert "ams-current-workspace" in code
+    assert "new PopupMenu.PopupMenuSection()" in code
+    assert "workspaceSection.addMenuItem(heading)" in code
+    assert "workspaceSection.addMenuItem(this._agentMenuItem" in code
+    assert "workspaceSection.actor.add_style_class_name('ams-current-workspace-block')" in code
 
     css = (EXT_DIR / "stylesheet.css").read_text(encoding="utf-8")
-    current = re.search(r"\.ams-current-workspace\s*\{(.*?)\}", css, re.S)
+    current = re.search(r"\.ams-current-workspace-block\s*\{(.*?)\}", css, re.S)
     assert current, "current workspace highlight style missing"
     assert re.search(r"background-color:\s*rgba\([^;]+,\s*0\.35\)", current.group(1))
 
@@ -210,5 +213,5 @@ def test_agent_rows_carry_project_tag_and_colored_phase_badge():
     assert "ams-workspace" not in body
     assert body.index("ams-project-tag") < body.index("ams-phase")
     assert "ams-provider" in body
-    assert "ams-current-workspace" in body
+    assert "ams-current-workspace-block" not in body
     assert "phaseColor(phase)" in body

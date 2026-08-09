@@ -163,12 +163,13 @@ icon per agent provider with the number of Agent Command Center agents of that
 provider that are **currently running in open terminal windows**, plus a menu
 listing those windows across every GNOME workspace. The menu is grouped in
 workspace-number order; each row starts with the compact project label from
-Phrase Automation's project catalog (for example `INS`), and rows on the active
-workspace have a translucent teal background. Switching workspaces, moving a
-terminal, opening or closing one, and changing its ACC-managed title updates
-the bar immediately. Detached tmux sessions remain in ACC but are not shown
-until their terminal window is opened. The extension is opt-in and unrelated
-to the rate-limit indicator or the CLI status line:
+Phrase Automation's project catalog (for example `INS`), and the active
+workspace's heading plus all of its rows share one continuous translucent teal
+block. Switching workspaces, moving a terminal, opening or closing one, and
+changing its ACC-managed title updates the bar immediately. Detached tmux
+sessions remain in ACC but are not shown until their terminal window is opened.
+The extension is opt-in and unrelated to the rate-limit indicator or the CLI
+status line:
 
 ```bash
 bash install.sh --select model_status_bar     # install just this component
