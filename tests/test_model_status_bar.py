@@ -46,7 +46,18 @@ def test_copy_list_matches_extension_files():
 
 def test_every_shipped_icon_is_a_symbolic_svg():
     icons = [name for name in _copy_list() if name.startswith("icons/")]
-    assert len(icons) >= 5
+    assert set(icons) == {
+        "icons/acc-provider-api-symbolic.svg",
+        "icons/acc-provider-claude-symbolic.svg",
+        "icons/acc-provider-cline-symbolic.svg",
+        "icons/acc-provider-codex-symbolic.svg",
+        "icons/acc-provider-generic-symbolic.svg",
+        "icons/acc-provider-grok-symbolic.svg",
+        "icons/acc-provider-nvidia-symbolic.svg",
+        "icons/acc-provider-opencode-symbolic.svg",
+        "icons/acc-provider-openrouter-symbolic.svg",
+        "icons/acc-provider-qwen-symbolic.svg",
+    }
     for icon in icons:
         assert re.fullmatch(r"icons/acc-provider-[a-z0-9]+-symbolic\.svg", icon), icon
         assert "<svg" in (EXT_DIR / icon).read_text(encoding="utf-8")
@@ -201,7 +212,7 @@ def test_phase_palette_matches_the_notes_menu_colors():
         assert palette.get(phase) == color, phase
 
 
-def test_agent_rows_carry_project_tag_and_colored_phase_badge():
+def test_agent_rows_carry_project_tag_provider_icon_and_colored_phase_badge():
     row = re.search(r"    _agentMenuItem\(agent, provider\) \{(.*?)\n    \}", EXTENSION_JS, re.S)
     assert row, "_agentMenuItem() not found"
     body = row.group(1)
@@ -212,6 +223,8 @@ def test_agent_rows_carry_project_tag_and_colored_phase_badge():
     assert "`W${workspace}`" not in body
     assert "ams-workspace" not in body
     assert body.index("ams-project-tag") < body.index("ams-phase")
-    assert "ams-provider" in body
+    assert "gicon: this._icon(provider.icon)" in body
+    assert "ams-menu-provider-icon" in body
+    assert "text: `${provider.label" not in body
     assert "ams-current-workspace-block" not in body
     assert "phaseColor(phase)" in body
