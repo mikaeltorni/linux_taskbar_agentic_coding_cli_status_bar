@@ -204,7 +204,9 @@ function resetCountdown(epoch, nowEpoch) {
  * with hyphen separators. Normal separators and the no-data dash are neutral.
  * The "%" sign is omitted to reduce clutter. A window whose reset moment has
  * already passed counts as replenished (see :func:`percentLeft`), so a stale
- * boot reading flips from a dead "0m"/reset clock back to its full value.
+ * boot reading flips from a dead "0m"/reset clock back to its full value. An
+ * errored snapshot is rendered as unknown instead of showing its carried
+ * percentages, because a subscription or account change can invalidate them.
  *
  * @param {string} tag - Short CLI tag.
  * @param {object} snapshot - One CLI entry from status.json.
@@ -215,6 +217,10 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
   const windows = snapshot?.windows ?? [];
   if (!windows.length)
     return `<span foreground="${NEUTRAL_COLOR}">${tag} –</span>`;
+  if (snapshot.error) {
+    const marker = snapshot.stale ? '?' : '!';
+    return `<span foreground="${NEUTRAL_COLOR}">${tag} –${marker}</span>`;
+  }
 
   const weekly = windows.find(w => w.label === 'week');
   if (weekly && percentLeft(weekly, nowEpoch) === 0) {
@@ -349,6 +355,11 @@ class AgenticCliStatusButton extends PanelMenu.Button {
     const resetCount = resetAvailabilityText(snapshot.resets_available);
     this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
       `${name}${plan}${resetCount}`, { reactive: false }));
+    if (snapshot.error) {
+      this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
+        `   ⚠ ${snapshot.error}`, { reactive: false }));
+      return;
+    }
     const nowEpoch = GLib.get_real_time() / 1000000;
     for (const window of snapshot.windows ?? []) {
       const left = percentLeft(window, nowEpoch);
@@ -362,10 +373,6 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         `<span foreground="${percentColor(left)}">${left}% left</span>` +
         GLib.markup_escape_text(reset, -1));
       this.menu.addMenuItem(item);
-    }
-    if (snapshot.error) {
-      this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-        `   ⚠ ${snapshot.error}`, { reactive: false }));
     }
   }
 });

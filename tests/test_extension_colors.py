@@ -88,6 +88,11 @@ const results = {
   color_2: percentColor(2),
   left_clamped: percentLeft({used_percent: 130}),
   dash: segmentMarkup('CX', {windows: []}),
+  errored_stale_segment: segmentMarkup('CC', {
+    error: 'HTTP 429', stale: true, windows: [
+      {label: '5h', used_percent: 40, resets_at: NOW + 3600},
+      {label: 'week', used_percent: 14, resets_at: NOW + 100000}]
+  }, NOW),
   segment: segmentMarkup('CC', {windows: [
     {used_percent: 0}, {used_percent: 99}, {used_percent: 100}]}),
   weekly_exhausted_grok: segmentMarkup('GK', {windows: [
@@ -196,6 +201,13 @@ def test_percent_left_is_clamped(js_results):
 
 def test_dash_uses_neutral_color(js_results):
     assert js_results["dash"] == '<span foreground="#9a9996">CX –</span>'
+
+
+def test_errored_snapshot_does_not_render_cached_percentages(js_results):
+    """An endpoint error must not present pre-error limits as current."""
+    assert js_results["errored_stale_segment"] == (
+        '<span foreground="#9a9996">CC –?</span>'
+    )
 
 
 def test_segment_colors_each_window_and_tag_follows_first_window(js_results):
