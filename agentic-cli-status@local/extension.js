@@ -351,7 +351,10 @@ class AgenticCliStatusButton extends PanelMenu.Button {
    * @returns {void}
    */
   _appendMenuSection(name, snapshot) {
-    const plan = snapshot.plan ? ` (${snapshot.plan})` : '';
+    // A carried plan can belong to the subscription state from before an
+    // endpoint error; do not present it as current while the reading is
+    // unknown.
+    const plan = snapshot.error ? '' : (snapshot.plan ? ` (${snapshot.plan})` : '');
     const resetCount = resetAvailabilityText(snapshot.resets_available);
     this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
       `${name}${plan}${resetCount}`, { reactive: false }));
