@@ -18,6 +18,10 @@
  *   ams-phase     the phase badge (inline color from the notes palette)
  *   ams-agent-title    the summarized agent title
  *   ams-agent-origin   project/branch the agent runs in (muted)
+ *   ams-ws-attn        flashing purple W<n>:<count> badge — that workspace has
+ *                      agents waiting on the user (panel and menu headings)
+ *   ams-ws-attn-current the badge points at the workspace you are already on
+ *   ams-ws-attn-dim    the faded half of the flash cycle
  */
 
 .ams-box {
@@ -93,4 +97,24 @@
 
 .ams-agent-origin {
   color: #9aa3b2;
+}
+
+/* Workspace attention badge: bright purple, flashed by a timer in extension.js
+   (GNOME's stylesheet parser has no keyframe animations, so the dim half of
+   the cycle is a class the extension toggles). */
+.ams-ws-attn {
+  font-weight: bold;
+  color: #ffffff;
+  background-color: #c061cb;
+  border-radius: 6px;
+  padding: 0 6px;
+  margin: 0 2px;
+}
+
+.ams-ws-attn-current {
+  background-color: #9141ac;
+}
+
+.ams-ws-attn-dim {
+  opacity: 0.35;
 }

@@ -45,6 +45,14 @@ const FALLBACK_ICON = 'acc-provider-generic-symbolic';
 const RUNNING_PHASES = new Set(['RUNNING']);
 const ATTENTION_PHASES = new Set(['WAITING', 'INTERRUPTED']);
 /**
+ * Phases meaning the agent is waiting on the user: it asked a question
+ * (ATTN/WAITING), its run was interrupted or stopped, or it finished its turn
+ * (DONE). These raise the per-workspace badges; RUNNING and DRAFT never do.
+ */
+const NEEDS_USER_PHASES = new Set(['ATTN', 'WAITING', 'INTERRUPTED', 'STOPPED', 'DONE']);
+/** Flash half-period of the per-workspace attention badges (milliseconds). */
+const FLASH_INTERVAL_MS = 650;
+/**
  * Agent phase palette — the SAME colors the phrase automation notes menu uses
  * for its agent badges (AGENT_PHASE_BADGE_COLORS in
  * src/overlay/notes_display.py). Keep the two in sync: a status looks the same
@@ -279,6 +287,46 @@ function scopePayloadToWindows(payload, windows) {
     return {...payload, providers, totalLive, totalRunning};
 }
 
+/**
+ * Count the agents waiting on the user, grouped by workspace.
+ *
+ * Drives the flashing `W<n>:<count>` badges in the panel and the matching
+ * badges in the drop-down's workspace headings, so the bar answers "where do
+ * I have to go?" without opening the menu.
+ *
+ * @param {object} payload - payload already scoped to live windows, so every
+ *     agent carries the `workspace`/`current_workspace` of its own window.
+ * @returns {Array<{workspace: number, count: number, current: boolean,
+ *     label: string}>} one entry per workspace with at least one waiting
+ *     agent, in ascending workspace order. Agents whose window could not be
+ *     resolved (workspace 0) are skipped — there is nowhere to switch to.
+ */
+function workspaceAttentionCounts(payload) {
+    const providers = Array.isArray(payload?.providers) ? payload.providers : [];
+    const byWorkspace = new Map();
+    for (const provider of providers) {
+        const agents = Array.isArray(provider.agents) ? provider.agents : [];
+        for (const agent of agents) {
+            const phase = String(agent.phase || '').trim().toUpperCase();
+            if (!NEEDS_USER_PHASES.has(phase))
+                continue;
+            const workspace = Number(agent.workspace) || 0;
+            if (workspace <= 0)
+                continue;
+            const entry = byWorkspace.get(workspace) ||
+                {workspace, count: 0, current: false, label: ''};
+            entry.count += 1;
+            entry.current = entry.current || Boolean(agent.current_workspace);
+            byWorkspace.set(workspace, entry);
+        }
+    }
+    const entries = [...byWorkspace.values()]
+        .sort((left, right) => left.workspace - right.workspace);
+    for (const entry of entries)
+        entry.label = `W${entry.workspace}:${entry.count}`;
+    return entries;
+}
+
 const AccModelStatusButton = GObject.registerClass(
 class AccModelStatusButton extends PanelMenu.Button {
     /**
@@ -293,6 +341,9 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._monitor = null;
         this._pollId = 0;
         this._refreshId = 0;
+        this._flashId = 0;
+        this._flashOn = true;
+        this._flashActors = [];
         this._shellSignals = [];
         this._windowSignals = new Map();
 
@@ -430,16 +481,84 @@ class AccModelStatusButton extends PanelMenu.Button {
             : null;
         this._box.destroy_all_children();
         this.menu.removeAll();
+        // Actors are re-collected on every repaint; never keep stale ones.
+        this._flashActors = [];
 
         if (!payload || payload.providers.length === 0) {
             this._renderEmpty(payload);
+            this._syncFlashTimer();
             return;
         }
 
         const stale = ageSeconds(payload.updatedAt) > STALE_SECONDS;
+        // Counted once and shared, so the bar and the drop-down never disagree.
+        const attention = workspaceAttentionCounts(payload);
         for (const provider of payload.providers)
             this._renderProvider(provider, stale);
-        this._renderMenu(payload, stale);
+        this._renderWorkspaceAttention(attention, stale);
+        this._renderMenu(payload, stale, attention);
+        this._syncFlashTimer();
+    }
+
+    /**
+     * Render the flashing per-workspace attention badges at the right end of
+     * the panel, e.g. `W4:1` when workspace 4 holds one agent that needs the
+     * user. Clicking the bar still opens the menu, which repeats the badges.
+     *
+     * @param {Array<object>} entries - result of {@link workspaceAttentionCounts}.
+     * @param {boolean} stale - whether the payload is stale (dims the badges).
+     */
+    _renderWorkspaceAttention(entries, stale) {
+        for (const entry of entries) {
+            const badge = new St.Label({
+                text: entry.label,
+                style_class: entry.current
+                    ? 'ams-ws-attn ams-ws-attn-current'
+                    : 'ams-ws-attn',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            if (stale)
+                badge.add_style_class_name('ams-stale');
+            this._box.add_child(badge);
+            this._flashActors.push(badge);
+        }
+    }
+
+    /**
+     * Start or stop the flash timer so it only ticks while badges exist.
+     *
+     * Badges alternate between full and dim opacity every
+     * {@link FLASH_INTERVAL_MS}; the timer is removed as soon as the last
+     * badge disappears so an idle panel costs nothing.
+     */
+    _syncFlashTimer() {
+        if (this._flashActors.length === 0) {
+            if (this._flashId) {
+                GLib.source_remove(this._flashId);
+                this._flashId = 0;
+            }
+            this._flashOn = true;
+            return;
+        }
+        // A fresh repaint must not inherit a half-faded state.
+        this._applyFlashState();
+        if (this._flashId)
+            return;
+        this._flashId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FLASH_INTERVAL_MS, () => {
+            this._flashOn = !this._flashOn;
+            this._applyFlashState();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    /** Push the current flash phase onto every live badge actor. */
+    _applyFlashState() {
+        for (const actor of this._flashActors) {
+            if (this._flashOn)
+                actor.remove_style_class_name('ams-ws-attn-dim');
+            else
+                actor.add_style_class_name('ams-ws-attn-dim');
+        }
     }
 
     /** Render the "no agent terminals" placeholder (payload absent or empty). */
@@ -495,8 +614,10 @@ class AccModelStatusButton extends PanelMenu.Button {
      *
      * @param {object} payload - normalized payload.
      * @param {boolean} stale - whether the payload is stale.
+     * @param {Array<object>} attention - per-workspace waiting counts from
+     *     {@link workspaceAttentionCounts}, repeated as badges in the headings.
      */
-    _renderMenu(payload, stale) {
+    _renderMenu(payload, stale, attention) {
         const workspaceEntries = [];
         for (const provider of payload.providers) {
             const agents = Array.isArray(provider.agents) ? provider.agents : [];
@@ -504,6 +625,9 @@ class AccModelStatusButton extends PanelMenu.Button {
                 workspaceEntries.push({provider, agent});
         }
         workspaceEntries.sort(compareWorkspaceEntries);
+        // Same counts the panel badges show, keyed for the workspace headings.
+        const attentionByWorkspace = new Map(
+            (attention || []).map(entry => [entry.workspace, entry]));
 
         let previousWorkspace = null;
         let workspaceSection = null;
@@ -518,6 +642,17 @@ class AccModelStatusButton extends PanelMenu.Button {
                     : 'Workspace unknown';
                 const heading = new PopupMenu.PopupMenuItem(headingText, {reactive: false});
                 heading.label.add_style_class_name('ams-menu-heading');
+                const waiting = attentionByWorkspace.get(workspace);
+                if (waiting) {
+                    // Mirror the flashing panel badge inside the drop-down.
+                    const badge = new St.Label({
+                        text: waiting.label,
+                        style_class: 'ams-ws-attn',
+                        y_align: Clutter.ActorAlign.CENTER,
+                    });
+                    heading.add_child(badge);
+                    this._flashActors.push(badge);
+                }
                 workspaceSection = new PopupMenu.PopupMenuSection();
                 workspaceSection.actor.add_style_class_name('ams-workspace-block');
                 if (current)
@@ -617,6 +752,11 @@ class AccModelStatusButton extends PanelMenu.Button {
             GLib.source_remove(this._pollId);
             this._pollId = 0;
         }
+        if (this._flashId) {
+            GLib.source_remove(this._flashId);
+            this._flashId = 0;
+        }
+        this._flashActors = [];
         if (this._monitor) {
             this._monitor.cancel();
             this._monitor = null;

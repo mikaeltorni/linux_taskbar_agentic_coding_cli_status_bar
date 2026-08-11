@@ -172,7 +172,8 @@ def test_extension_releases_timers_and_monitor_on_destroy():
     destroy = re.search(r"    destroy\(\) \{(.*?)\n    \}", EXTENSION_JS, re.S)
     assert destroy, "destroy() not found"
     body = destroy.group(1)
-    assert body.count("GLib.source_remove") == 2
+    # refresh tick, poll tick, and the attention-badge flash timer
+    assert body.count("GLib.source_remove") == 3
     assert "this._monitor.cancel()" in body
     assert "object.disconnect(id)" in body
     assert "win.disconnect(id)" in body
