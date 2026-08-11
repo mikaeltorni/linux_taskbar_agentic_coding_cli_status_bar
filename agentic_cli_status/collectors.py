@@ -413,7 +413,11 @@ def claude_user_agent(home: Path) -> str:
     """Return the ``claude-code/<version>`` User-Agent the endpoint expects.
 
     Reads the version from Claude Code's installation metadata when possible
-    (never spawns the CLI); falls back to a pinned version string.
+    (never spawns the CLI). Claude's native installer exposes the active
+    version through ``~/.local/bin/claude`` as a symlink to
+    ``~/.local/share/claude/versions/<version>``; follow that link before
+    falling back to a pinned version string so the usage endpoint recognizes
+    the installed client.
 
     Args:
         home: The user's home directory.
@@ -428,6 +432,15 @@ def claude_user_agent(home: Path) -> str:
                 return f"claude-code/{version}"
         except OSError:
             continue
+    try:
+        installed_binary = (home / ".local" / "bin" / "claude").resolve(
+            strict=True
+        )
+        version = installed_binary.name
+        if re.fullmatch(r"[0-9][0-9A-Za-z_.-]*", version):
+            return f"claude-code/{version}"
+    except OSError:
+        pass
     # Any real claude-code UA keeps us out of the anonymous 429 bucket.
     return f"claude-code/{CLAUDE_UA_FALLBACK_VERSION}"
 

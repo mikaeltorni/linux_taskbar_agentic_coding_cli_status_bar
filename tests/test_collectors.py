@@ -599,6 +599,18 @@ class TestCollectClaude:
 
         return opener
 
+    def test_user_agent_follows_installed_claude_symlink_version(self, sandbox_home):
+        """Installed Claude versions must not be reported as the old fallback."""
+        version = "2.1.226"
+        installed = sandbox_home / ".local" / "share" / "claude" / "versions"
+        installed.mkdir(parents=True)
+        (installed / version).write_bytes(b"fake Claude binary")
+        binary = sandbox_home / ".local" / "bin" / "claude"
+        binary.parent.mkdir(parents=True)
+        binary.symlink_to(installed / version)
+
+        assert collectors.claude_user_agent(sandbox_home) == f"claude-code/{version}"
+
     def test_fetches_windows_from_endpoint(self, sandbox_home):
         write_claude_credentials(sandbox_home)
         calls = []
