@@ -1,7 +1,7 @@
 # Linux Taskbar Agentic Coding CLI Status Bar Instructions
 
 This repository owns the `agentic-cli-status@local` GNOME Shell extension, the
-`agentic_cli_status` Python poller (headless rate-limit collectors for Codex,
+`agentic-cli-status` Rust poller (headless rate-limit collectors for Codex,
 Claude Code, Grok CLI, OpenCode Go, and OpenRouter plus the tmux debug console), and their installer
 integration. Keep agentic CLI rate-limit monitoring in this repo; the CLIs
 themselves are installed by `linux_codex_claude_code_setup`, and the in-TUI
@@ -28,7 +28,7 @@ configuration step, and migration to this repo's installer so a fresh checkout
 can reproduce the complete setup.
 
 Keep installation steps idempotent and verify the clean-install path for every
-change with tests (`python3 -m pytest tests/` and `bash tests/test_install.sh`)
+change with tests (`cargo test` and `bash tests/test_install.sh`)
 before committing.
 
 

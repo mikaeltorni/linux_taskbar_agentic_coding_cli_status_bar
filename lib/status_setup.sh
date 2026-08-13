@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # status_setup.sh - Install functions for the agentic CLI status bar.
 #
-# Defines the unconditional core deploy (Python poller package + GNOME Shell
+# Defines the unconditional core deploy (Rust poller binary + GNOME Shell
 # extension + default config) and every component function referenced by
 # installer/components.sh: per-CLI monitoring toggles with reconfigurable
 # source options, the polling rate, the tmux debug console, and the poller's
@@ -9,71 +9,30 @@
 # lands under the target user's home and uses run_as_target when invoked via
 # sudo from the master chain.
 
-# The deployment copy list for the Python package. tests/test_deploy_contract.py
-# asserts this list matches the files that actually exist in the package, so
-# an installed poller can never fail on a missing module.
-ACS_PACKAGE_FILES=(
-  "__init__.py"
-  "acs_logging.py"
-  "config.py"
-  "collectors.py"
-  "openrouter_client.py"
-  "tmux_console.py"
-  "poller.py"
-)
+# shellcheck source=acs_bin.sh
+source "$SCRIPT_DIR/lib/acs_bin.sh"
 
-ACS_APP_DIR_REL=".local/share/agentic-cli-status"
+ACS_BIN_INSTALL_REL=".local/bin/agentic-cli-status"
 ACS_SERVICE_NAME="agentic-cli-status.service"
 ACS_TMUX_SESSION="agentic-cli-status"
 
-# acs_app_dir - Echo the installed poller directory in the target home.
-acs_app_dir() {
-  printf '%s/%s\n' "$TARGET_HOME" "$ACS_APP_DIR_REL"
-}
-
-# acs_python_config - Run a short Python snippet against the installed
-# agentic_cli_status package (falling back to the repo checkout before the
-# core deploy has run) so config edits reuse the package's validation.
-# Arguments: $1 - Python code (receives the package on sys.path).
-acs_python_config() {
-  local code="$1" pythonpath
-  if [ -f "$(acs_app_dir)/agentic_cli_status/config.py" ]; then
-    pythonpath="$(acs_app_dir)"
-  else
-    pythonpath="$SCRIPT_DIR"
-  fi
-  run_as_target env PYTHONPATH="$pythonpath" python3 -c "$code"
+# acs_installed_bin - Echo the installed poller binary path in the target home.
+acs_installed_bin() {
+  printf '%s/%s\n' "$TARGET_HOME" "$ACS_BIN_INSTALL_REL"
 }
 
 # acs_config_set KEY_PATH VALUE_JSON - Set one dotted config key (e.g.
-# "clis.codex.enabled" true) through load_config/save_config so defaults and
-# validation always apply. Runs as the target user.
+# "clis.codex.enabled" true) through the Rust poller's validated config-set
+# subcommand. Runs as the target user.
 acs_config_set() {
   local key_path="$1" value_json="$2"
   acs_log INFO "config set $key_path=$value_json"
-  acs_python_config "
-import json
-from agentic_cli_status.config import load_config, save_config
-config = load_config()
-node = config
-keys = '$key_path'.split('.')
-for key in keys[:-1]:
-    node = node.setdefault(key, {})
-node[keys[-1]] = json.loads('$value_json')
-save_config(config)
-"
+  acs_bin config-set "$key_path" "$value_json"
 }
 
 # acs_config_get KEY_PATH - Print one dotted config key's effective value.
 acs_config_get() {
-  local key_path="$1"
-  acs_python_config "
-from agentic_cli_status.config import load_config
-node = load_config()
-for key in '$key_path'.split('.'):
-    node = node[key]
-print(node if not isinstance(node, bool) else str(node).lower())
-"
+  acs_bin config-get "$1"
 }
 
 # acs_systemctl_user ARGS... - Run systemctl --user for the target user with
@@ -88,27 +47,25 @@ acs_systemctl_user() {
 }
 
 # ---------------------------------------------------------------------------
-# Core deploy (always runs): poller package, extension, default config
+# Core deploy (always runs): poller binary, extension, default config
 # ---------------------------------------------------------------------------
 
-# install_agentic_status_core - Deploy the Python poller package and the GNOME
+# install_agentic_status_core - Deploy the Rust poller binary and the GNOME
 # Shell extension, and seed the default config when none exists. Idempotent:
 # re-running refreshes the installed copies without touching user settings.
 install_agentic_status_core() {
-  local app_dir pkg_dir file ext_dst
-  app_dir="$(acs_app_dir)"
-  pkg_dir="$app_dir/agentic_cli_status"
-  msg "Deploying agentic-cli-status poller to $app_dir"
-  run_as_target mkdir -p "$pkg_dir"
-  for file in "${ACS_PACKAGE_FILES[@]}"; do
-    if [ ! -f "$SCRIPT_DIR/agentic_cli_status/$file" ]; then
-      msg "Missing package file agentic_cli_status/$file; aborting deploy." >&2
-      return 1
-    fi
-    run_as_target cp "$SCRIPT_DIR/agentic_cli_status/$file" "$pkg_dir/$file"
-  done
-  run_as_target rm -rf "$pkg_dir/__pycache__"
-  run_as_target rm -f "$pkg_dir/openrouter_browser.py"
+  local dest ext_dst
+  dest="$(acs_installed_bin)"
+  ensure_acs_bin || {
+    msg "Could not build agentic-cli-status; aborting deploy." >&2
+    return 1
+  }
+  msg "Deploying agentic-cli-status poller to $dest"
+  run_as_target mkdir -p "$(dirname "$dest")"
+  run_as_target install -m 0755 "$ACS_BIN" "$dest"
+  # Drop the former Python package so a leftover copy cannot be mistaken for
+  # the poller after this Rust conversion.
+  run_as_target rm -rf "$TARGET_HOME/.local/share/agentic-cli-status/agentic_cli_status"
 
   ext_dst="$TARGET_HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
   msg "Deploying extension $EXTENSION_UUID"
@@ -118,11 +75,7 @@ install_agentic_status_core() {
 
   # Seed the default config only when absent so reinstalls never clobber the
   # user's tuned polling rate or per-CLI options.
-  acs_python_config "
-from agentic_cli_status.config import config_path, load_config, save_config
-if not config_path().exists():
-    save_config(load_config())
-"
+  acs_bin config-init
 
   if run_as_target env XDG_RUNTIME_DIR="$RUNTIME_DIR" \
       DBUS_SESSION_BUS_ADDRESS="$USER_BUS" DISPLAY="$DISPLAY_VAL" \
@@ -150,10 +103,10 @@ _acs_disable_cli() {
   msg "Disabled $1 rate-limit monitoring."
 }
 
-# _acs_detect_cli CLI_ID - Report installed when the poller package is deployed
+# _acs_detect_cli CLI_ID - Report installed when the poller binary is deployed
 # and the CLI is enabled in the config.
 _acs_detect_cli() {
-  [ -f "$(acs_app_dir)/agentic_cli_status/poller.py" ] || return 1
+  [ -x "$(acs_installed_bin)" ] || return 1
   [ "$(acs_config_get "clis.$1.enabled" 2>/dev/null)" = "true" ]
 }
 
@@ -263,25 +216,10 @@ acs_opencode_go_usage_config_path() {
 
 # acs_register_opencode_go_plugin - Add opencode-go-usage to opencode.json.
 acs_register_opencode_go_plugin() {
-  local config_path plugin
+  local config_path
   config_path="$(acs_opencode_config_path)"
-  plugin="opencode-go-usage"
   run_as_target mkdir -p "$(dirname "$config_path")"
-  acs_python_config "
-import json
-from pathlib import Path
-path = Path('$config_path')
-config = {}
-if path.exists():
-    try:
-        config = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        config = {}
-plugins = config.setdefault('plugin', [])
-if '$plugin' not in plugins:
-    plugins.append('$plugin')
-path.write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
-"
+  acs_bin register-opencode-plugin "$config_path"
   msg "Registered opencode-go-usage in $config_path (OpenCode installs it on next startup)."
 }
 
@@ -303,46 +241,12 @@ acs_opencode_go_cookie_help() {
 acs_write_opencode_go_config() {
   local config_path="$1" workspace="$2" cookie="$3"
   run_as_target mkdir -p "$(dirname "$config_path")"
-  run_as_target env ACS_OGC_WORKSPACE="$workspace" ACS_OGC_COOKIE="$cookie" \
-    python3 -c "
-import json, os
-from pathlib import Path
-path = Path('$config_path')
-existing = {}
-if path.exists():
-    try:
-        existing = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError):
-        existing = {}
-existing['workspaceId'] = os.environ['ACS_OGC_WORKSPACE']
-existing['authCookie'] = os.environ['ACS_OGC_COOKIE']
-existing.setdefault('refreshIntervalMinutes', 5)
-existing.setdefault('showAtSessionStart', True)
-path.write_text(json.dumps(existing, indent=2) + '\n', encoding='utf-8')
-path.chmod(0o600)
-"
+  acs_bin write-opencode-creds "$config_path" "$workspace" "$cookie"
 }
 
 # acs_opencode_go_config_valid - Return 0 when workspace + auth cookie are set.
 acs_opencode_go_config_valid() {
-  local config_path="$1"
-  run_as_target python3 -c "
-import json, sys
-from pathlib import Path
-path = Path('$config_path')
-if not path.is_file():
-    sys.exit(1)
-try:
-    data = json.loads(path.read_text(encoding='utf-8'))
-except (OSError, ValueError):
-    sys.exit(1)
-workspace = data.get('workspaceId') or ''
-cookie = data.get('authCookie') or ''
-if not workspace.startswith('wrk_'):
-    sys.exit(1)
-if cookie in ('', 'PASTE_YOUR_AUTH_COOKIE_HERE') or len(cookie) < 20:
-    sys.exit(1)
-" 2>/dev/null
+  acs_bin opencode-creds-valid "$1" 2>/dev/null
 }
 
 # acs_opencode_go_credential_status - One-line credential summary for the menu.
@@ -367,12 +271,7 @@ acs_configure_opencode_go_credentials() {
   config_path="$(acs_opencode_go_usage_config_path)"
   current=""
   if [ -f "$config_path" ]; then
-    current="$(run_as_target python3 -c "
-import json
-from pathlib import Path
-data = json.loads(Path('$config_path').read_text(encoding='utf-8'))
-print(data.get('workspaceId', ''))
-" 2>/dev/null || true)"
+    current="$(acs_bin opencode-workspace-id "$config_path" 2>/dev/null || true)"
   fi
   msg "Workspace ID: copy wrk_… from your browser URL:"
   msg "  https://opencode.ai/workspace/WORKSPACE_ID/go"
@@ -537,11 +436,7 @@ acs_openrouter_env_path() {
 
 # acs_openrouter_key_configured - Return 0 when a management API key is present.
 acs_openrouter_key_configured() {
-  acs_python_config "
-from agentic_cli_status.openrouter_client import management_api_key
-from pathlib import Path
-raise SystemExit(0 if management_api_key(Path('$TARGET_HOME')) else 1)
-" 2>/dev/null
+  acs_bin has-openrouter-key 2>/dev/null
 }
 
 # acs_write_openrouter_management_key - Persist OPENROUTER_MANAGEMENT_API_KEY.
@@ -871,8 +766,8 @@ acs_detect_startup_service() {
 # Agent Command Center monitor publishes; this repo ships no poller for it.
 
 # The deployment copy list for the model status bar extension. Every provider
-# icon must be listed: tests/test_model_status_bar.py asserts this array matches
-# the files on disk, so a new provider mark can never ship half-installed.
+# icon must be listed: tests/deploy.rs asserts this array matches the files
+# on disk, so a new provider mark can never ship half-installed.
 ACS_MODEL_STATUS_FILES=(
   "extension.js"
   "metadata.json"

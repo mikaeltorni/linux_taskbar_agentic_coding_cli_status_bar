@@ -17,6 +17,12 @@ CALL_LOG="$TMP_DIR/calls.log"
 PASS=0
 FAIL=0
 
+# Keep rustup cargo reachable even though BIN_DIR is prepended for mocks, and
+# pin the real toolchain dirs so HOME=sandbox does not hide rustup.
+export PATH="$HOME/.cargo/bin:$PATH"
+export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+
 # assert_file_exists: Assert that a path exists, updating PASS/FAIL counters.
 # Arguments: $1 - path to check, $2 - message printed on failure.
 assert_file_exists() {
@@ -46,11 +52,30 @@ assert_file_contains() {
 assert_not_contains() {
   local path="$1" needle="$2" message="$3"
   if grep -Fq "$needle" "$path" 2>/dev/null; then
-    FAIL=$((FAIL + 1))
-    echo "FAIL: $message"
+    FAIL=$((FAIL + 1)); echo "FAIL: $message"
   else
     PASS=$((PASS + 1))
   fi
+}
+
+# assert_eq: Assert two strings are equal.
+assert_eq() {
+  local got="$1" want="$2" message="$3"
+  if [ "$got" = "$want" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: $message (got '$got', want '$want')"
+  fi
+}
+
+# cfg_get KEY - Read one dotted config key from the sandbox via the installed
+# Rust poller, honoring the sandbox XDG paths.
+cfg_get() {
+  HOME="$TARGET_HOME" \
+    XDG_CONFIG_HOME="$TARGET_HOME/.config" \
+    XDG_STATE_HOME="$TARGET_HOME/.local/state" \
+    "$TARGET_HOME/.local/bin/agentic-cli-status" config-get "$1"
 }
 
 mkdir -p "$BIN_DIR" "$TARGET_HOME"
@@ -92,18 +117,31 @@ run_installer() {
     HOME="$TARGET_HOME" \
     XDG_CONFIG_HOME="$TARGET_HOME/.config" \
     XDG_STATE_HOME="$TARGET_HOME/.local/state" \
-    ACS_LOG_DIR="$TMP_DIR/pylogs" \
+    CARGO_HOME="$CARGO_HOME" \
+    RUSTUP_HOME="$RUSTUP_HOME" \
+    ACS_LOG_DIR="$TMP_DIR/logs" \
     bash "$REPO_ROOT/install.sh" "$@"
 }
 
 # --- Default install: core deploy + all default-on components -------------
 run_installer >"$TMP_DIR/install-1.out" 2>"$TMP_DIR/install-1.err" || {
-  FAIL=$((FAIL + 1)); echo "FAIL: default install exited non-zero"; }
+  FAIL=$((FAIL + 1)); echo "FAIL: default install exited non-zero"
+  echo "----- install stdout -----"; cat "$TMP_DIR/install-1.out"
+  echo "----- install stderr -----"; cat "$TMP_DIR/install-1.err"
+}
 
-APP_DIR="$TARGET_HOME/.local/share/agentic-cli-status"
-for module in __init__.py acs_logging.py config.py collectors.py openrouter_client.py tmux_console.py poller.py; do
-  assert_file_exists "$APP_DIR/agentic_cli_status/$module" "Should deploy $module"
-done
+ACS_BIN_PATH="$TARGET_HOME/.local/bin/agentic-cli-status"
+assert_file_exists "$ACS_BIN_PATH" "Should deploy the Rust poller binary"
+if [ -x "$ACS_BIN_PATH" ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1)); echo "FAIL: deployed poller should be executable"
+fi
+if [ -d "$TARGET_HOME/.local/share/agentic-cli-status/agentic_cli_status" ]; then
+  FAIL=$((FAIL + 1)); echo "FAIL: former Python package directory should be removed"
+else
+  PASS=$((PASS + 1))
+fi
 EXT_DIR="$TARGET_HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
 for asset in extension.js metadata.json stylesheet.css; do
   assert_file_exists "$EXT_DIR/$asset" "Should deploy extension $asset"
@@ -120,15 +158,11 @@ for cli in codex claude_code grok opencode_go openrouter; do
 done
 # A default install must enable every default-on CLI, including Claude Code;
 # the extension hides any CLI whose status entry has enabled=false.
-PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'CHECK' || { FAIL=$((FAIL + 1)); echo "FAIL: default install must enable all default-on CLIs"; }
-import json, sys
-config = json.load(open(sys.argv[1]))
-for cli in ("codex", "claude_code", "grok", "openrouter"):
-    assert config["clis"][cli]["enabled"] is True, cli
-# OpenCode Go is opt-in and must stay off after a default install.
-assert config["clis"]["opencode_go"]["enabled"] is False
-CHECK
-PASS=$((PASS + 1))
+for cli in codex claude_code grok openrouter; do
+  assert_eq "$(cfg_get "clis.$cli.enabled")" "true" "default install must enable $cli"
+done
+assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
+  "OpenCode Go is opt-in and must stay off after a default install"
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
 assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 5' \
   "Default polling rate should be 5 seconds"
@@ -141,12 +175,8 @@ assert_file_contains "$TMP_DIR/install-1.out" "seconds" \
 ACS_POLL_INTERVAL_SECONDS=7 run_installer --select polling_rate \
   >"$TMP_DIR/install-poll-rate.out" 2>"$TMP_DIR/install-poll-rate.err" || {
     FAIL=$((FAIL + 1)); echo "FAIL: polling-rate parameter install exited non-zero"; }
-PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: installer polling-rate parameter should persist"; }
-import json, sys
-config = json.load(open(sys.argv[1]))
-assert config["poll_interval_seconds"] == 7
-PY
-PASS=$((PASS + 1))
+assert_eq "$(cfg_get poll_interval_seconds)" "7" \
+  "installer polling-rate parameter should persist"
 
 # Restore the requested default for the remaining installer assertions.
 ACS_POLL_INTERVAL_SECONDS=5 run_installer --select polling_rate \
@@ -163,6 +193,9 @@ assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 5' \
 
 UNIT_FILE="$TARGET_HOME/.config/systemd/user/agentic-cli-status.service"
 assert_file_exists "$UNIT_FILE" "Should install the systemd user unit"
+assert_file_contains "$UNIT_FILE" "agentic-cli-status --daemon" \
+  "Unit should start the Rust poller"
+assert_not_contains "$UNIT_FILE" "python3" "Unit must not invoke Python"
 assert_file_contains "$CALL_LOG" "systemctl --user enable --now agentic-cli-status.service" \
   "Should enable the poller service"
 assert_file_contains "$CALL_LOG" "gnome-extensions enable $EXTENSION_UUID" \
@@ -183,14 +216,9 @@ fi
 # --- Uninstall of one CLI component flips only its config flag ------------
 run_installer --uninstall grok_monitor >"$TMP_DIR/uninstall.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --uninstall grok_monitor exited non-zero"; }
-PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: grok should be disabled, others untouched"; }
-import json, sys
-config = json.load(open(sys.argv[1]))
-assert config["clis"]["grok"]["enabled"] is False
-assert config["clis"]["codex"]["enabled"] is True
-assert config["clis"]["claude_code"]["enabled"] is True
-PY
-PASS=$((PASS + 1))
+assert_eq "$(cfg_get clis.grok.enabled)" "false" "grok should be disabled"
+assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
+assert_eq "$(cfg_get clis.claude_code.enabled)" "true" "claude_code should stay enabled"
 
 # --- OpenCode Go component registers the plugin and can be disabled alone ---
 run_installer --select opencode_go_monitor >"$TMP_DIR/install-og.out" 2>&1 || {
@@ -209,63 +237,41 @@ assert_file_contains "$REPO_ROOT/lib/status_setup.sh" "creds missing" \
   "Installer status should surface missing OpenCode Go credentials in the menu"
 run_installer --uninstall opencode_go_monitor >"$TMP_DIR/uninstall-og.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --uninstall opencode_go_monitor exited non-zero"; }
-PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: opencode_go should be disabled, others untouched"; }
-import json, sys
-config = json.load(open(sys.argv[1]))
-assert config["clis"]["opencode_go"]["enabled"] is False
-assert config["clis"]["grok"]["enabled"] is False
-assert config["clis"]["codex"]["enabled"] is True
-assert config["clis"]["claude_code"]["enabled"] is True
-PY
-PASS=$((PASS + 1))
+assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" "opencode_go should be disabled"
+assert_eq "$(cfg_get clis.grok.enabled)" "false" "grok should stay disabled"
+assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
+assert_eq "$(cfg_get clis.claude_code.enabled)" "true" "claude_code should stay enabled"
 
 # --- OpenRouter component enables openrouter and can be disabled alone ------
 run_installer --select openrouter_monitor >"$TMP_DIR/install-or.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --select openrouter_monitor exited non-zero"; }
-PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: openrouter should be enabled with defaults"; }
-import json, sys
-config = json.load(open(sys.argv[1]))
-or_cli = config["clis"]["openrouter"]
-assert or_cli["enabled"] is True
-assert or_cli["source"] == "headless"
-assert or_cli["model_slug"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
-assert or_cli["daily_limit"] == 1000
-PY
+assert_eq "$(cfg_get clis.openrouter.enabled)" "true" "openrouter should be enabled"
+assert_eq "$(cfg_get clis.openrouter.source)" "headless" "openrouter source is headless"
+assert_eq "$(cfg_get clis.openrouter.model_slug)" "nvidia/nemotron-3-ultra-550b-a55b:free" \
+  "openrouter default model slug"
+assert_eq "$(cfg_get clis.openrouter.daily_limit)" "1000" "openrouter default daily limit"
 run_installer --uninstall openrouter_monitor >"$TMP_DIR/uninstall-or.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --uninstall openrouter_monitor exited non-zero"; }
-PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: openrouter should be disabled, others untouched"; }
-import json, sys
-config = json.load(open(sys.argv[1]))
-assert config["clis"]["openrouter"]["enabled"] is False
-assert config["clis"]["opencode_go"]["enabled"] is False
-assert config["clis"]["codex"]["enabled"] is True
-PY
-PASS=$((PASS + 1))
+assert_eq "$(cfg_get clis.openrouter.enabled)" "false" "openrouter should be disabled"
+assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" "opencode_go should stay disabled"
+assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
 # --- A default install re-enables previously-uninstalled default-on CLIs ---
 # grok (and the other default-on CLIs) were just uninstalled above; a plain
 # default install must bring them back, or they would stay hidden from the
 # taskbar (the extension drops any cli with enabled=false).
 run_installer >"$TMP_DIR/reinstall.out" 2>&1 || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall exited non-zero"; }
-PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'CHECK' || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall must re-enable disabled default-on CLIs"; }
-import json, sys
-config = json.load(open(sys.argv[1]))
-for cli in ("codex", "claude_code", "grok", "openrouter"):
-    assert config["clis"][cli]["enabled"] is True, cli
-# A default install must NOT re-enable the opt-in OpenCode Go monitor.
-assert config["clis"]["opencode_go"]["enabled"] is False
-CHECK
-PASS=$((PASS + 1))
+for cli in codex claude_code grok openrouter; do
+  assert_eq "$(cfg_get "clis.$cli.enabled")" "true" "default reinstall must re-enable $cli"
+done
+assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
+  "A default install must NOT re-enable the opt-in OpenCode Go monitor"
 
 # --- claude_code_monitor remains selectable explicitly ----------------------
 run_installer --select claude_code_monitor >"$TMP_DIR/install-cc.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --select claude_code_monitor exited non-zero"; }
-PATH="$BIN_DIR:$PATH" python3 - "$CONFIG_FILE" <<'PY' || { FAIL=$((FAIL + 1)); echo "FAIL: --select claude_code_monitor should enable claude_code"; }
-import json, sys
-config = json.load(open(sys.argv[1]))
-assert config["clis"]["claude_code"]["enabled"] is True
-assert config["clis"]["codex"]["enabled"] is True
-PY
-PASS=$((PASS + 1))
+assert_eq "$(cfg_get clis.claude_code.enabled)" "true" \
+  "--select claude_code_monitor should enable claude_code"
+assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
 
 # --- --list-components must be side-effect free ----------------------------
 LIST_HOME="$TMP_DIR/list-home"
@@ -287,7 +293,7 @@ for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor ope
   assert_file_contains "$TMP_DIR/list.out" "$ID" "--list-components should list $ID"
 done
 assert_not_contains "$TMP_DIR/list.out" "cline" "--list-components must not offer cline"
-if [ -e "$LIST_HOME/.local/share/agentic-cli-status" ]; then
+if [ -e "$LIST_HOME/.local/share/agentic-cli-status" ] || [ -e "$LIST_HOME/.local/bin/agentic-cli-status" ]; then
   FAIL=$((FAIL + 1)); echo "FAIL: --list-components should not deploy the poller"
 else
   PASS=$((PASS + 1))

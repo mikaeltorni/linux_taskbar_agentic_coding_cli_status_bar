@@ -4,6 +4,15 @@ __pycache__/
 .pytest_cache/
 .env
 
+# Rust / Cargo
+/target/
+.cargo-container/
+**/*.rs.bk
+# Cargo.lock is committed for reproducible installer builds of this binary.
+
+# Build / packaging outputs
+dist/
+
 # BEGIN programming-prompts-cursor (managed by linux_programming_setup)
 # Managed copies from programming_prompts — do not ignore other .cursor/skills/*
 .cursor/skills/programming-prompts/

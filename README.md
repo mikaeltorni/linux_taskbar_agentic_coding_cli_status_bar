@@ -36,7 +36,7 @@ after their reset time, so an old pre-reset snapshot cannot mask current usage.
 
 Two cooperating parts, connected only by a JSON file:
 
-1. **Poller** (`agentic_cli_status` Python package, systemd user service
+1. **Poller** (`agentic-cli-status` Rust binary, systemd user service
    `agentic-cli-status.service`) collects each enabled CLI's rate limits on a
    configurable interval — expressed **in seconds**, default every 5 — and
    atomically writes `~/.local/state/agentic-cli-status/status.json`. Slow
@@ -108,7 +108,7 @@ bash install.sh --list-components # machine-readable component list (no deploy)
 
 No sudo needed: everything installs under `$HOME`. tmux itself is provided by
 `linux_installations_setup` in the master chain. The core deploy (poller
-package, extension, default config) always runs; the components are:
+binary, extension, default config) always runs; the components are:
 
 | Component | Default | What it controls |
 |---|---|---|
@@ -189,9 +189,8 @@ the payload stops being refreshed.
 
 ```bash
 systemctl --user status agentic-cli-status.service   # poller health
-python3 -m agentic_cli_status.poller --show          # print current status.json
-PYTHONPATH=~/.local/share/agentic-cli-status \
-  python3 -m agentic_cli_status.poller --once        # force one poll tick
+agentic-cli-status --show                            # print current status.json
+agentic-cli-status --once                            # force one poll tick
 journalctl --user -u agentic-cli-status.service      # poller logs (installed)
 ```
 
@@ -203,26 +202,30 @@ extension logs to the Shell journal
 ## Architecture
 
 ```
-agentic_cli_status/          Python poller package (deployed to ~/.local/share/agentic-cli-status)
-  acs_logging.py             Centralized environment-aware logging (repo .log/ vs journald)
-  config.py                  Config schema/defaults/validation (~/.config/agentic-cli-status/config.json)
-  collectors.py              Headless collectors (codex/claude_code/grok) + tmux pane parser
-  tmux_console.py            Debug console: session/window management, slash-command refresh
-  poller.py                  Aggregating tick loop; writes status.json atomically
+src/                         Rust poller crate (installed to ~/.local/bin/agentic-cli-status)
+  logging.rs                 Centralized environment-aware logging (repo .log/ vs journald)
+  config.rs                  Config schema/defaults/validation (~/.config/agentic-cli-status/config.json)
+  collectors/                Headless collectors (codex/claude_code/grok/opencode_go/openrouter) + tmux pane parser
+  tmux.rs                    Debug console: session/window management, slash-command refresh
+  poller.rs                  Aggregating tick loop; writes status.json atomically
+  installer_ops.rs           Installer config/credential helpers (config-get/set, OpenCode, OpenRouter)
+scripts/build_agentic_cli_status.sh  Release build into dist/agentic-cli-status
+lib/acs_bin.sh               Installer helper that builds and invokes the poller CLI
 agentic-cli-status@local/    GNOME Shell extension (file-monitor + poll-rate-paced timer + renderer only)
 acc-model-status@local/      Optional ACC model status bar extension (provider icons + running counts)
   icons/                     Symbolic provider marks (Claude, Codex, Grok, Qwen, … + generic fallback)
 installer/components.sh      Component manifest (shared installer framework)
 lib/status_setup.sh          Install functions (core deploy, per-CLI config, service, tmux)
 systemd/agentic-cli-status.service  User unit template (WantedBy=default.target)
-tests/                       pytest (collectors/config/poller/deploy contract) + installer test
+tests/                       cargo tests (collectors/config/poller/gjs/deploy) + installer test
 ```
 
 ## Testing
 
 ```bash
-python3 -m pytest tests/     # Python unit tests
+cargo test                   # Rust unit and integration tests
 bash tests/test_install.sh   # sandboxed installer behavior test (no sudo, no desktop changes)
+bash scripts/check.sh        # fmt, clippy, tests, shell syntax, installer test
 ```
 
 ## Troubleshooting
