@@ -80,10 +80,13 @@ fn write_line(level: &str, message: &str) {
     if let Some(path) = path {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
             let _ = file.write_all(line.as_bytes());
+            let _ = file.flush();
             return;
         }
     }
-    eprint!("{line}");
+    let mut stderr = std::io::stderr();
+    let _ = stderr.write_all(line.as_bytes());
+    let _ = stderr.flush();
 }
 
 /// Log an informational action-path message.

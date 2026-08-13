@@ -101,7 +101,7 @@ fn systemd_unit_starts_the_rust_binary() {
     let unit = read("systemd/agentic-cli-status.service");
     assert!(unit.contains("ExecStart=%h/.local/bin/agentic-cli-status --daemon"));
     assert!(unit.contains("EnvironmentFile=-%h/.config/agentic-cli-status/.env"));
-    assert!(unit.contains("WantedBy=default.target"));
+    assert!(unit.contains("StandardError=journal"));
     assert!(!unit.contains("python3"));
     assert!(!unit.contains("PYTHONPATH"));
 }

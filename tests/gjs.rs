@@ -328,6 +328,7 @@ fn systemd_unit_starts_the_rust_binary() {
     assert!(unit.contains("agentic-cli-status --daemon"));
     assert!(unit.contains("EnvironmentFile=-%h/.config/agentic-cli-status/.env"));
     assert!(unit.contains("WantedBy=default.target"));
+    assert!(unit.contains("StandardError=journal"));
     assert!(!unit.contains("python3"));
     assert!(!unit.contains("PYTHONPATH"));
 }
