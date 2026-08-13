@@ -112,8 +112,17 @@ pub fn error(message: impl AsRef<str>) {
     write_line("ERROR", message.as_ref());
 }
 
-/// Log a debug/trace detail. Avoid in hot poll ticks except on decisions.
+/// Log a debug/trace detail. File sink only — journald would record every
+/// five-second poll tick.
 pub fn debug(message: impl AsRef<str>) {
+    init_sink();
+    let has_file = {
+        let guard = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
+        guard.is_some()
+    };
+    if !has_file {
+        return;
+    }
     write_line("DEBUG", message.as_ref());
 }
 
