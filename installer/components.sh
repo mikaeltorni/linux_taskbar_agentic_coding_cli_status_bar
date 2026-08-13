@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # components.sh - Component manifest for linux_taskbar_agentic_coding_cli_status_bar.
 #
-# install.sh deploys the core unconditionally (Python poller package, GNOME
+# install.sh deploys the core unconditionally (Rust poller binary, GNOME
 # Shell taskbar extension, default config) so the indicator always works, then
 # routes the selectable behavior through component_main from the shared
 # component runtime. Each of the three monitored CLIs is its own component

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # install.sh - Install the agentic coding CLI rate-limit status bar.
 #
-# Deploys the Python poller package and the agentic-cli-status@local GNOME
-# Shell extension into the target user's home (root-optional; nothing needs
-# sudo), then routes the selectable behavior through the shared installer
-# component framework: per-CLI monitoring for Codex, Claude Code, and Grok
-# CLI (each with reconfigurable source/staleness options), the polling rate,
-# the background tmux debug console, and the login startup service. The
-# poller only reads data the CLIs already store locally (or their billing
-# metadata endpoint) and only ever types rate-limit slash commands into its
-# tmux console, so monitoring never consumes plan limits.
+# Deploys the Rust poller binary (`~/.local/bin/agentic-cli-status`) and the
+# agentic-cli-status@local GNOME Shell extension into the target user's home
+# (root-optional; nothing needs sudo), then routes the selectable behavior
+# through the shared installer component framework: per-CLI monitoring for
+# Codex, Claude Code, and Grok CLI (each with reconfigurable source/staleness
+# options), the polling rate, the background tmux debug console, and the login
+# startup service. The poller only reads data the CLIs already store locally
+# (or their billing metadata endpoint) and only ever types rate-limit slash
+# commands into its tmux console, so monitoring never consumes plan limits.
 #
 # Usage:
 #   bash install.sh                   # interactive component menu (TTY), else defaults

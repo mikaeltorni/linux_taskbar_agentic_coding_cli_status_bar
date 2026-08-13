@@ -9,8 +9,7 @@ Description=Agentic coding CLI rate-limit status poller
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env python3 -m agentic_cli_status.poller --daemon
-Environment=PYTHONPATH=%h/.local/share/agentic-cli-status
+ExecStart=%h/.local/bin/agentic-cli-status --daemon
 EnvironmentFile=-%h/.config/agentic-cli-status/.env
 Restart=on-failure
 RestartSec=30
