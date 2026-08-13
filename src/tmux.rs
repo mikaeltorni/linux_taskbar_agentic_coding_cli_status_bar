@@ -1,8 +1,9 @@
 //! Background tmux debug console for the agentic CLI status poller.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use regex::Regex;
@@ -110,6 +111,21 @@ fn window_env_args() -> Vec<String> {
     args
 }
 
+/// Log a missing CLI binary once per process so the five-second poll loop
+/// cannot flood journald.
+fn note_missing_cli(cli_id: &str) {
+    static MISSING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let mut seen = MISSING
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if seen.insert(cli_id.to_string()) {
+        logging::info(format!(
+            "cli {cli_id} not installed; skipping console window"
+        ));
+    }
+}
+
 /// Ensure the detached console session exists with one window per CLI.
 pub fn ensure_console(
     session: &str,
@@ -124,7 +140,7 @@ pub fn ensure_console(
     }
     let has = tmux.run(&["has-session".into(), "-t".into(), session.into()]);
     let mut have_session = has.0 == 0;
-    let mut existing = std::collections::HashSet::new();
+    let mut existing = HashSet::new();
     if have_session {
         let listed = tmux.run(&[
             "list-windows".into(),
@@ -145,9 +161,7 @@ pub fn ensure_console(
             continue;
         }
         let Some(binary) = resolve_cli_binary(cli_id, home) else {
-            logging::info(format!(
-                "cli {cli_id} not installed; skipping console window"
-            ));
+            note_missing_cli(cli_id);
             continue;
         };
         let mut env_args = window_env_args();

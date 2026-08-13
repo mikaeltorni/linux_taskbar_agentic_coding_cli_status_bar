@@ -1,8 +1,9 @@
 # Linux Taskbar Agentic Coding CLI Status Bar
 
 GNOME taskbar indicator that displays the current rate-limit / usage status of
-the major agentic coding CLIs — **Codex**, **Claude Code**, **Grok CLI**, and
-**OpenCode Go** (opt-in, off by default) — polled in the background **without consuming plan limits**. Cline is
+the major agentic coding CLIs — **Codex**, **Claude Code**, **Grok CLI**,
+**OpenRouter**, and **OpenCode Go** (opt-in, off by default) — polled in the
+background **without consuming plan limits**. Cline is
 deliberately not monitored: it has no `/usage`-style rate-limit surface yet.
 
 The top bar shows one compact colored segment per CLI with the percentage of
@@ -21,7 +22,7 @@ own the instant its countdown reaches zero. Reset clocks are rounded to the
 nearest minute to avoid endpoint timestamp jitter. Otherwise the CLI tag takes the
 color of its 5h window (Grok: its weekly window), dashes and separators stay
 neutral gray, and stale data is dimmed with a trailing `?` — e.g.
-`CX 43·57  CC 88·60·38  GK 12  OG 100·17·8`.
+`CX 43·57  CC 88·60·38  GK 12  OG 100·17·8  OR 58`.
 Claude's third value is its active model-scoped weekly limit (currently
 Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
@@ -64,6 +65,7 @@ timer; slower billing/network refreshes retain their independent safety limits.
 | Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h, weekly, and model-scoped weekly windows (including Fable) as `/usage`. Self-throttled to a configurable interval (60–3600 s, default 180) regardless of polling rate; 429 `Retry-After` lockouts are honored and the last good reading is kept on errors | `/usage` |
 | Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/unified.jsonl` (historically `*.log`) — `creditUsagePercent` + weekly period + tier. Post-reset records omit `creditUsagePercent` (no usage yet) and are read as 0% used. The billing log is authoritative over the tmux `/usage` pane (its `Weekly limit left` border freezes between refreshes); a newer `balance exhausted` 402 error record with no later billing fetch reports 0% left | `/usage` |
 | OpenCode Go | Headless scrape of the workspace `/go` page on `opencode.ai` (same embedded `rollingUsage`/`weeklyUsage`/`monthlyUsage` JSON as the [`opencode-go-usage`](https://npmx.dev/package/opencode-go-usage) plugin). Credentials from `OPENCODE_GO_WORKSPACE_ID`/`OPENCODE_GO_AUTH_COOKIE` or `~/.config/opencode/opencode-go-usage.json`. Self-throttled to ≥300 s | `/ogc-usage` |
+| OpenRouter | Management API `POST /api/v1/analytics/query` (read-only; not chat/completions). Daily window for the configured free-model slug (default `nvidia/nemotron-3-ultra-550b-a55b:free`, limit 1000). Key from `OPENROUTER_MANAGEMENT_API_KEY` or `~/.config/agentic-cli-status/.env`. Self-throttled to ≥60 s | — |
 
 None of these send a prompt or start a model turn, so **monitoring never
 consumes plan limits**: the Codex and Grok sources are files the CLIs already
@@ -106,9 +108,11 @@ bash install.sh --select a,b,c    # core + only the listed component ids
 bash install.sh --list-components # machine-readable component list (no deploy)
 ```
 
-No sudo needed: everything installs under `$HOME`. tmux itself is provided by
-`linux_installations_setup` in the master chain. The core deploy (poller
-binary, extension, default config) always runs; the components are:
+No sudo needed: everything installs under `$HOME`. Building the poller needs
+a Rust toolchain (`cargo` via rustup, or Docker/Podman with `rust:1-bookworm`).
+tmux itself is provided by `linux_installations_setup` in the master chain.
+The core deploy (poller binary to `~/.local/bin/agentic-cli-status`, extension,
+default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 
 | Component | Default | What it controls |
 |---|---|---|
@@ -116,9 +120,11 @@ binary, extension, default config) always runs; the components are:
 | `claude_code_monitor` | on | Claude Code monitoring; same options |
 | `grok_monitor` | on | Grok CLI monitoring; same options |
 | `opencode_go_monitor` | **off (opt-in)** | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
+| `openrouter_monitor` | on | OpenRouter free-model daily usage (OR segment); management API key via installer |
 | `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |
 | `tmux_console` | on | The background tmux debug console / refresher |
 | `startup_service` | on | Poller starts at login (`systemd --user`) and keeps running |
+| `model_status_bar` | **off (opt-in)** | Separate ACC model status bar extension (provider icons + running counts) |
 
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):
@@ -205,10 +211,13 @@ extension logs to the Shell journal
 src/                         Rust poller crate (installed to ~/.local/bin/agentic-cli-status)
   logging.rs                 Centralized environment-aware logging (repo .log/ vs journald)
   config.rs                  Config schema/defaults/validation (~/.config/agentic-cli-status/config.json)
+  http.rs                    HTTP opener used by Claude and OpenRouter collectors
+  snapshot.rs                Shared status-window JSON shape
   collectors/                Headless collectors (codex/claude_code/grok/opencode_go/openrouter) + tmux pane parser
   tmux.rs                    Debug console: session/window management, slash-command refresh
   poller.rs                  Aggregating tick loop; writes status.json atomically
   installer_ops.rs           Installer config/credential helpers (config-get/set, OpenCode, OpenRouter)
+  openrouter_client.rs       OpenRouter analytics query + management-key lookup
 scripts/build_agentic_cli_status.sh  Release build into dist/agentic-cli-status
 lib/acs_bin.sh               Installer helper that builds and invokes the poller CLI
 agentic-cli-status@local/    GNOME Shell extension (file-monitor + poll-rate-paced timer + renderer only)

@@ -63,9 +63,9 @@ install_agentic_status_core() {
   msg "Deploying agentic-cli-status poller to $dest"
   run_as_target mkdir -p "$(dirname "$dest")"
   run_as_target install -m 0755 "$ACS_BIN" "$dest"
-  # Drop the former Python package so a leftover copy cannot be mistaken for
-  # the poller after this Rust conversion.
+  # Drop leftover Python package/venv so they cannot be mistaken for the poller.
   run_as_target rm -rf "$TARGET_HOME/.local/share/agentic-cli-status/agentic_cli_status"
+  run_as_target rm -rf "$TARGET_HOME/.local/share/agentic-cli-status/venv"
 
   ext_dst="$TARGET_HOME/.local/share/gnome-shell/extensions/$EXTENSION_UUID"
   msg "Deploying extension $EXTENSION_UUID"

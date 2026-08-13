@@ -492,11 +492,7 @@ fn merge_cli_pane(
                 .unwrap_or(false)
             && pane_is_newer
         {
-            logging::info(format!(
-                "codex pane reading superseded rollout snapshot: {:?} -> {:?}",
-                snapshot.get("windows"),
-                pane_snapshot.get("windows")
-            ));
+            logging::debug("codex pane reading superseded rollout snapshot");
         }
         let mut pane_snapshot = pane_snapshot.clone();
         pane_snapshot["plan"] = snapshot
