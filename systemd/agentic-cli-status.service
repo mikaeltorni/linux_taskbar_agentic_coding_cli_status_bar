@@ -11,6 +11,8 @@ Description=Agentic coding CLI rate-limit status poller
 Type=simple
 ExecStart=%h/.local/bin/agentic-cli-status --daemon
 EnvironmentFile=-%h/.config/agentic-cli-status/.env
+StandardOutput=journal
+StandardError=journal
 Restart=on-failure
 RestartSec=30
 
