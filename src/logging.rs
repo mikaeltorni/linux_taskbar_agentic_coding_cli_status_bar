@@ -23,6 +23,9 @@ static LOG_FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
 static SINK_READY: Mutex<bool> = Mutex::new(false);
 
 /// Resolve the directory for the file sink, or `None` for stderr (journald).
+///
+/// A checkout is a directory that contains both `.git` and `Cargo.toml`, so an
+/// unrelated git repo at `$HOME` cannot steal the installed daemon's logs.
 fn log_dir() -> Option<PathBuf> {
     if let Ok(override_dir) = std::env::var("ACS_LOG_DIR") {
         if !override_dir.is_empty() {
@@ -38,10 +41,15 @@ fn log_dir() -> Option<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         starts.push(cwd);
     }
+    crate_log_dir(&starts)
+}
+
+/// Walk `starts` looking for this crate's checkout (`.git` + `Cargo.toml`).
+fn crate_log_dir(starts: &[PathBuf]) -> Option<PathBuf> {
     for start in starts {
-        let mut current = start;
+        let mut current = start.clone();
         for _ in 0..10 {
-            if current.join(".git").exists() {
+            if current.join(".git").exists() && current.join("Cargo.toml").exists() {
                 return Some(current.join(".log"));
             }
             if !current.pop() {
@@ -107,4 +115,31 @@ pub fn error(message: impl AsRef<str>) {
 /// Log a debug/trace detail. Avoid in hot poll ticks except on decisions.
 pub fn debug(message: impl AsRef<str>) {
     write_line("DEBUG", message.as_ref());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn home_git_repo_without_cargo_toml_is_not_a_checkout() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(home.join(".git")).unwrap();
+        let bin = home.join(".local").join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        assert_eq!(crate_log_dir(&[bin, home]), None);
+    }
+
+    #[test]
+    fn crate_checkout_logs_to_dot_log() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("repo");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        assert_eq!(crate_log_dir(&[src]), Some(root.join(".log")));
+    }
 }
