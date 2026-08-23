@@ -57,6 +57,12 @@ the installer's `polling_rate` row, or non-interactively with
 value drives every CLI scan, each status-file write, and the extension fallback
 timer; slower billing/network refreshes retain their independent safety limits.
 
+`polling_rate` is a settings row rather than an installed artifact, so it has no
+detect or uninstall step of its own: deselecting it simply means "leave the
+cadence alone", and the stored value lives in the poller's config, which the
+poller's own components remove. To go back to the default, set it explicitly:
+`ACS_POLL_INTERVAL_SECONDS=5 bash install.sh --select polling_rate`.
+
 ### Data sources (headless first — zero token cost)
 
 | CLI | Headless source | tmux slash command |
