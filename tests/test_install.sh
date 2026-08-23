@@ -112,9 +112,31 @@ EOF
 done
 chmod +x "$BIN_DIR"/*
 
+# isc_functions_dir - locate the shared framework checkout for the sandbox run.
+#   The sandbox HOME hides install.sh's usual ~/projects fallback, and the
+#   sibling directory only exists for the live checkout (not for a git
+#   worktree), so both layouts are probed here and handed over explicitly
+#   instead of letting the installer reach the network.
+isc_functions_dir() {
+  local candidate
+  for candidate in "${ISC_FUNCTIONS_DIR:-}" \
+                   "$REPO_ROOT/../linux_installation_scripts_functions" \
+                   "$REPO_ROOT/../../linux_installation_scripts_functions" \
+                   "$HOME/projects/linux_installation_scripts_functions"; do
+    [ -n "$candidate" ] || continue
+    if [ -f "$candidate/component_loader.sh" ]; then
+      (cd "$candidate" && pwd)
+      return 0
+    fi
+  done
+  return 1
+}
+ISC_FUNCTIONS_DIR_RESOLVED="$(isc_functions_dir || true)"
+
 run_installer() {
   PATH="$BIN_DIR:$PATH" SUDO_USER=mk DISPLAY=:99 \
     HOME="$TARGET_HOME" \
+    ISC_FUNCTIONS_DIR="$ISC_FUNCTIONS_DIR_RESOLVED" \
     XDG_CONFIG_HOME="$TARGET_HOME/.config" \
     XDG_STATE_HOME="$TARGET_HOME/.local/state" \
     CARGO_HOME="$CARGO_HOME" \
@@ -287,6 +309,7 @@ EOF
 chmod +x "$BIN_DIR/getent"
 PATH="$BIN_DIR:$PATH" SUDO_USER=mk DISPLAY=:99 HOME="$LIST_HOME" \
   XDG_CONFIG_HOME="$LIST_HOME/.config" XDG_STATE_HOME="$LIST_HOME/.local/state" \
+  ISC_FUNCTIONS_DIR="$ISC_FUNCTIONS_DIR_RESOLVED" \
   bash "$REPO_ROOT/install.sh" --list-components >"$TMP_DIR/list.out" 2>/dev/null || {
     FAIL=$((FAIL + 1)); echo "FAIL: --list-components exited non-zero"; }
 for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor openrouter_monitor polling_rate tmux_console startup_service; do
