@@ -269,7 +269,7 @@ run_installer --select openrouter_monitor >"$TMP_DIR/install-or.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --select openrouter_monitor exited non-zero"; }
 assert_eq "$(cfg_get clis.openrouter.enabled)" "true" "openrouter should be enabled"
 assert_eq "$(cfg_get clis.openrouter.source)" "headless" "openrouter source is headless"
-assert_eq "$(cfg_get clis.openrouter.model_slug)" "nvidia/nemotron-3-ultra-550b-a55b:free" \
+assert_eq "$(cfg_get clis.openrouter.model_slug)" "stealth/ox-alpha" \
   "openrouter default model slug"
 assert_eq "$(cfg_get clis.openrouter.daily_limit)" "1000" "openrouter default daily limit"
 run_installer --uninstall openrouter_monitor >"$TMP_DIR/uninstall-or.out" 2>&1 || {

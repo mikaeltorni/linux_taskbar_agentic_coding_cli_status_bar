@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(
             openrouter_requests_from_analytics(
                 &openrouter_analytics_fixture(),
-                "nvidia/nemotron-3-ultra-550b-a55b:free"
+                "stealth/ox-alpha"
             ),
             420
         );
@@ -261,10 +261,7 @@ mod tests {
         assert!(result.get("error").unwrap().is_null());
         assert_eq!(result["windows"][0]["used_percent"], json!(42.0));
         assert_eq!(result["windows"][0]["resets_at"], json!(1_783_555_200_i64));
-        assert_eq!(
-            result["plan"],
-            json!("nvidia/nemotron-3-ultra-550b-a55b:free")
-        );
+        assert_eq!(result["plan"], json!("stealth/ox-alpha"));
     }
 
     #[test]

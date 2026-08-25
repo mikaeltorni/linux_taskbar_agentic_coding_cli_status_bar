@@ -34,7 +34,7 @@ pub const MIN_OPENROUTER_FETCH_INTERVAL_SECONDS: i64 = 60;
 pub const OPENROUTER_DAILY_LIMIT_DEFAULT: i64 = 1000;
 pub const MIN_OPENROUTER_DAILY_LIMIT: i64 = 1;
 pub const MAX_OPENROUTER_DAILY_LIMIT: i64 = 100_000;
-pub const OPENROUTER_MODEL_SLUG_DEFAULT: &str = "nvidia/nemotron-3-ultra-550b-a55b:free";
+pub const OPENROUTER_MODEL_SLUG_DEFAULT: &str = "stealth/ox-alpha";
 
 const VALID_SOURCES: &[&str] = &["auto", "headless", "tmux"];
 
