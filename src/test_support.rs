@@ -28,8 +28,8 @@ pub const OPENCODE_GO_HTML_FIXTURE: &str = concat!(
 pub fn openrouter_analytics_fixture() -> Vec<Value> {
     vec![
         json!({
-            "model": "nvidia/nemotron-3-ultra-550b-a55b-20260604",
-            "variant": "free",
+            "model": "stealth/ox-alpha",
+            "variant": "standard",
             "request_count": "420",
         }),
         json!({
