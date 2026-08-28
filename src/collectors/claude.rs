@@ -162,7 +162,59 @@ fn unlock_fd(fd: i32) {
     }
 }
 
+/// Read and parse Claude Code's credentials document.
+///
+/// Parameters:
+///   creds_file: path to `~/.claude/.credentials.json`.
+///
+/// Returns the parsed document, or a human-readable error string.
+fn read_credentials(creds_file: &Path) -> Result<Value, String> {
+    let text =
+        fs::read_to_string(creds_file).map_err(|exc| format!("credentials unavailable: {exc}"))?;
+    serde_json::from_str(&text).map_err(|exc| format!("credentials unavailable: {exc}"))
+}
+
+/// Return the stored access token when it is present and not yet expired.
+///
+/// Expiry is judged against the wall clock (`now_epoch`), the same clock
+/// :func:`claude_access_token` uses, so both agree on whether the credentials
+/// file currently holds a usable token; the collector's injectable `now` only
+/// drives polling intervals and refresh-token lifetimes.
+///
+/// Parameters:
+///   oauth: the `claudeAiOauth` object from the credentials document.
+///
+/// Returns the usable access token, or None when it is missing or expired.
+fn fresh_access_token(oauth: &Value) -> Option<String> {
+    let token = oauth.get("accessToken").and_then(Value::as_str)?;
+    if token.is_empty() {
+        return None;
+    }
+    match oauth.get("expiresAt").and_then(Value::as_f64) {
+        Some(expires_at) if expires_at / 1000.0 < now_epoch() => None,
+        _ => Some(token.to_string()),
+    }
+}
+
 /// Refresh Claude Code's OAuth access token using the stored refresh token.
+///
+/// A still valid token is returned untouched. An *expired* token is refreshed
+/// even while Claude Code is running: sessions launched with a long-lived
+/// `CLAUDE_CODE_OAUTH_TOKEN` (Agent Command Center's token file) never rewrite
+/// `~/.claude/.credentials.json`, so nothing else would ever renew it and the
+/// usage tile would stay frozen forever. The refresh runs under the shared
+/// advisory lock, re-reads the credentials once the lock is held (so a token
+/// another writer just rotated in is used instead of a stale one), and writes
+/// the result back atomically.
+///
+/// Parameters:
+///   home: home directory holding `.claude/.credentials.json`.
+///   now: epoch seconds override for tests.
+///   opener: HTTP opener override for tests.
+///   is_running: predicate reporting whether Claude Code is running.
+///   lock_timeout: seconds to wait for the refresh lock.
+///
+/// Returns `(access token, subscription type, error message)`.
 pub fn claude_refresh_oauth_token(
     home: &Path,
     now: Option<f64>,
@@ -173,23 +225,76 @@ pub fn claude_refresh_oauth_token(
     let now = now.unwrap_or_else(now_epoch);
     let running = is_running.unwrap_or(&|| claude_is_running(Path::new("/proc")));
     let lock_timeout = lock_timeout.unwrap_or(CLAUDE_OAUTH_REFRESH_LOCK_TIMEOUT_SECONDS);
-    if running() {
-        return (None, None, Some("skipped: claude running".into()));
-    }
     let creds_file = home.join(".claude").join(".credentials.json");
-    let mut creds: Value = match fs::read_to_string(&creds_file) {
-        Ok(text) => match serde_json::from_str(&text) {
-            Ok(v) => v,
-            Err(exc) => return (None, None, Some(format!("credentials unavailable: {exc}"))),
-        },
-        Err(exc) => return (None, None, Some(format!("credentials unavailable: {exc}"))),
+    let mut creds: Value = match read_credentials(&creds_file) {
+        Ok(value) => value,
+        Err(error) => return (None, None, Some(error)),
     };
     let mut oauth = creds.get("claudeAiOauth").cloned().unwrap_or(json!({}));
+    if running() {
+        if let Some(token) = fresh_access_token(&oauth) {
+            logging::info("claude oauth token still valid; refresh skipped");
+            return (Some(token), oauth.get("subscriptionType").cloned(), None);
+        }
+    }
+    let default_opener = UreqOpener;
+    let opener: &dyn HttpOpener = opener.unwrap_or(&default_opener);
+    let lock_path = claude_refresh_lock_path(home);
+    let _ = fs::create_dir_all(lock_path.parent().unwrap_or(Path::new(".")));
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(&lock_path)
+        .ok();
+    if let Some(ref file) = lock_file {
+        let fd = file.as_raw_fd();
+        let deadline = Instant::now() + Duration::from_secs_f64(lock_timeout);
+        loop {
+            if try_flock_exclusive(fd) {
+                break;
+            }
+            if Instant::now() >= deadline {
+                logging::warn("claude oauth refresh lock timed out");
+                return (
+                    None,
+                    oauth.get("subscriptionType").cloned(),
+                    Some("refresh lock timed out".into()),
+                );
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // Whoever held the lock (or Claude Code itself) may have refreshed the
+        // credentials while we waited; re-read them so we never spend a refresh
+        // token that has already been rotated away.
+        if let Ok(latest) = read_credentials(&creds_file) {
+            let latest_oauth = latest.get("claudeAiOauth").cloned().unwrap_or(json!({}));
+            if let Some(token) = fresh_access_token(&latest_oauth) {
+                unlock_fd(fd);
+                logging::info("claude oauth token already refreshed by another writer");
+                return (
+                    Some(token),
+                    latest_oauth.get("subscriptionType").cloned(),
+                    None,
+                );
+            }
+            creds = latest;
+            oauth = latest_oauth;
+        }
+    } else {
+        logging::warn("claude oauth refresh lock unavailable");
+    }
     let Some(refresh_token) = oauth
         .get("refreshToken")
         .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
         .map(str::to_string)
     else {
+        if let Some(file) = lock_file.as_ref() {
+            unlock_fd(file.as_raw_fd());
+        }
         return (
             None,
             oauth.get("subscriptionType").cloned(),
@@ -198,6 +303,9 @@ pub fn claude_refresh_oauth_token(
     };
     if let Some(refresh_expires_at) = oauth.get("refreshTokenExpiresAt").and_then(Value::as_f64) {
         if refresh_expires_at / 1000.0 < now {
+            if let Some(file) = lock_file.as_ref() {
+                unlock_fd(file.as_raw_fd());
+            }
             return (
                 None,
                 oauth.get("subscriptionType").cloned(),
@@ -231,46 +339,7 @@ pub fn claude_refresh_oauth_token(
         body: Some(serde_json::to_vec(&body).unwrap_or_default()),
         timeout: Duration::from_secs(15),
     };
-    let default_opener = UreqOpener;
-    let opener: &dyn HttpOpener = opener.unwrap_or(&default_opener);
-    let lock_path = claude_refresh_lock_path(home);
-    let _ = fs::create_dir_all(lock_path.parent().unwrap_or(Path::new(".")));
-    let lock_file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .open(&lock_path)
-        .ok();
-    if let Some(ref file) = lock_file {
-        let fd = file.as_raw_fd();
-        let deadline = Instant::now() + Duration::from_secs_f64(lock_timeout);
-        loop {
-            if try_flock_exclusive(fd) {
-                break;
-            }
-            if Instant::now() >= deadline {
-                logging::warn("claude oauth refresh lock timed out");
-                return (
-                    None,
-                    oauth.get("subscriptionType").cloned(),
-                    Some("refresh lock timed out".into()),
-                );
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if running() {
-            unlock_fd(fd);
-            return (
-                None,
-                oauth.get("subscriptionType").cloned(),
-                Some("skipped: claude running".into()),
-            );
-        }
-    } else {
-        logging::warn("claude oauth refresh lock unavailable");
-    }
+    logging::info("claude oauth access token expired; refreshing");
     let result = opener.open(&request);
     let payload = match result {
         Ok(response) => match serde_json::from_str::<Value>(&response.text()) {
@@ -484,12 +553,10 @@ pub fn collect_claude(
             if let Some(refreshed) = refreshed {
                 token = Some(refreshed);
                 error = None;
-            } else if refresh_error.as_deref() != Some("skipped: claude running") {
-                if let Some(refresh_error) = &refresh_error {
-                    logging::info(format!(
-                        "claude oauth refresh not attempted: {refresh_error}"
-                    ));
-                }
+            } else if let Some(refresh_error) = &refresh_error {
+                logging::info(format!(
+                    "claude oauth refresh not attempted: {refresh_error}"
+                ));
             }
         }
         if token.is_none() {
@@ -926,12 +993,63 @@ mod tests {
     }
 
     #[test]
-    fn skips_refresh_while_claude_is_running() {
+    fn refreshes_expired_token_while_claude_is_running() {
+        // ACC-launched Claude sessions authenticate with a long-lived token and
+        // never rewrite .credentials.json, so the poller must refresh an expired
+        // token itself even while Claude Code is running.
         let sandbox = Sandbox::new();
         write_claude_credentials_full(
             &sandbox.home,
             "old",
             -1_000,
+            Some("refresh-1"),
+            86_400_000 * 30,
+            None,
+        );
+        struct RefreshThenUsage;
+        impl HttpOpener for RefreshThenUsage {
+            fn open(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                if request.url.contains("oauth/token") {
+                    return Ok(HttpResponse {
+                        status: 200,
+                        body: json!({"access_token": "new-token", "expires_in": 3600})
+                            .to_string()
+                            .into_bytes(),
+                        headers: HashMap::new(),
+                    });
+                }
+                Ok(HttpResponse {
+                    status: 200,
+                    body: usage_payload().to_string().into_bytes(),
+                    headers: HashMap::new(),
+                })
+            }
+        }
+        let result = collect_claude(
+            &sandbox.home,
+            None,
+            None,
+            Some(1.0),
+            Some(&RefreshThenUsage),
+            Some(&RefreshThenUsage),
+            Some(&|| true),
+        );
+        assert!(result.get("error").unwrap().is_null());
+        assert_eq!(result["windows"][0]["used_percent"], json!(12.0));
+        let creds: Value = serde_json::from_str(
+            &fs::read_to_string(sandbox.home.join(".claude").join(".credentials.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(creds["claudeAiOauth"]["accessToken"], json!("new-token"));
+    }
+
+    #[test]
+    fn keeps_valid_token_while_claude_is_running() {
+        let sandbox = Sandbox::new();
+        write_claude_credentials_full(
+            &sandbox.home,
+            "still-good",
+            3_600_000,
             Some("refresh-1"),
             86_400_000 * 30,
             None,
@@ -942,16 +1060,16 @@ mod tests {
                 panic!("should not call network");
             }
         }
-        let result = collect_claude(
+        let (token, subscription, error) = claude_refresh_oauth_token(
             &sandbox.home,
             None,
-            Some(1000.0),
-            Some(1.0),
-            Some(&Boom),
             Some(&Boom),
             Some(&|| true),
+            Some(1.0),
         );
-        assert_eq!(result["error"], json!("access token expired"));
+        assert_eq!(token.as_deref(), Some("still-good"));
+        assert_eq!(subscription, Some(json!("max")));
+        assert!(error.is_none());
     }
 
     #[test]
