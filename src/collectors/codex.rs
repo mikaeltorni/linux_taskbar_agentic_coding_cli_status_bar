@@ -1,12 +1,15 @@
 //! Codex collector: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
 use super::util::{now_epoch, tail_lines, to_epoch, to_percent, TAIL_READ_BYTES};
 use crate::logging;
-use crate::snapshot::{snapshot, Window};
+use crate::snapshot::{carry_last_reading, snapshot, Window};
+
+pub const CODEX_INSTANCES_FILE: &str = "codex-instances.json";
+pub const CODEX_TRACKER_STATE_DIR: &str = "codex-agent-tracker";
 
 pub const CODEX_SCAN_DAYS: usize = 7;
 pub const CODEX_SAME_RESET_TOLERANCE_SECONDS: i64 = 60;
@@ -40,15 +43,23 @@ pub fn codex_window_label(window_minutes: Option<f64>, key: &str) -> String {
 
 /// Collect Codex rate limits from the newest session rollout file.
 pub fn collect_codex(home: &Path, now: Option<f64>) -> Value {
+    collect_codex_at(&home.join(".codex"), now)
+}
+
+/// Collect Codex rate limits from one isolated `CODEX_HOME`.
+///
+/// `codex_home` is the Codex directory itself (for example `~/.codex` or
+/// `~/.codex-account-2`), not the user home.
+pub fn collect_codex_at(codex_home: &Path, now: Option<f64>) -> Value {
     let now = now.unwrap_or_else(now_epoch);
-    let sessions = home.join(".codex").join("sessions");
+    let sessions = codex_home.join("sessions");
     if !sessions.is_dir() {
         return snapshot(
             "codex_sessions",
             None,
             None,
             Vec::new(),
-            Some("no ~/.codex/sessions directory".into()),
+            Some(format!("no {}/sessions directory", codex_home.display())),
         );
     }
     let mut day_dirs: Vec<_> = walk_day_dirs(&sessions);
@@ -81,6 +92,152 @@ pub fn collect_codex(home: &Path, now: Option<f64>) -> Value {
         Vec::new(),
         Some("no rate_limits events found".into()),
     )
+}
+
+/// Return the ACC tracker state directory that owns `codex-instances.json`.
+///
+/// Matches Agent Command Center: `CODEX_AGENT_TRACKER_STATE_DIR`, then
+/// `AGENT_COMMAND_CENTER_STATE_DIR`, then `~/.local/state/codex-agent-tracker`.
+pub fn tracker_state_dir(home: &Path) -> PathBuf {
+    if let Ok(dir) = std::env::var("CODEX_AGENT_TRACKER_STATE_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    if let Ok(dir) = std::env::var("AGENT_COMMAND_CENTER_STATE_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join(CODEX_TRACKER_STATE_DIR);
+        }
+    }
+    home.join(".local")
+        .join("state")
+        .join(CODEX_TRACKER_STATE_DIR)
+}
+
+/// One ChatGPT Codex account instance from ACC's registry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodexAccountInstance {
+    pub id: i64,
+    pub home: PathBuf,
+    pub label: String,
+}
+
+/// Load extra ChatGPT Codex homes registered by Agent Command Center.
+///
+/// Missing or unreadable registries yield an empty list so the poller keeps
+/// the historical single-home `~/.codex` path.
+pub fn load_codex_account_instances(home: &Path) -> Vec<CodexAccountInstance> {
+    let path = tracker_state_dir(home).join(CODEX_INSTANCES_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(exc) if exc.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(exc) => {
+            logging::error(format!(
+                "cannot read ACC Codex instance registry {}: {exc}",
+                path.display()
+            ));
+            return Vec::new();
+        }
+    };
+    let parsed: Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(exc) => {
+            logging::error(format!(
+                "invalid ACC Codex instance registry {}: {exc}",
+                path.display()
+            ));
+            return Vec::new();
+        }
+    };
+    let Some(rows) = parsed.get("instances").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut instances = Vec::new();
+    for row in rows {
+        let Some(id) = row.get("id").and_then(Value::as_i64) else {
+            continue;
+        };
+        let Some(home_value) = row.get("home").and_then(Value::as_str) else {
+            continue;
+        };
+        if home_value.is_empty() {
+            continue;
+        }
+        let label = row
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        instances.push(CodexAccountInstance {
+            id,
+            home: PathBuf::from(home_value),
+            label,
+        });
+    }
+    instances.sort_by_key(|row| row.id);
+    instances
+}
+
+fn instance_snapshot(row: &CodexAccountInstance, collected: Value) -> Value {
+    json!({
+        "id": row.id,
+        "label": row.label,
+        "home": row.home.to_string_lossy(),
+        "source": collected.get("source").cloned().unwrap_or(Value::Null),
+        "observed_at": collected.get("observed_at").cloned().unwrap_or(Value::Null),
+        "plan": collected.get("plan").cloned().unwrap_or(Value::Null),
+        "windows": collected.get("windows").cloned().unwrap_or(json!([])),
+        "error": collected.get("error").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn last_instance_by_id(last: Option<&Value>, id: i64) -> Option<&Value> {
+    last.and_then(|snapshot| snapshot.get("instances"))
+        .and_then(Value::as_array)
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get("id").and_then(Value::as_i64) == Some(id))
+        })
+}
+
+/// Collect every ACC-registered ChatGPT Codex account independently.
+///
+/// A missing registry, or a registry with a single home, returns the same
+/// shape as [`collect_codex`] so existing consumers keep working. Two or
+/// more homes add an `instances` array; top-level `windows` stay those of
+/// instance 1.
+pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value>) -> Value {
+    let rows = load_codex_account_instances(home);
+    if rows.is_empty() {
+        return collect_codex(home, now);
+    }
+    if rows.len() == 1 {
+        return collect_codex_at(&rows[0].home, now);
+    }
+    logging::info(format!(
+        "collecting {} ACC Codex account instances",
+        rows.len()
+    ));
+    let mut collected_rows = Vec::new();
+    for row in &rows {
+        let mut snap = collect_codex_at(&row.home, now);
+        snap = carry_last_reading(snap, last_instance_by_id(last, row.id));
+        collected_rows.push(instance_snapshot(row, snap));
+    }
+    let mut combined = collected_rows[0].clone();
+    if let Some(map) = combined.as_object_mut() {
+        map.remove("id");
+        map.remove("label");
+        map.remove("home");
+    }
+    combined["instances"] = Value::Array(collected_rows);
+    combined
 }
 
 fn walk_day_dirs(sessions: &Path) -> Vec<std::path::PathBuf> {
@@ -463,7 +620,7 @@ mod tests {
         assert!(result["error"]
             .as_str()
             .unwrap()
-            .contains("no ~/.codex/sessions"));
+            .contains("sessions directory"));
     }
 
     #[test]
@@ -569,5 +726,151 @@ mod tests {
         assert_eq!(codex_window_label(Some(43200.0), "primary"), "month");
         assert_eq!(codex_window_label(None, "primary"), "5h");
         assert_eq!(codex_window_label(None, "secondary"), "week");
+    }
+
+    fn write_registry(home: &Path, instances: &Value) {
+        let dir = crate::collectors::codex::tracker_state_dir(home);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(crate::collectors::codex::CODEX_INSTANCES_FILE),
+            serde_json::to_string(&json!({"version": 1, "instances": instances})).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn write_rollout_at(codex_home: &Path, day: &str, name: &str, events: &[Value]) {
+        let day_dir = codex_home.join("sessions").join(day);
+        std::fs::create_dir_all(&day_dir).unwrap();
+        let mut text = String::new();
+        for event in events {
+            text.push_str(&serde_json::to_string(event).unwrap());
+            text.push('\n');
+        }
+        std::fs::write(day_dir.join(name), text).unwrap();
+    }
+
+    #[test]
+    fn missing_registry_collects_only_default_home() {
+        let sandbox = Sandbox::new();
+        write_codex_rollout(
+            &sandbox.home,
+            "2026/07/03",
+            "rollout-a.jsonl",
+            &[codex_token_count_event(57.0, 43.0)],
+        );
+        let result = collect_codex_accounts(&sandbox.home, None, None);
+        assert!(result.get("instances").is_none());
+        assert_eq!(result["windows"][0]["used_percent"], json!(57.0));
+    }
+
+    #[test]
+    fn tracker_state_dir_prefers_codex_agent_tracker_state_dir() {
+        let sandbox = Sandbox::new();
+        let custom = sandbox.home.join("custom-tracker");
+        unsafe {
+            std::env::set_var("CODEX_AGENT_TRACKER_STATE_DIR", &custom);
+        }
+        assert_eq!(tracker_state_dir(&sandbox.home), custom);
+    }
+
+    #[test]
+    fn tracker_state_dir_falls_back_to_agent_command_center_state_dir() {
+        let sandbox = Sandbox::new();
+        let custom = sandbox.home.join("acc-state");
+        unsafe {
+            std::env::set_var("AGENT_COMMAND_CENTER_STATE_DIR", &custom);
+        }
+        assert_eq!(tracker_state_dir(&sandbox.home), custom);
+    }
+
+    #[test]
+    fn two_registered_homes_are_collected_independently() {
+        let sandbox = Sandbox::new();
+        let primary = sandbox.home.join(".codex");
+        let extra = sandbox.home.join(".codex-account-2");
+        write_rollout_at(
+            &primary,
+            "2026/07/03",
+            "rollout-a.jsonl",
+            &[codex_token_count_event(57.0, 43.0)],
+        );
+        write_rollout_at(
+            &extra,
+            "2026/07/03",
+            "rollout-b.jsonl",
+            &[json!({
+                "timestamp": "2026-07-03T10:41:25.148Z",
+                "payload": {
+                    "rate_limits": {
+                        "primary": {
+                            "used_percent": 12.0,
+                            "window_minutes": 43200,
+                            "resets_at": 1784998206_i64,
+                        },
+                        "plan_type": "free",
+                    }
+                }
+            })],
+        );
+        write_registry(
+            &sandbox.home,
+            &json!([
+                {"id": 1, "home": primary.to_string_lossy(), "label": "", "builtin": true},
+                {"id": 2, "home": extra.to_string_lossy(), "label": "trial", "builtin": false},
+            ]),
+        );
+        let result = collect_codex_accounts(&sandbox.home, None, None);
+        assert_eq!(result["windows"][0]["used_percent"], json!(57.0));
+        assert_eq!(result["plan"], json!("plus"));
+        let instances = result["instances"].as_array().unwrap();
+        assert_eq!(instances.len(), 2);
+        assert_eq!(instances[0]["id"], json!(1));
+        assert_eq!(instances[0]["windows"][0]["used_percent"], json!(57.0));
+        assert_eq!(instances[1]["id"], json!(2));
+        assert_eq!(instances[1]["label"], json!("trial"));
+        assert_eq!(instances[1]["plan"], json!("free"));
+        assert_eq!(instances[1]["windows"][0]["label"], json!("month"));
+        assert_eq!(instances[1]["windows"][0]["used_percent"], json!(12.0));
+    }
+
+    #[test]
+    fn extra_instance_keeps_its_own_carried_reading() {
+        let sandbox = Sandbox::new();
+        let primary = sandbox.home.join(".codex");
+        let extra = sandbox.home.join(".codex-account-2");
+        write_rollout_at(
+            &primary,
+            "2026/07/03",
+            "rollout-a.jsonl",
+            &[codex_token_count_event(10.0, 5.0)],
+        );
+        write_registry(
+            &sandbox.home,
+            &json!([
+                {"id": 1, "home": primary.to_string_lossy(), "label": ""},
+                {"id": 2, "home": extra.to_string_lossy(), "label": "trial"},
+            ]),
+        );
+        let last = json!({
+            "instances": [
+                {"id": 1, "windows": [{"label": "5h", "used_percent": 1.0}]},
+                {
+                    "id": 2,
+                    "plan": "free",
+                    "windows": [{"label": "month", "used_percent": 33.0, "resets_at": 1}],
+                    "observed_at": 99.0,
+                },
+            ]
+        });
+        let result = collect_codex_accounts(&sandbox.home, None, Some(&last));
+        assert_eq!(
+            result["instances"][1]["windows"][0]["used_percent"],
+            json!(33.0)
+        );
+        assert_eq!(result["instances"][1]["plan"], json!("free"));
+        assert_eq!(
+            result["instances"][0]["windows"][0]["used_percent"],
+            json!(10.0)
+        );
     }
 }

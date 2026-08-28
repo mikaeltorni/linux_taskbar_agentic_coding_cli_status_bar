@@ -123,6 +123,8 @@ fn agentic_results() -> Option<Value> {
         "resetsText",
         "resetAvailabilityText",
         "segmentMarkup",
+        "codexBarMarkup",
+        "codexInstanceTitle",
     ];
     let mut snippets: Vec<String> = constants
         .iter()
@@ -208,6 +210,12 @@ fn gradient_and_segments() {
     assert_eq!(js["multiple_resets_available"], " — 2 resets available");
     assert_eq!(js["missing_resets_available"], "");
     assert_eq!(js["zero_resets_available"], "");
+    let two = js["two_codex_accounts"].as_str().unwrap();
+    assert!(two.contains(">CX <") || two.contains("CX "));
+    assert!(two.contains(" | "));
+    assert!(two.contains(">2 <") || two.contains("2 "));
+    assert_eq!(js["second_codex_title"], "Codex [2] trial");
+    assert_eq!(js["primary_codex_title"], "Codex [1]");
     let or_seg = js["openrouter_segment"].as_str().unwrap();
     assert!(or_seg.contains(">58<"));
     let og = js["opencode_go_segment"].as_str().unwrap();
