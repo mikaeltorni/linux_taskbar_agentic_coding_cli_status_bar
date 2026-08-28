@@ -12,7 +12,7 @@ pub mod pane;
 pub mod util;
 
 pub use claude::{claude_is_running, claude_user_agent, collect_claude};
-pub use codex::{codex_window_label, collect_codex};
+pub use codex::{codex_window_label, collect_codex, collect_codex_accounts};
 pub use grok::collect_grok;
 pub use opencode_go::collect_opencode_go;
 pub use openrouter::collect_openrouter;

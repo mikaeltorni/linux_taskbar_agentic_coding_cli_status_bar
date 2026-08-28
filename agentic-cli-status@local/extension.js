@@ -260,6 +260,42 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
 }
 
 /**
+ * Join independent Codex account segments with a gray pipe.
+ *
+ * Agent Command Center registers extra ChatGPT logins as isolated
+ * ``CODEX_HOME`` directories. Each account's windows stay independent; the
+ * first keeps the CX tag and later ones use their numeric id so the bar
+ * scales as instances are added: ``CX 43·57 | 2 12``.
+ *
+ * @param {string} tag - Short CLI tag for the primary account.
+ * @param {object} snapshot - Codex CLI entry from status.json.
+ * @param {number} [nowEpoch] - Current epoch seconds; injectable for tests.
+ * @returns {string} Combined segment markup.
+ */
+function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000) {
+  const instances = snapshot?.instances;
+  if (!Array.isArray(instances) || instances.length < 2)
+    return segmentMarkup(tag, snapshot, nowEpoch);
+  const sep = `<span foreground="${NEUTRAL_COLOR}"> | </span>`;
+  return instances.map((instance, index) => {
+    const instanceTag = index === 0 ? tag : String(instance?.id ?? index + 1);
+    return segmentMarkup(instanceTag, instance, nowEpoch);
+  }).join(sep);
+}
+
+/**
+ * Details-menu heading for one Codex account instance.
+ *
+ * @param {object} instance - One entry from snapshot.instances.
+ * @returns {string} Heading such as "Codex [2] trial".
+ */
+function codexInstanceTitle(instance) {
+  const id = instance?.id ?? '?';
+  const label = String(instance?.label ?? '').trim();
+  return label ? `Codex [${id}] ${label}` : `Codex [${id}]`;
+}
+
+/**
  * Format an epoch reset time for the details menu in the local timezone.
  *
  * @param {?number} epoch - Reset time in epoch seconds.
@@ -305,7 +341,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
    *   poller has not produced data yet.
    * @returns {void}
    */
-  render(status) {
+    render(status) {
     this.menu.removeAll();
     if (!status) {
       for (const [cliId, tag] of CLI_TAGS) {
@@ -333,10 +369,22 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         continue;
       }
       label.visible = true;
-      label.clutter_text.set_markup(segmentMarkup(tag, snapshot));
+      label.clutter_text.set_markup(
+        cliId === 'codex'
+          ? codexBarMarkup(tag, snapshot)
+          : segmentMarkup(tag, snapshot));
       label.style_class = snapshot.stale
         ? 'acs-segment acs-stale'
         : 'acs-segment';
+      if (cliId === 'codex' && Array.isArray(snapshot.instances) &&
+          snapshot.instances.length > 1) {
+        for (const instance of snapshot.instances) {
+          if (!this.menu.isEmpty())
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+          this._appendMenuSection(codexInstanceTitle(instance), instance);
+        }
+        continue;
+      }
       if (!this.menu.isEmpty())
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
       this._appendMenuSection(names[cliId], snapshot);

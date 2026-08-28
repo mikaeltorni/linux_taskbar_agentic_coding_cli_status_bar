@@ -79,6 +79,13 @@ impl Sandbox {
             std::env::var_os("OPENROUTER_MANAGEMENT_API_KEY"),
         );
         unsafe { std::env::remove_var("OPENROUTER_MANAGEMENT_API_KEY") };
+        for key in [
+            "CODEX_AGENT_TRACKER_STATE_DIR",
+            "AGENT_COMMAND_CENTER_STATE_DIR",
+        ] {
+            originals.insert(key.to_string(), std::env::var_os(key));
+            unsafe { std::env::remove_var(key) };
+        }
         Self {
             _lock: lock,
             _tmp: tmp,

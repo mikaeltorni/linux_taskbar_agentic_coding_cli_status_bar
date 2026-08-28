@@ -23,6 +23,12 @@ nearest minute to avoid endpoint timestamp jitter. Otherwise the CLI tag takes t
 color of its 5h window (Grok: its weekly window), dashes and separators stay
 neutral gray, and stale data is dimmed with a trailing `?` — e.g.
 `CX 43·57  CC 88·60·38  GK 12  OG 100·17·8  OR 58`.
+When Agent Command Center has extra ChatGPT logins (`acc ca instance create`),
+the Codex segment concatenates each account with a gray pipe, keeping the CX
+tag on the first home and the instance id on later homes:
+`CX 43·57 | 2 12`. A trial/free plan is just another instance; its month
+window is independent of the paid account's 5h/week windows. The click menu
+lists `Codex [1]` and `Codex [2] trial` as separate sections.
 Claude's third value is its active model-scoped weekly limit (currently
 Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
@@ -67,7 +73,7 @@ poller's own components remove. To go back to the default, set it explicitly:
 
 | CLI | Headless source | tmux slash command |
 |---|---|---|
-| Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` `token_count` events (`rate_limits.primary/secondary` labeled from `window_minutes`: Plus 5h + weekly, free/inactive short windows ~monthly; `used_percent`, `resets_at`, plan). Live `/status` supersedes rollouts when newer (so a monthly-only panel wins over stale weekly rollouts) | `/usage` for available resets, followed by `/status` for 5h/weekly and/or monthly limits |
+| Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` plus every extra home listed in Agent Command Center's `~/.local/state/codex-agent-tracker/codex-instances.json` (each `CODEX_HOME` independently; trial/free plans are just another instance). `token_count` events (`rate_limits.primary/secondary` labeled from `window_minutes`: Plus 5h + weekly, free/inactive short windows ~monthly; `used_percent`, `resets_at`, plan). Live `/status` supersedes rollouts when newer (so a monthly-only panel wins over stale weekly rollouts) | `/usage` for available resets, followed by `/status` for 5h/weekly and/or monthly limits |
 | Claude Code | OAuth usage endpoint (`api.anthropic.com/api/oauth/usage`) called with Claude Code's own stored credentials; returns the same 5h, weekly, and model-scoped weekly windows (including Fable) as `/usage`. Self-throttled to a configurable interval (60–3600 s, default 180) regardless of polling rate; 429 `Retry-After` lockouts are honored and the last good reading is kept on errors. An expired access token is refreshed from the stored refresh token — under an advisory lock, re-reading the credentials once held and writing them back atomically — even while Claude Code is running, because sessions launched with a long-lived `CLAUDE_CODE_OAUTH_TOKEN` never renew `~/.claude/.credentials.json` themselves | `/usage` |
 | Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/unified.jsonl` (historically `*.log`) — `creditUsagePercent` + weekly period + tier. Post-reset records omit `creditUsagePercent` (no usage yet) and are read as 0% used. The billing log is authoritative over the tmux `/usage` pane (its `Weekly limit left` border freezes between refreshes); a newer `balance exhausted` 402 error record with no later billing fetch reports 0% left | `/usage` |
 | OpenCode Go | Headless scrape of the workspace `/go` page on `opencode.ai` (same embedded `rollingUsage`/`weeklyUsage`/`monthlyUsage` JSON as the [`opencode-go-usage`](https://npmx.dev/package/opencode-go-usage) plugin). Credentials from `OPENCODE_GO_WORKSPACE_ID`/`OPENCODE_GO_AUTH_COOKIE` or `~/.config/opencode/opencode-go-usage.json`. Self-throttled to ≥300 s | `/ogc-usage` |

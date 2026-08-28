@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
-    collect_claude, collect_codex, collect_grok, collect_opencode_go, collect_openrouter,
+    collect_claude, collect_codex_accounts, collect_grok, collect_opencode_go, collect_openrouter,
     parse_pane,
 };
 use crate::config::{load_config, slash_command, state_dir, CLI_IDS};
@@ -293,7 +293,7 @@ fn collect_headless(
     hooks: &PollHooks,
 ) -> Value {
     match cli_id {
-        "codex" => collect_codex(home, Some(now)),
+        "codex" => collect_codex_accounts(home, Some(now), last),
         "claude_code" => collect_claude(
             home,
             last,
@@ -660,6 +660,34 @@ fn collect_cli(
         }
     }
     snapshot["stale"] = json!(is_stale(&snapshot, stale_after, now));
+    if cli_id == "codex" {
+        snapshot = sync_codex_primary_instance(snapshot);
+    }
+    snapshot
+}
+
+/// Copy pane-merged primary fields onto `instances[0]` so extra accounts stay independent.
+fn sync_codex_primary_instance(mut snapshot: Value) -> Value {
+    let Some(Value::Array(mut rows)) = snapshot.get("instances").cloned() else {
+        return snapshot;
+    };
+    if let Some(primary) = rows.first_mut() {
+        for key in [
+            "windows",
+            "plan",
+            "observed_at",
+            "error",
+            "source",
+            "resets_available",
+            "resets_checked_at",
+            "stale",
+        ] {
+            if let Some(value) = snapshot.get(key) {
+                primary[key] = value.clone();
+            }
+        }
+    }
+    snapshot["instances"] = Value::Array(rows);
     snapshot
 }
 
