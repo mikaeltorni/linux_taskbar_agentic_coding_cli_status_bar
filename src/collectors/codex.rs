@@ -147,6 +147,15 @@ pub fn load_codex_account_registry(home: &Path) -> (Vec<CodexAccountInstance>, i
     (instances, selected)
 }
 
+/// Return the ACC-selected Codex home, or ``~/.codex`` when none is registered.
+pub fn selected_codex_home(user_home: &Path) -> PathBuf {
+    let (rows, selected) = load_codex_account_registry(user_home);
+    rows.iter()
+        .find(|row| row.id == selected)
+        .map(|row| row.home.clone())
+        .unwrap_or_else(|| user_home.join(".codex"))
+}
+
 /// Load extra ChatGPT Codex homes registered by Agent Command Center.
 ///
 /// Missing or unreadable registries yield an empty list so the poller keeps
@@ -870,6 +879,7 @@ mod tests {
         assert_eq!(instances[1]["plan"], json!("free"));
         assert_eq!(instances[1]["windows"][0]["label"], json!("month"));
         assert_eq!(instances[1]["windows"][0]["used_percent"], json!(12.0));
+        assert_eq!(selected_codex_home(&sandbox.home), extra);
     }
 
     #[test]
