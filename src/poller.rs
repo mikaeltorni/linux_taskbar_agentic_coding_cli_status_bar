@@ -12,15 +12,15 @@ use serde_json::{json, Value};
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
     collect_claude, collect_codex_accounts, collect_grok, collect_opencode_go, collect_openrouter,
-    parse_pane,
+    parse_pane, selected_codex_home,
 };
 use crate::config::{load_config, slash_command, state_dir, CLI_IDS};
 use crate::http::HttpOpener;
 use crate::logging;
 use crate::snapshot::carry_last_reading;
 use crate::tmux::{
-    ensure_console, real_sleep, refresh_and_capture, tmux_available, tmux_console_cli_ids,
-    RealTmux, TmuxRunner,
+    ensure_console, real_sleep, refresh_and_capture, take_codex_console_refresh, tmux_available,
+    tmux_console_cli_ids, RealTmux, TmuxRunner,
 };
 
 pub const STATUS_FILE_NAME: &str = "status.json";
@@ -577,6 +577,14 @@ fn collect_cli(
     }
     let headless_snapshot = snapshot.clone();
     let mut last_tmux_attempt = last.and_then(|l| l.get("tmux_attempt_at").and_then(Value::as_f64));
+    let force_codex_refresh = cli_id == "codex" && take_codex_console_refresh();
+    if force_codex_refresh {
+        let stale_pane = state_dir(Some(home)).join(PANE_DIR_NAME).join("codex.txt");
+        if stale_pane.is_file() {
+            let _ = fs::remove_file(&stale_pane);
+            logging::info("dropped stale Codex pane capture after console login change");
+        }
+    }
     let tmux_wanted = slash_command(cli_id).is_some()
         && tmux_config
             .get("enabled")
@@ -586,9 +594,10 @@ fn collect_cli(
         && (source_mode == "tmux"
             || is_stale(&snapshot, stale_after, now)
             || (cli_id == "codex" && source_mode == "auto"))
-        && last_tmux_attempt
-            .map(|prev| now - prev >= TMUX_REFRESH_MIN_INTERVAL_SECONDS)
-            .unwrap_or(true);
+        && (force_codex_refresh
+            || last_tmux_attempt
+                .map(|prev| now - prev >= TMUX_REFRESH_MIN_INTERVAL_SECONDS)
+                .unwrap_or(true));
     let mut endpoint_marks = json!({});
     for key in ["checked_at", "retry_after_until"] {
         if let Some(value) = snapshot.get(key) {
@@ -975,10 +984,25 @@ pub fn poll_once(
             .as_str()
             .unwrap_or("agentic-cli-status");
         let available = hooks.tmux_available.unwrap_or_else(tmux_available);
+        let desired_codex_home = selected_codex_home(home);
         if let Some(tmux) = &hooks.tmux {
-            ensure_console(session, &console_clis, home, tmux.as_ref(), available);
+            ensure_console(
+                session,
+                &console_clis,
+                home,
+                tmux.as_ref(),
+                available,
+                Some(desired_codex_home.as_path()),
+            );
         } else {
-            ensure_console(session, &console_clis, home, &RealTmux, available);
+            ensure_console(
+                session,
+                &console_clis,
+                home,
+                &RealTmux,
+                available,
+                Some(desired_codex_home.as_path()),
+            );
         }
     }
     let previous_clis = previous
