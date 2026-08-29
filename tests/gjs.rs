@@ -123,6 +123,7 @@ fn agentic_results() -> Option<Value> {
         "resetsText",
         "resetAvailabilityText",
         "segmentMarkup",
+        "selectedCodexInstance",
         "codexBarMarkup",
         "codexInstanceTitle",
     ];
@@ -211,9 +212,12 @@ fn gradient_and_segments() {
     assert_eq!(js["missing_resets_available"], "");
     assert_eq!(js["zero_resets_available"], "");
     let two = js["two_codex_accounts"].as_str().unwrap();
-    assert!(two.contains("CX1"));
     assert!(two.contains("CX2"));
-    assert!(two.contains(" | "));
+    assert!(!two.contains("CX1"));
+    assert!(!two.contains(" | "));
+    let first = js["first_codex_account"].as_str().unwrap();
+    assert!(first.contains("CX1"));
+    assert!(!first.contains("CX2"));
     assert_eq!(js["second_codex_title"], "Codex [2] trial *");
     assert_eq!(js["primary_codex_title"], "Codex [1]");
     let or_seg = js["openrouter_segment"].as_str().unwrap();
