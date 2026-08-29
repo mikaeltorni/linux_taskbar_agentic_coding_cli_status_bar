@@ -631,29 +631,61 @@ fn collect_cli(
             .unwrap_or(true)
         && (source_mode == "auto" || source_mode == "tmux")
     {
+        let session = tmux_config
+            .get("session")
+            .and_then(Value::as_str)
+            .unwrap_or("agentic-cli-status");
+        let console_follows_selected = if cli_id == "codex" {
+            let desired = selected_codex_home(home);
+            if let Some(tmux) = &hooks.tmux {
+                console_uses_codex_home(tmux.as_ref(), session, &desired)
+            } else {
+                console_uses_codex_home(&RealTmux, session, &desired)
+            }
+        } else {
+            false
+        };
         let (saved_text, saved_at) = load_pane_capture(home, cli_id);
         if let (Some(saved_text), Some(saved_at)) = (saved_text, saved_at) {
             let last_checked = last
                 .and_then(|l| l.get("pane_checked_at").and_then(Value::as_f64))
                 .unwrap_or(0.0);
-            if saved_at > last_checked && now - saved_at <= stale_after as f64 {
+            let pane_fresh = now - saved_at <= stale_after as f64;
+            if pane_fresh && (saved_at > last_checked || console_follows_selected) {
                 pane_text = Some(saved_text);
                 pane_observed_at = Some(saved_at);
             }
         }
-    }
-    if let (Some(pane_text), Some(pane_observed_at)) = (pane_text.as_deref(), pane_observed_at) {
-        snapshot = if cli_id == "codex" && snapshot.get("instances").is_some() {
-            let session = tmux_config
-                .get("session")
-                .and_then(Value::as_str)
-                .unwrap_or("agentic-cli-status");
-            let desired = selected_codex_home(home);
-            let console_follows_selected = if let Some(tmux) = &hooks.tmux {
-                console_uses_codex_home(tmux.as_ref(), session, &desired)
+        if let (Some(pane_text), Some(pane_observed_at)) = (pane_text.as_deref(), pane_observed_at)
+        {
+            snapshot = if cli_id == "codex" && snapshot.get("instances").is_some() {
+                apply_codex_live_pane(
+                    snapshot,
+                    pane_text,
+                    pane_observed_at,
+                    source_mode,
+                    stale_after,
+                    last,
+                    now,
+                    console_follows_selected,
+                )
             } else {
-                console_uses_codex_home(&RealTmux, session, &desired)
+                merge_cli_pane(
+                    snapshot,
+                    cli_id,
+                    pane_text,
+                    pane_observed_at,
+                    source_mode,
+                    stale_after,
+                    last,
+                    now,
+                )
             };
+        }
+    } else if let (Some(pane_text), Some(pane_observed_at)) =
+        (pane_text.as_deref(), pane_observed_at)
+    {
+        snapshot = if cli_id == "codex" && snapshot.get("instances").is_some() {
             apply_codex_live_pane(
                 snapshot,
                 pane_text,
@@ -662,7 +694,7 @@ fn collect_cli(
                 stale_after,
                 last,
                 now,
-                console_follows_selected,
+                false,
             )
         } else {
             merge_cli_pane(
@@ -823,7 +855,7 @@ fn apply_codex_live_pane(
         .and_then(Value::as_i64)
         .unwrap_or(1);
     let owner_id = if console_follows_selected {
-        logging::info(format!(
+        logging::debug(format!(
             "codex pane /status applied to selected instance {selected_id} (console CODEX_HOME matches)"
         ));
         selected_id
@@ -873,12 +905,17 @@ fn apply_codex_live_pane(
             map.remove(key);
         }
     }
+    let merge_mode = if console_follows_selected {
+        "tmux"
+    } else {
+        source_mode
+    };
     let merged = merge_cli_pane(
         base,
         "codex",
         pane_text,
         pane_observed_at,
-        source_mode,
+        merge_mode,
         stale_after,
         last,
         now,
