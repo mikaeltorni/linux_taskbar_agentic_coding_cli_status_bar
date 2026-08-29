@@ -261,45 +261,34 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
 }
 
 /**
- * Pick the last ``caN`` / ``catN`` Codex instance from a status snapshot.
+ * Join independent Codex account segments with a gray pipe.
  *
- * @param {object} snapshot - Codex CLI entry from status.json.
- * @returns {{id: number, snapshot: object}} Selected instance id and fields.
- */
-function selectedCodexInstance(snapshot) {
-  const instances = snapshot?.instances;
-  const selectedId = Number(snapshot?.selected)
-    || (Array.isArray(instances) && instances.find(item => item?.selected)?.id)
-    || 1;
-  if (Array.isArray(instances) && instances.length) {
-    const match = instances.find(item => Number(item?.id) === Number(selectedId))
-      || instances[0];
-    return {
-      id: match?.id ?? selectedId,
-      snapshot: Object.assign({}, match, {selected: true}),
-    };
-  }
-  return {
-    id: selectedId,
-    snapshot: Object.assign({}, snapshot, {selected: true}),
-  };
-}
-
-/**
- * Render only the selected Codex account as ``CX1``, ``CX2``, …
- *
- * Extra ChatGPT logins stay in the click menu. The compact bar shows the
- * last ``caN`` / ``catN`` selection plus that account's usage
- * (``CX2 43·57``).
+ * Agent Command Center registers extra ChatGPT logins as isolated
+ * ``CODEX_HOME`` directories. Each account is tagged ``CX1``, ``CX2``, …
+ * and the last ``caN`` / ``catN`` selection keeps its color while the other
+ * tags are gray: ``CX1 43·57 | CX2 12``.
  *
  * @param {string} tag - Unused; kept so the call site matches other CLIs.
  * @param {object} snapshot - Codex CLI entry from status.json.
  * @param {number} [nowEpoch] - Current epoch seconds; injectable for tests.
- * @returns {string} Selected-account segment markup.
+ * @returns {string} Combined segment markup.
  */
 function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000) {
-  const chosen = selectedCodexInstance(snapshot);
-  return segmentMarkup(`CX${chosen.id}`, chosen.snapshot, nowEpoch);
+  const instances = snapshot?.instances;
+  if (!Array.isArray(instances) || instances.length < 1) {
+    const id = snapshot?.selected || 1;
+    return segmentMarkup(`CX${id}`, Object.assign({}, snapshot, {selected: true}), nowEpoch);
+  }
+  const selectedId = snapshot?.selected
+    ?? instances.find(item => item?.selected)?.id
+    ?? instances[0]?.id
+    ?? 1;
+  const sep = `<span foreground="${NEUTRAL_COLOR}"> | </span>`;
+  return instances.map((instance) => {
+    const id = instance?.id ?? 1;
+    const tagged = Object.assign({}, instance, {selected: id === selectedId});
+    return segmentMarkup(`CX${id}`, tagged, nowEpoch);
+  }).join(sep);
 }
 
 /**
