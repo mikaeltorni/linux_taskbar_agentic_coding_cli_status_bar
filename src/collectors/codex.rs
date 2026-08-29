@@ -127,6 +127,26 @@ pub struct CodexAccountInstance {
     pub label: String,
 }
 
+/// Load ACC Codex homes and the persisted selected instance id.
+///
+/// Missing or unreadable registries yield an empty list so the poller keeps
+/// the historical single-home `~/.codex` path. `selected` defaults to 1.
+pub fn load_codex_account_registry(home: &Path) -> (Vec<CodexAccountInstance>, i64) {
+    let instances = load_codex_account_instances(home);
+    let path = tracker_state_dir(home).join(CODEX_INSTANCES_FILE);
+    let selected = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|parsed| parsed.get("selected").and_then(Value::as_i64))
+        .unwrap_or(1);
+    let selected = if instances.iter().any(|row| row.id == selected) {
+        selected
+    } else {
+        instances.first().map(|row| row.id).unwrap_or(1)
+    };
+    (instances, selected)
+}
+
 /// Load extra ChatGPT Codex homes registered by Agent Command Center.
 ///
 /// Missing or unreadable registries yield an empty list so the poller keeps
@@ -184,11 +204,12 @@ pub fn load_codex_account_instances(home: &Path) -> Vec<CodexAccountInstance> {
     instances
 }
 
-fn instance_snapshot(row: &CodexAccountInstance, collected: Value) -> Value {
+fn instance_snapshot(row: &CodexAccountInstance, collected: Value, selected_id: i64) -> Value {
     json!({
         "id": row.id,
         "label": row.label,
         "home": row.home.to_string_lossy(),
+        "selected": row.id == selected_id,
         "source": collected.get("source").cloned().unwrap_or(Value::Null),
         "observed_at": collected.get("observed_at").cloned().unwrap_or(Value::Null),
         "plan": collected.get("plan").cloned().unwrap_or(Value::Null),
@@ -208,34 +229,36 @@ fn last_instance_by_id(last: Option<&Value>, id: i64) -> Option<&Value> {
 
 /// Collect every ACC-registered ChatGPT Codex account independently.
 ///
-/// A missing registry, or a registry with a single home, returns the same
-/// shape as [`collect_codex`] so existing consumers keep working. Two or
-/// more homes add an `instances` array; top-level `windows` stay those of
-/// instance 1.
+/// A missing registry returns the historical single-home `~/.codex` snapshot
+/// tagged as selected instance 1. One or more registered homes add an
+/// `instances` array and a `selected` id so the panel can render `CX1` / `CX2`.
 pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value>) -> Value {
-    let rows = load_codex_account_instances(home);
+    let (rows, selected_id) = load_codex_account_registry(home);
     if rows.is_empty() {
-        return collect_codex(home, now);
+        let mut snapshot = collect_codex(home, now);
+        snapshot["selected"] = json!(1);
+        return snapshot;
     }
-    if rows.len() == 1 {
-        return collect_codex_at(&rows[0].home, now);
+    if rows.len() > 1 {
+        logging::info(format!(
+            "collecting {} ACC Codex account instances (selected={selected_id})",
+            rows.len()
+        ));
     }
-    logging::info(format!(
-        "collecting {} ACC Codex account instances",
-        rows.len()
-    ));
     let mut collected_rows = Vec::new();
     for row in &rows {
         let mut snap = collect_codex_at(&row.home, now);
         snap = carry_last_reading(snap, last_instance_by_id(last, row.id));
-        collected_rows.push(instance_snapshot(row, snap));
+        collected_rows.push(instance_snapshot(row, snap, selected_id));
     }
     let mut combined = collected_rows[0].clone();
     if let Some(map) = combined.as_object_mut() {
         map.remove("id");
         map.remove("label");
         map.remove("home");
+        map.remove("selected");
     }
+    combined["selected"] = json!(selected_id);
     combined["instances"] = Value::Array(collected_rows);
     combined
 }
@@ -728,12 +751,17 @@ mod tests {
         assert_eq!(codex_window_label(None, "secondary"), "week");
     }
 
-    fn write_registry(home: &Path, instances: &Value) {
+    fn write_registry(home: &Path, instances: &Value, selected: i64) {
         let dir = crate::collectors::codex::tracker_state_dir(home);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(crate::collectors::codex::CODEX_INSTANCES_FILE),
-            serde_json::to_string(&json!({"version": 1, "instances": instances})).unwrap(),
+            serde_json::to_string(&json!({
+                "version": 1,
+                "selected": selected,
+                "instances": instances
+            }))
+            .unwrap(),
         )
         .unwrap();
     }
@@ -760,6 +788,7 @@ mod tests {
         );
         let result = collect_codex_accounts(&sandbox.home, None, None);
         assert!(result.get("instances").is_none());
+        assert_eq!(result["selected"], json!(1));
         assert_eq!(result["windows"][0]["used_percent"], json!(57.0));
     }
 
@@ -818,15 +847,19 @@ mod tests {
                 {"id": 1, "home": primary.to_string_lossy(), "label": "", "builtin": true},
                 {"id": 2, "home": extra.to_string_lossy(), "label": "trial", "builtin": false},
             ]),
+            2,
         );
         let result = collect_codex_accounts(&sandbox.home, None, None);
         assert_eq!(result["windows"][0]["used_percent"], json!(57.0));
         assert_eq!(result["plan"], json!("plus"));
+        assert_eq!(result["selected"], json!(2));
         let instances = result["instances"].as_array().unwrap();
         assert_eq!(instances.len(), 2);
         assert_eq!(instances[0]["id"], json!(1));
+        assert_eq!(instances[0]["selected"], json!(false));
         assert_eq!(instances[0]["windows"][0]["used_percent"], json!(57.0));
         assert_eq!(instances[1]["id"], json!(2));
+        assert_eq!(instances[1]["selected"], json!(true));
         assert_eq!(instances[1]["label"], json!("trial"));
         assert_eq!(instances[1]["plan"], json!("free"));
         assert_eq!(instances[1]["windows"][0]["label"], json!("month"));
@@ -850,6 +883,7 @@ mod tests {
                 {"id": 1, "home": primary.to_string_lossy(), "label": ""},
                 {"id": 2, "home": extra.to_string_lossy(), "label": "trial"},
             ]),
+            1,
         );
         let last = json!({
             "instances": [

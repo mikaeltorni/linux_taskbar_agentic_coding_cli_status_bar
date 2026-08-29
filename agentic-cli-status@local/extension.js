@@ -256,16 +256,17 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
   const staleMark = snapshot.stale
     ? `<span foreground="${tagColor}">?</span>`
     : '';
-  return `<span foreground="${tagColor}">${tag} </span>${parts}${staleMark}`;
+  const nameColor = snapshot.selected === false ? NEUTRAL_COLOR : tagColor;
+  return `<span foreground="${nameColor}">${tag} </span>${parts}${staleMark}`;
 }
 
 /**
  * Join independent Codex account segments with a gray pipe.
  *
  * Agent Command Center registers extra ChatGPT logins as isolated
- * ``CODEX_HOME`` directories. Each account's windows stay independent; the
- * first keeps the CX tag and later ones use their numeric id so the bar
- * scales as instances are added: ``CX 43·57 | 2 12``.
+ * ``CODEX_HOME`` directories. Each account is tagged ``CX1``, ``CX2``, …
+ * and the last ``caN``/``catN`` selection keeps its color while the other
+ * tags are gray: ``CX1 43·57 | CX2 12``.
  *
  * @param {string} tag - Short CLI tag for the primary account.
  * @param {object} snapshot - Codex CLI entry from status.json.
@@ -274,12 +275,19 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
  */
 function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000) {
   const instances = snapshot?.instances;
-  if (!Array.isArray(instances) || instances.length < 2)
-    return segmentMarkup(tag, snapshot, nowEpoch);
+  if (!Array.isArray(instances) || instances.length < 1) {
+    const id = snapshot?.selected || 1;
+    return segmentMarkup(`CX${id}`, Object.assign({}, snapshot, {selected: true}), nowEpoch);
+  }
+  const selectedId = snapshot?.selected
+    ?? instances.find(item => item?.selected)?.id
+    ?? instances[0]?.id
+    ?? 1;
   const sep = `<span foreground="${NEUTRAL_COLOR}"> | </span>`;
-  return instances.map((instance, index) => {
-    const instanceTag = index === 0 ? tag : String(instance?.id ?? index + 1);
-    return segmentMarkup(instanceTag, instance, nowEpoch);
+  return instances.map((instance) => {
+    const id = instance?.id ?? 1;
+    const tagged = Object.assign({}, instance, {selected: id === selectedId});
+    return segmentMarkup(`CX${id}`, tagged, nowEpoch);
   }).join(sep);
 }
 
@@ -287,12 +295,13 @@ function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000
  * Details-menu heading for one Codex account instance.
  *
  * @param {object} instance - One entry from snapshot.instances.
- * @returns {string} Heading such as "Codex [2] trial".
+ * @returns {string} Heading such as "Codex [2] trial *".
  */
 function codexInstanceTitle(instance) {
   const id = instance?.id ?? '?';
   const label = String(instance?.label ?? '').trim();
-  return label ? `Codex [${id}] ${label}` : `Codex [${id}]`;
+  const mark = instance?.selected ? ' *' : '';
+  return label ? `Codex [${id}] ${label}${mark}` : `Codex [${id}]${mark}`;
 }
 
 /**
