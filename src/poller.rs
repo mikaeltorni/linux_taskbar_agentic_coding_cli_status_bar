@@ -661,17 +661,38 @@ fn collect_cli(
     }
     snapshot["stale"] = json!(is_stale(&snapshot, stale_after, now));
     if cli_id == "codex" {
-        snapshot = sync_codex_primary_instance(snapshot);
+        snapshot = sync_codex_selected_instance(snapshot);
     }
     snapshot
 }
 
-/// Copy pane-merged primary fields onto `instances[0]` so extra accounts stay independent.
-fn sync_codex_primary_instance(mut snapshot: Value) -> Value {
+/// Copy pane-merged fields onto the selected Codex instance.
+///
+/// Live `/status` updates land on the top-level snapshot. They belong to the
+/// last `caN`/`catN` selection, not always instance 1, so extra accounts keep
+/// independent headless readings.
+fn sync_codex_selected_instance(mut snapshot: Value) -> Value {
     let Some(Value::Array(mut rows)) = snapshot.get("instances").cloned() else {
         return snapshot;
     };
-    if let Some(primary) = rows.first_mut() {
+    let selected_id = snapshot
+        .get("selected")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let Some(index) = rows
+        .iter()
+        .position(|row| row.get("id").and_then(Value::as_i64) == Some(selected_id))
+    else {
+        logging::warn(format!(
+            "Codex pane merge skipped: selected instance {selected_id} missing from registry"
+        ));
+        snapshot["instances"] = Value::Array(rows);
+        return snapshot;
+    };
+    logging::debug(format!(
+        "syncing pane-merged Codex fields onto instance {selected_id}"
+    ));
+    if let Some(target) = rows.get_mut(index) {
         for key in [
             "windows",
             "plan",
@@ -683,7 +704,7 @@ fn sync_codex_primary_instance(mut snapshot: Value) -> Value {
             "stale",
         ] {
             if let Some(value) = snapshot.get(key) {
-                primary[key] = value.clone();
+                target[key] = value.clone();
             }
         }
     }
@@ -1265,6 +1286,31 @@ mod tests {
         });
         let filled = carry_window_resets(snapshot.clone(), &[&fallback]);
         assert_eq!(filled["windows"][0]["resets_at"], json!(1));
+    }
+
+    #[test]
+    fn pane_merge_lands_on_selected_codex_instance() {
+        let snapshot = json!({
+            "selected": 2,
+            "windows": [{"label": "month", "used_percent": 12.0}],
+            "plan": "free",
+            "observed_at": 50.0,
+            "instances": [
+                {"id": 1, "windows": [{"label": "5h", "used_percent": 57.0}], "plan": "plus"},
+                {"id": 2, "windows": [{"label": "month", "used_percent": 99.0}], "plan": "plus"},
+            ]
+        });
+        let synced = sync_codex_selected_instance(snapshot);
+        assert_eq!(
+            synced["instances"][0]["windows"][0]["used_percent"],
+            json!(57.0)
+        );
+        assert_eq!(synced["instances"][0]["plan"], json!("plus"));
+        assert_eq!(
+            synced["instances"][1]["windows"][0]["used_percent"],
+            json!(12.0)
+        );
+        assert_eq!(synced["instances"][1]["plan"], json!("free"));
     }
 
     #[test]

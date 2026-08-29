@@ -24,12 +24,12 @@ color of its 5h window (Grok: its weekly window), dashes and separators stay
 neutral gray, and stale data is dimmed with a trailing `?` — e.g.
 `CX 43·57  CC 88·60·38  GK 12  OG 100·17·8  OR 58`.
 When Agent Command Center has extra ChatGPT logins (`acc ca instance create`),
-the Codex segment concatenates each account with a gray pipe as `CX1` / `CX2`
-(and `CX3` … as more logins are added). The last `caN` selection keeps its
-normal color; the other tags are gray: `CX1 43·57 | CX2 12`. A trial/free plan
-is just another instance; its month window is independent of the paid account's
-5h/week windows. The click menu lists `Codex [1]` and `Codex [2] trial *` as
-separate sections, with `*` on the selected account.
+the Codex segment shows only the last `caN` / `catN` selection as `CX1` or
+`CX2` (and `CX3` … as more logins are added) plus that account's usage:
+`CX2 43·57`. A trial/free plan is just another instance; its month window is
+independent of the paid account's 5h/week windows. The click menu lists
+`Codex [1]` and `Codex [2] trial *` as separate sections, with `*` on the
+selected account.
 Claude's third value is its active model-scoped weekly limit (currently
 Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.

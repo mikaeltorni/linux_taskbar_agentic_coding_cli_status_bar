@@ -231,7 +231,8 @@ fn last_instance_by_id(last: Option<&Value>, id: i64) -> Option<&Value> {
 ///
 /// A missing registry returns the historical single-home `~/.codex` snapshot
 /// tagged as selected instance 1. One or more registered homes add an
-/// `instances` array and a `selected` id so the panel can render `CX1` / `CX2`.
+/// `instances` array and a `selected` id. Top-level windows belong to the
+/// selected instance so the panel can render `CX2` with that account's usage.
 pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value>) -> Value {
     let (rows, selected_id) = load_codex_account_registry(home);
     if rows.is_empty() {
@@ -251,7 +252,11 @@ pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value
         snap = carry_last_reading(snap, last_instance_by_id(last, row.id));
         collected_rows.push(instance_snapshot(row, snap, selected_id));
     }
-    let mut combined = collected_rows[0].clone();
+    let mut combined = collected_rows
+        .iter()
+        .find(|row| row.get("id").and_then(Value::as_i64) == Some(selected_id))
+        .cloned()
+        .unwrap_or_else(|| collected_rows[0].clone());
     if let Some(map) = combined.as_object_mut() {
         map.remove("id");
         map.remove("label");
@@ -850,8 +855,9 @@ mod tests {
             2,
         );
         let result = collect_codex_accounts(&sandbox.home, None, None);
-        assert_eq!(result["windows"][0]["used_percent"], json!(57.0));
-        assert_eq!(result["plan"], json!("plus"));
+        assert_eq!(result["windows"][0]["used_percent"], json!(12.0));
+        assert_eq!(result["windows"][0]["label"], json!("month"));
+        assert_eq!(result["plan"], json!("free"));
         assert_eq!(result["selected"], json!(2));
         let instances = result["instances"].as_array().unwrap();
         assert_eq!(instances.len(), 2);
