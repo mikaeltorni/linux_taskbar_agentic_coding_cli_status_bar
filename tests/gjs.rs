@@ -112,11 +112,14 @@ fn agentic_results() -> Option<Value> {
         "GRADIENT_LOW_RGB",
         "EMPTY_COLOR",
         "NEUTRAL_COLOR",
+        "INSTANCE_TAG_FIRST_RGB",
+        "INSTANCE_TAG_LAST_RGB",
     ];
     let functions = [
         "resetPassed",
         "percentLeft",
         "percentColor",
+        "instanceTagColor",
         "resetClock",
         "resetDate",
         "resetCountdown",
@@ -218,6 +221,12 @@ fn gradient_and_segments() {
     assert!(first.contains("CX1"));
     assert!(first.contains("CX2"));
     assert!(first.contains(" | "));
+    assert_eq!(js["instance_tag_first"], "#7ec8ff");
+    assert_eq!(js["instance_tag_last"], "#a856e8");
+    assert_eq!(js["instance_tag_only"], "#7ec8ff");
+    assert_eq!(js["instance_tag_mid"], "#938ff4");
+    assert!(two.contains("#7ec8ff"));
+    assert!(two.contains("#a856e8"));
     assert_eq!(js["second_codex_title"], "Codex [2] trial *");
     assert_eq!(js["primary_codex_title"], "Codex [1]");
     let or_seg = js["openrouter_segment"].as_str().unwrap();
