@@ -1,6 +1,7 @@
 //! Background tmux debug console for the agentic CLI status poller.
 
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,6 +61,12 @@ pub fn tmux_console_cli_ids(cli_ids: &[String]) -> Vec<String> {
 /// Trait wrapping tmux subprocess calls so tests can inject a fake.
 pub trait TmuxRunner: Send + Sync {
     fn run(&self, args: &[String]) -> (i32, String, String);
+
+    /// Read `CODEX_HOME` from a pane process. `new-window -e` puts the
+    /// variable on the child, not on `tmux show-environment`.
+    fn process_codex_home(&self, pid: &str) -> Option<String> {
+        read_proc_environ_var(pid, "CODEX_HOME")
+    }
 }
 
 /// Production tmux runner.
@@ -130,20 +137,36 @@ fn window_env_args(cli_id: &str, codex_home: Option<&Path>) -> Vec<String> {
     args
 }
 
+/// Parse `/proc/<pid>/environ` for `key`. Returns None when the pid is
+/// gone or the variable is missing.
+fn read_proc_environ_var(pid: &str, key: &str) -> Option<String> {
+    if !pid.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let bytes = fs::read(format!("/proc/{pid}/environ")).ok()?;
+    let prefix = format!("{key}=");
+    bytes
+        .split(|b| *b == 0)
+        .filter_map(|chunk| std::str::from_utf8(chunk).ok())
+        .find_map(|entry| entry.strip_prefix(&prefix).map(str::to_string))
+}
+
 fn console_codex_home(tmux: &dyn TmuxRunner, session: &str) -> Option<String> {
     let result = tmux.run(&[
-        "show-environment".into(),
+        "list-panes".into(),
         "-t".into(),
         format!("{session}:codex"),
-        "CODEX_HOME".into(),
+        "-F".into(),
+        "#{pane_pid}".into(),
     ]);
     if result.0 != 0 {
         return None;
     }
-    result
-        .1
-        .lines()
-        .find_map(|line| line.strip_prefix("CODEX_HOME=").map(str::to_string))
+    let pid = result.1.trim().lines().next()?.trim();
+    if pid.is_empty() {
+        return None;
+    }
+    tmux.process_codex_home(pid)
 }
 
 fn homes_match(left: &str, right: &Path) -> bool {
@@ -418,11 +441,8 @@ mod tests {
             if args.first().map(String::as_str) == Some("list-windows") {
                 return (0, "codex\n".into(), String::new());
             }
-            if args.first().map(String::as_str) == Some("show-environment") {
-                return match &self.codex_home_env {
-                    Some(home) => (0, format!("CODEX_HOME={home}\n"), String::new()),
-                    None => (1, String::new(), "not set".into()),
-                };
+            if args.first().map(String::as_str) == Some("list-panes") {
+                return (0, "1\n".into(), String::new());
             }
             if args.first().map(String::as_str) == Some("capture-pane") {
                 let mut caps = self.captures.lock().unwrap();
@@ -434,6 +454,10 @@ mod tests {
                 return (0, stdout, String::new());
             }
             (0, String::new(), String::new())
+        }
+
+        fn process_codex_home(&self, _pid: &str) -> Option<String> {
+            self.codex_home_env.clone()
         }
     }
 
@@ -697,5 +721,60 @@ mod tests {
                 None => std::env::remove_var("PATH"),
             }
         }
+    }
+
+    #[test]
+    fn matching_pane_codex_home_does_not_recreate_console() {
+        let sandbox = Sandbox::new();
+        let bin = sandbox.home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("codex"), "#!/bin/sh\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut p = std::fs::metadata(bin.join("codex")).unwrap().permissions();
+        p.set_mode(0o755);
+        std::fs::set_permissions(bin.join("codex"), p).unwrap();
+        let original_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", format!("{}:/usr/bin", bin.display()));
+        }
+        let extra = sandbox.home.join(".codex-account-2");
+        let tmux = FakeTmux {
+            calls: Mutex::new(Vec::new()),
+            has_session: true,
+            captures: Mutex::new(Vec::new()),
+            codex_home_env: Some(extra.display().to_string()),
+        };
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            Some(extra.as_path()),
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        assert!(calls
+            .iter()
+            .any(|c| c.first().map(String::as_str) == Some("list-panes")));
+        assert!(calls
+            .iter()
+            .all(|c| c.first().map(String::as_str) != Some("kill-window")));
+        unsafe {
+            match original_path {
+                Some(path) => std::env::set_var("PATH", path),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    #[test]
+    fn reads_codex_home_from_proc_environ() {
+        let pid = std::process::id().to_string();
+        let path = read_proc_environ_var(&pid, "PATH");
+        assert!(
+            path.as_deref().is_some_and(|value| !value.is_empty()),
+            "current process should expose PATH in /proc/pid/environ"
+        );
+        assert!(read_proc_environ_var("not-a-pid", "PATH").is_none());
     }
 }
