@@ -229,6 +229,9 @@ fn pane_window_reset(
         if !keyword.is_match(line) {
             continue;
         }
+        if line.to_ascii_lowercase().contains("gpt-reserve") {
+            continue;
+        }
         for offset in 0..3 {
             let probe = index + offset;
             if probe >= lines.len() {
@@ -252,6 +255,9 @@ fn pane_window_reset(
 fn pane_window_percent(lines: &[&str], keyword: &Regex) -> Option<f64> {
     for (index, line) in lines.iter().enumerate() {
         if !keyword.is_match(line) {
+            continue;
+        }
+        if line.to_ascii_lowercase().contains("gpt-reserve") {
             continue;
         }
         let mut source_line = *line;
@@ -456,6 +462,28 @@ mod tests {
             .map(|w| w["label"].as_str().unwrap())
             .collect();
         assert_eq!(labels, ["5h", "week"]);
+    }
+
+    #[test]
+    fn codex_status_pane_skips_gpt_reserve_and_reads_zero_remaining() {
+        let text = concat!(
+            "│  gpt-reserve Weekly limit:   [████████████████████] 100% left (resets 14:30 on 5 Sep) │\n",
+            "│  5h limit:                   [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 18:34)            │\n",
+            "│  Weekly limit:               [█████████████████░░░] 84% left (resets 13:34 on 5 Sep)  │\n",
+        );
+        let result = parse_pane("codex", text, Some(5.0));
+        let pairs: Vec<_> = result["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                (
+                    w["label"].as_str().unwrap().to_string(),
+                    w["used_percent"].as_f64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(pairs, vec![("5h".into(), 100.0), ("week".into(), 16.0)]);
     }
 
     #[test]
