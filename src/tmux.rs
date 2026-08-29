@@ -173,6 +173,11 @@ fn homes_match(left: &str, right: &Path) -> bool {
     Path::new(left) == right
 }
 
+/// Return whether the Codex debug pane is logged into `desired` `CODEX_HOME`.
+pub fn console_uses_codex_home(tmux: &dyn TmuxRunner, session: &str, desired: &Path) -> bool {
+    console_codex_home(tmux, session).is_some_and(|current| homes_match(&current, desired))
+}
+
 /// Kill the Codex debug window when it is logged into a different ACC instance.
 fn recreate_codex_window_if_stale(
     session: &str,
