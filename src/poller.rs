@@ -634,16 +634,28 @@ fn collect_cli(
         }
     }
     if let (Some(pane_text), Some(pane_observed_at)) = (pane_text.as_deref(), pane_observed_at) {
-        snapshot = merge_cli_pane(
-            snapshot,
-            cli_id,
-            pane_text,
-            pane_observed_at,
-            source_mode,
-            stale_after,
-            last,
-            now,
-        );
+        snapshot = if cli_id == "codex" && snapshot.get("instances").is_some() {
+            apply_codex_live_pane(
+                snapshot,
+                pane_text,
+                pane_observed_at,
+                source_mode,
+                stale_after,
+                last,
+                now,
+            )
+        } else {
+            merge_cli_pane(
+                snapshot,
+                cli_id,
+                pane_text,
+                pane_observed_at,
+                source_mode,
+                stale_after,
+                last,
+                now,
+            )
+        };
     }
     snapshot = carry_window_resets(snapshot, &[&headless_snapshot, last.unwrap_or(&json!({}))]);
     if let Some(obj) = endpoint_marks.as_object() {
@@ -661,37 +673,187 @@ fn collect_cli(
     }
     snapshot["stale"] = json!(is_stale(&snapshot, stale_after, now));
     if cli_id == "codex" {
-        snapshot = sync_codex_selected_instance(snapshot);
+        snapshot = promote_codex_selected_instance(snapshot);
     }
     snapshot
 }
 
-/// Copy pane-merged fields onto the selected Codex instance.
+/// Largest L1 gap (used-percent points) still treated as the same Codex account.
+const CODEX_PANE_MATCH_MAX: f64 = 15.0;
+
+fn window_used_percents(snapshot: &Value) -> Vec<(String, f64)> {
+    snapshot
+        .get("windows")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|window| {
+                    Some((
+                        window.get("label")?.as_str()?.to_string(),
+                        window.get("used_percent")?.as_f64()?,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Distance between pane windows and one instance's headless reading.
 ///
-/// Live `/status` updates land on the top-level snapshot. They belong to the
-/// last `caN`/`catN` selection, not always instance 1, so extra accounts keep
-/// independent headless readings.
-fn sync_codex_selected_instance(mut snapshot: Value) -> Value {
-    let Some(Value::Array(mut rows)) = snapshot.get("instances").cloned() else {
-        return snapshot;
-    };
+/// Sums absolute used-percent gaps on labels both sides share. `None` means
+/// there is no overlapping window to compare.
+fn codex_pane_distance(instance: &Value, pane: &Value) -> Option<f64> {
+    let pane_windows = window_used_percents(pane);
+    if pane_windows.is_empty() {
+        return None;
+    }
+    let instance_windows = window_used_percents(instance);
+    let mut total = 0.0;
+    let mut matched = 0;
+    for (label, used) in &pane_windows {
+        if let Some((_, other)) = instance_windows.iter().find(|(name, _)| name == label) {
+            total += (used - other).abs();
+            matched += 1;
+        }
+    }
+    (matched > 0).then_some(total)
+}
+
+/// Return the ACC instance whose usage matches a captured `/status` pane.
+///
+/// The debug console is a single Codex login (usually `~/.codex`). Applying
+/// that pane to the last `caN` selection copies one account onto another.
+fn match_codex_pane_instance(snapshot: &Value, pane: &Value) -> Option<i64> {
+    let rows = snapshot.get("instances")?.as_array()?;
+    if rows.len() == 1 {
+        return rows[0].get("id").and_then(Value::as_i64);
+    }
+    let mut scored: Vec<(i64, f64)> = rows
+        .iter()
+        .filter_map(|row| {
+            let id = row.get("id").and_then(Value::as_i64)?;
+            Some((id, codex_pane_distance(row, pane)?))
+        })
+        .collect();
+    scored.sort_by(|left, right| left.1.total_cmp(&right.1));
+    let (best_id, best_dist) = scored.first()?;
+    if *best_dist > CODEX_PANE_MATCH_MAX {
+        return None;
+    }
+    if scored
+        .get(1)
+        .is_some_and(|(_, second)| *second - *best_dist < 5.0)
+    {
+        return None;
+    }
+    Some(*best_id)
+}
+
+/// Copy the selected instance's live fields onto the top-level Codex snapshot.
+fn promote_codex_selected_instance(mut snapshot: Value) -> Value {
     let selected_id = snapshot
         .get("selected")
         .and_then(Value::as_i64)
         .unwrap_or(1);
-    let Some(index) = rows
-        .iter()
-        .position(|row| row.get("id").and_then(Value::as_i64) == Some(selected_id))
+    let Some(chosen) = snapshot
+        .get("instances")
+        .and_then(Value::as_array)
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get("id").and_then(Value::as_i64) == Some(selected_id))
+                .cloned()
+        })
     else {
-        logging::warn(format!(
-            "Codex pane merge skipped: selected instance {selected_id} missing from registry"
-        ));
-        snapshot["instances"] = Value::Array(rows);
         return snapshot;
     };
-    logging::debug(format!(
-        "syncing pane-merged Codex fields onto instance {selected_id}"
-    ));
+    for key in [
+        "windows",
+        "plan",
+        "observed_at",
+        "error",
+        "source",
+        "resets_available",
+        "resets_checked_at",
+        "stale",
+    ] {
+        if let Some(value) = chosen.get(key) {
+            snapshot[key] = value.clone();
+        }
+    }
+    snapshot
+}
+
+/// Merge a Codex `/status` pane into the instance it belongs to.
+///
+/// Extra registered logins keep their own headless readings. The compact bar
+/// then shows the selected instance, not whichever login the debug console
+/// happens to be.
+fn apply_codex_live_pane(
+    mut snapshot: Value,
+    pane_text: &str,
+    pane_observed_at: f64,
+    source_mode: &str,
+    stale_after: i64,
+    last: Option<&Value>,
+    now: f64,
+) -> Value {
+    let pane = parse_pane("codex", pane_text, Some(pane_observed_at));
+    let selected_id = snapshot
+        .get("selected")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let Some(owner_id) = match_codex_pane_instance(&snapshot, &pane) else {
+        logging::warn(
+            "codex pane /status did not match any ACC instance; keeping independent headless readings",
+        );
+        snapshot["pane_checked_at"] = json!(pane_observed_at);
+        return promote_codex_selected_instance(snapshot);
+    };
+    if owner_id != selected_id {
+        logging::info(format!(
+            "codex pane /status matched instance {owner_id}, not selected {selected_id}; leaving the selected account's limits unchanged"
+        ));
+    } else {
+        logging::debug(format!(
+            "codex pane /status matched selected instance {owner_id}"
+        ));
+    }
+    let Some(Value::Array(mut rows)) = snapshot.get("instances").cloned() else {
+        return merge_cli_pane(
+            snapshot,
+            "codex",
+            pane_text,
+            pane_observed_at,
+            source_mode,
+            stale_after,
+            last,
+            now,
+        );
+    };
+    let Some(index) = rows
+        .iter()
+        .position(|row| row.get("id").and_then(Value::as_i64) == Some(owner_id))
+    else {
+        snapshot["pane_checked_at"] = json!(pane_observed_at);
+        return promote_codex_selected_instance(snapshot);
+    };
+    let owner = rows[index].clone();
+    let mut base = owner.clone();
+    if let Some(map) = base.as_object_mut() {
+        for key in ["id", "label", "home", "selected"] {
+            map.remove(key);
+        }
+    }
+    let merged = merge_cli_pane(
+        base,
+        "codex",
+        pane_text,
+        pane_observed_at,
+        source_mode,
+        stale_after,
+        last,
+        now,
+    );
     if let Some(target) = rows.get_mut(index) {
         for key in [
             "windows",
@@ -702,14 +864,23 @@ fn sync_codex_selected_instance(mut snapshot: Value) -> Value {
             "resets_available",
             "resets_checked_at",
             "stale",
+            "pane_checked_at",
         ] {
-            if let Some(value) = snapshot.get(key) {
+            if let Some(value) = merged.get(key) {
+                target[key] = value.clone();
+            }
+        }
+        for key in ["id", "label", "home", "selected"] {
+            if let Some(value) = owner.get(key) {
                 target[key] = value.clone();
             }
         }
     }
     snapshot["instances"] = Value::Array(rows);
-    snapshot
+    if let Some(value) = merged.get("pane_checked_at") {
+        snapshot["pane_checked_at"] = value.clone();
+    }
+    promote_codex_selected_instance(snapshot)
 }
 
 fn write_status(status: &Value, home: &Path) {
@@ -1289,28 +1460,104 @@ mod tests {
     }
 
     #[test]
-    fn pane_merge_lands_on_selected_codex_instance() {
+    fn pane_status_does_not_copy_onto_the_other_codex_account() {
+        // Reproduces the 13:47 glitch: the debug console /status is the
+        // primary team account (0% / 43% left) while ca2 / CX2 is plus.
         let snapshot = json!({
             "selected": 2,
-            "windows": [{"label": "month", "used_percent": 12.0}],
-            "plan": "free",
+            "windows": [
+                {"label": "5h", "used_percent": 29.0},
+                {"label": "week", "used_percent": 4.0}
+            ],
+            "plan": "plus",
             "observed_at": 50.0,
             "instances": [
-                {"id": 1, "windows": [{"label": "5h", "used_percent": 57.0}], "plan": "plus"},
-                {"id": 2, "windows": [{"label": "month", "used_percent": 99.0}], "plan": "plus"},
+                {
+                    "id": 1,
+                    "plan": "team",
+                    "windows": [
+                        {"label": "5h", "used_percent": 100.0},
+                        {"label": "week", "used_percent": 57.0}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "plan": "plus",
+                    "windows": [
+                        {"label": "5h", "used_percent": 29.0},
+                        {"label": "week", "used_percent": 4.0}
+                    ]
+                },
             ]
         });
-        let synced = sync_codex_selected_instance(snapshot);
+        let pane = concat!(
+            "│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 17:05) │\n",
+            "│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left               │\n",
+        );
+        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0);
+        assert_eq!(applied["selected"], json!(2));
+        assert_eq!(applied["plan"], json!("plus"));
+        assert_eq!(applied["windows"][0]["used_percent"], json!(29.0));
+        assert_eq!(applied["windows"][1]["used_percent"], json!(4.0));
         assert_eq!(
-            synced["instances"][0]["windows"][0]["used_percent"],
+            applied["instances"][0]["windows"][0]["used_percent"],
+            json!(100.0)
+        );
+        assert_eq!(
+            applied["instances"][0]["windows"][1]["used_percent"],
             json!(57.0)
         );
-        assert_eq!(synced["instances"][0]["plan"], json!("plus"));
         assert_eq!(
-            synced["instances"][1]["windows"][0]["used_percent"],
-            json!(12.0)
+            applied["instances"][1]["windows"][0]["used_percent"],
+            json!(29.0)
         );
-        assert_eq!(synced["instances"][1]["plan"], json!("free"));
+        assert_eq!(applied["instances"][1]["plan"], json!("plus"));
+    }
+
+    #[test]
+    fn pane_status_updates_the_account_it_matches() {
+        let snapshot = json!({
+            "selected": 2,
+            "windows": [
+                {"label": "5h", "used_percent": 29.0},
+                {"label": "week", "used_percent": 4.0}
+            ],
+            "plan": "plus",
+            "observed_at": 50.0,
+            "instances": [
+                {
+                    "id": 1,
+                    "plan": "team",
+                    "windows": [
+                        {"label": "5h", "used_percent": 100.0},
+                        {"label": "week", "used_percent": 57.0}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "plan": "plus",
+                    "windows": [
+                        {"label": "5h", "used_percent": 29.0},
+                        {"label": "week", "used_percent": 4.0}
+                    ]
+                },
+            ]
+        });
+        let pane = concat!(
+            "│  5h limit:             [████████████████████] 65% left (resets 17:05) │\n",
+            "│  Weekly limit:         [████████████████████] 94% left               │\n",
+        );
+        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0);
+        assert_eq!(applied["windows"][0]["used_percent"], json!(35.0));
+        assert_eq!(applied["windows"][1]["used_percent"], json!(6.0));
+        assert_eq!(
+            applied["instances"][1]["windows"][0]["used_percent"],
+            json!(35.0)
+        );
+        assert_eq!(
+            applied["instances"][0]["windows"][0]["used_percent"],
+            json!(100.0)
+        );
     }
 
     #[test]
