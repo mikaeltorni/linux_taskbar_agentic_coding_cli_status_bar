@@ -19,8 +19,8 @@ use crate::http::HttpOpener;
 use crate::logging;
 use crate::snapshot::carry_last_reading;
 use crate::tmux::{
-    ensure_console, real_sleep, refresh_and_capture, take_codex_console_refresh, tmux_available,
-    tmux_console_cli_ids, RealTmux, TmuxRunner,
+    console_uses_codex_home, ensure_console, real_sleep, refresh_and_capture,
+    take_codex_console_refresh, tmux_available, tmux_console_cli_ids, RealTmux, TmuxRunner,
 };
 
 pub const STATUS_FILE_NAME: &str = "status.json";
@@ -644,6 +644,16 @@ fn collect_cli(
     }
     if let (Some(pane_text), Some(pane_observed_at)) = (pane_text.as_deref(), pane_observed_at) {
         snapshot = if cli_id == "codex" && snapshot.get("instances").is_some() {
+            let session = tmux_config
+                .get("session")
+                .and_then(Value::as_str)
+                .unwrap_or("agentic-cli-status");
+            let desired = selected_codex_home(home);
+            let console_follows_selected = if let Some(tmux) = &hooks.tmux {
+                console_uses_codex_home(tmux.as_ref(), session, &desired)
+            } else {
+                console_uses_codex_home(&RealTmux, session, &desired)
+            };
             apply_codex_live_pane(
                 snapshot,
                 pane_text,
@@ -652,6 +662,7 @@ fn collect_cli(
                 stale_after,
                 last,
                 now,
+                console_follows_selected,
             )
         } else {
             merge_cli_pane(
@@ -805,28 +816,37 @@ fn apply_codex_live_pane(
     stale_after: i64,
     last: Option<&Value>,
     now: f64,
+    console_follows_selected: bool,
 ) -> Value {
-    let pane = parse_pane("codex", pane_text, Some(pane_observed_at));
     let selected_id = snapshot
         .get("selected")
         .and_then(Value::as_i64)
         .unwrap_or(1);
-    let Some(owner_id) = match_codex_pane_instance(&snapshot, &pane) else {
-        logging::warn(
-            "codex pane /status did not match any ACC instance; keeping independent headless readings",
-        );
-        snapshot["pane_checked_at"] = json!(pane_observed_at);
-        return promote_codex_selected_instance(snapshot);
-    };
-    if owner_id != selected_id {
+    let owner_id = if console_follows_selected {
         logging::info(format!(
-            "codex pane /status matched instance {owner_id}, not selected {selected_id}; leaving the selected account's limits unchanged"
+            "codex pane /status applied to selected instance {selected_id} (console CODEX_HOME matches)"
         ));
+        selected_id
     } else {
-        logging::debug(format!(
-            "codex pane /status matched selected instance {owner_id}"
-        ));
-    }
+        let pane = parse_pane("codex", pane_text, Some(pane_observed_at));
+        let Some(owner_id) = match_codex_pane_instance(&snapshot, &pane) else {
+            logging::warn(
+                "codex pane /status did not match any ACC instance; keeping independent headless readings",
+            );
+            snapshot["pane_checked_at"] = json!(pane_observed_at);
+            return promote_codex_selected_instance(snapshot);
+        };
+        if owner_id != selected_id {
+            logging::info(format!(
+                "codex pane /status matched instance {owner_id}, not selected {selected_id}; leaving the selected account's limits unchanged"
+            ));
+        } else {
+            logging::debug(format!(
+                "codex pane /status matched selected instance {owner_id}"
+            ));
+        }
+        owner_id
+    };
     let Some(Value::Array(mut rows)) = snapshot.get("instances").cloned() else {
         return merge_cli_pane(
             snapshot,
@@ -1518,7 +1538,7 @@ mod tests {
             "│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 17:05) │\n",
             "│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left               │\n",
         );
-        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0);
+        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, false);
         assert_eq!(applied["selected"], json!(2));
         assert_eq!(applied["plan"], json!("plus"));
         assert_eq!(applied["windows"][0]["used_percent"], json!(29.0));
@@ -1536,6 +1556,55 @@ mod tests {
             json!(29.0)
         );
         assert_eq!(applied["instances"][1]["plan"], json!("plus"));
+    }
+
+    #[test]
+    fn pane_status_updates_selected_account_when_console_follows_its_home() {
+        // Hitting 0 remaining jumps used-percent by more than the 15-point
+        // identity window. The console process CODEX_HOME is the selected
+        // login, so /status must still replace the stale 6-85 reading.
+        let snapshot = json!({
+            "selected": 2,
+            "windows": [
+                {"label": "5h", "used_percent": 94.0},
+                {"label": "week", "used_percent": 15.0}
+            ],
+            "plan": "plus",
+            "observed_at": 50.0,
+            "instances": [
+                {
+                    "id": 1,
+                    "plan": "team",
+                    "windows": [
+                        {"label": "5h", "used_percent": 100.0},
+                        {"label": "week", "used_percent": 57.0}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "plan": "plus",
+                    "windows": [
+                        {"label": "5h", "used_percent": 94.0},
+                        {"label": "week", "used_percent": 15.0}
+                    ]
+                },
+            ]
+        });
+        let pane = concat!(
+            "│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 18:34) │\n",
+            "│  Weekly limit:         [█████████████████░░░] 86% left               │\n",
+        );
+        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, true);
+        assert_eq!(applied["windows"][0]["used_percent"], json!(100.0));
+        assert_eq!(applied["windows"][1]["used_percent"], json!(14.0));
+        assert_eq!(
+            applied["instances"][1]["windows"][0]["used_percent"],
+            json!(100.0)
+        );
+        assert_eq!(
+            applied["instances"][0]["windows"][0]["used_percent"],
+            json!(100.0)
+        );
     }
 
     #[test]
@@ -1571,7 +1640,7 @@ mod tests {
             "│  5h limit:             [████████████████████] 65% left (resets 17:05) │\n",
             "│  Weekly limit:         [████████████████████] 94% left               │\n",
         );
-        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0);
+        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, false);
         assert_eq!(applied["windows"][0]["used_percent"], json!(35.0));
         assert_eq!(applied["windows"][1]["used_percent"], json!(6.0));
         assert_eq!(
