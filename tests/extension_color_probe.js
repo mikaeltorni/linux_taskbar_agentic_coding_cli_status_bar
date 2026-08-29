@@ -74,15 +74,16 @@ const results = {
     {label: 'day', used_percent: 42, resets_at: NOW + 52000}]
   }, NOW),
   two_codex_accounts: codexBarMarkup('CX', {
+    selected: 2,
     instances: [
       {id: 1, windows: [
         {label: '5h', used_percent: 57, resets_at: NOW + 3600},
         {label: 'week', used_percent: 43, resets_at: NOW + 100000}]},
-      {id: 2, label: 'trial', windows: [
+      {id: 2, label: 'trial', selected: true, windows: [
         {label: 'month', used_percent: 12, resets_at: NOW + 2588400}]},
     ]
   }, NOW),
-  second_codex_title: codexInstanceTitle({id: 2, label: 'trial'}),
+  second_codex_title: codexInstanceTitle({id: 2, label: 'trial', selected: true}),
   primary_codex_title: codexInstanceTitle({id: 1, label: ''}),
 };
 print(JSON.stringify(results));

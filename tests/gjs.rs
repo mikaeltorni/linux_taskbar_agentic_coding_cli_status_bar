@@ -211,10 +211,10 @@ fn gradient_and_segments() {
     assert_eq!(js["missing_resets_available"], "");
     assert_eq!(js["zero_resets_available"], "");
     let two = js["two_codex_accounts"].as_str().unwrap();
-    assert!(two.contains(">CX <") || two.contains("CX "));
+    assert!(two.contains("CX1"));
+    assert!(two.contains("CX2"));
     assert!(two.contains(" | "));
-    assert!(two.contains(">2 <") || two.contains("2 "));
-    assert_eq!(js["second_codex_title"], "Codex [2] trial");
+    assert_eq!(js["second_codex_title"], "Codex [2] trial *");
     assert_eq!(js["primary_codex_title"], "Codex [1]");
     let or_seg = js["openrouter_segment"].as_str().unwrap();
     assert!(or_seg.contains(">58<"));
