@@ -95,5 +95,9 @@ const results = {
   }, NOW),
   second_codex_title: codexInstanceTitle({id: 2, label: 'trial', selected: true}),
   primary_codex_title: codexInstanceTitle({id: 1, label: ''}),
+  instance_tag_first: instanceTagColor(1, 3),
+  instance_tag_mid: instanceTagColor(2, 3),
+  instance_tag_last: instanceTagColor(3, 3),
+  instance_tag_only: instanceTagColor(1, 1),
 };
 print(JSON.stringify(results));

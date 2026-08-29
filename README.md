@@ -25,8 +25,9 @@ neutral gray, and stale data is dimmed with a trailing `?` — e.g.
 `CX 43·57  CC 88·60·38  GK 12  OG 100·17·8  OR 58`.
 When Agent Command Center has extra ChatGPT logins (`acc ca instance create`),
 the Codex segment lists every account as `CX1`, `CX2`, … with a gray pipe:
-`CX1 43·57 | CX2 12`. The last `caN` / `catN` selection keeps its color; the
-other tags stay gray. A trial/free plan is just another instance; its month
+`CX1 43·57 | CX2 12`. The `CXN` tags use a light-blue→purple identity
+gradient (first account blue, last account purple); remaining-percent
+digits keep the usual green→red usage colors. A trial/free plan is just another instance; its month
 window is independent of the paid account's 5h/week windows. The click menu
 lists `Codex [1]` and `Codex [2] trial *` as separate sections, with `*` on the
 selected account.

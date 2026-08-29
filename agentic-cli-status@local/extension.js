@@ -52,6 +52,8 @@ const CLI_TAGS = [
 const GRADIENT_FULL_RGB = [0x8f, 0xf0, 0xa4];
 const GRADIENT_MID_RGB = [0xf8, 0xe4, 0x5c];
 const GRADIENT_LOW_RGB = [0xff, 0x7b, 0x63];
+const INSTANCE_TAG_FIRST_RGB = [0x7e, 0xc8, 0xff];
+const INSTANCE_TAG_LAST_RGB = [0xa8, 0x56, 0xe8];
 const EMPTY_COLOR = '#ff0000';
 const NEUTRAL_COLOR = '#9a9996';
 
@@ -147,6 +149,29 @@ function percentColor(left) {
 }
 
 /**
+ * Map a Codex instance id onto the light-blue→purple identity gradient.
+ *
+ * ``CX1`` is light blue, the last registered id is purple, and ids in
+ * between lerp the two. The compact bar uses this for the ``CXN`` tag
+ * only; remaining-percent digits keep :func:`percentColor` (including red
+ * when a window is exhausted).
+ *
+ * @param {number} id - 1-based instance id.
+ * @param {number} count - How many instances are on the bar.
+ * @returns {string} "#rrggbb" hex color.
+ */
+function instanceTagColor(id, count) {
+  const n = Math.max(1, Number(count) || 1);
+  const index = Math.max(1, Number(id) || 1);
+  const t = n <= 1 ? 0 : Math.min(1, (index - 1) / (n - 1));
+  const hex = INSTANCE_TAG_FIRST_RGB.map((start, i) => {
+    const channel = Math.round(start + (INSTANCE_TAG_LAST_RGB[i] - start) * t);
+    return channel.toString(16).padStart(2, '0');
+  }).join('');
+  return `#${hex}`;
+}
+
+/**
  * Format an exhausted weekly window's reset as a local weekday and clock.
  *
  * @param {?number} epoch - Reset time in epoch seconds.
@@ -211,30 +236,32 @@ function resetCountdown(epoch, nowEpoch) {
  * @param {string} tag - Short CLI tag.
  * @param {object} snapshot - One CLI entry from status.json.
  * @param {number} [nowEpoch] - Current epoch seconds; injectable for tests.
+ * @param {?string} [nameColor] - Override for the tag (Codex ``CXN`` identity).
  * @returns {string} Segment markup; a trailing "?" marks stale data.
  */
-function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000) {
+function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000, nameColor = null) {
   const windows = snapshot?.windows ?? [];
   if (!windows.length)
-    return `<span foreground="${NEUTRAL_COLOR}">${tag} –</span>`;
+    return `<span foreground="${nameColor || NEUTRAL_COLOR}">${tag} –</span>`;
   if (snapshot.error) {
     const marker = snapshot.stale ? '?' : '!';
-    return `<span foreground="${NEUTRAL_COLOR}">${tag} –${marker}</span>`;
+    return `<span foreground="${nameColor || NEUTRAL_COLOR}">${tag} –${marker}</span>`;
   }
 
   const weekly = windows.find(w => w.label === 'week');
-  if (weekly && percentLeft(weekly, nowEpoch) === 0) {
-    const staleMark = snapshot.stale ? '?' : '';
-    return `<span foreground="${EMPTY_COLOR}">${tag} </span>` +
-      `<span foreground="${EMPTY_COLOR}">` +
-      `${resetClock(weekly.resets_at)}${staleMark}</span>`;
-  }
-
   const shortTerm = windows.find(w => w.label === '5h' || w.label === 'rolling');
   const fiveHourExhausted = shortTerm && percentLeft(shortTerm, nowEpoch) === 0;
   const tagColor = fiveHourExhausted
     ? EMPTY_COLOR
     : percentColor(percentLeft(windows[0], nowEpoch));
+  const labelColor = nameColor || tagColor;
+  if (weekly && percentLeft(weekly, nowEpoch) === 0) {
+    const staleMark = snapshot.stale ? '?' : '';
+    return `<span foreground="${labelColor}">${tag} </span>` +
+      `<span foreground="${EMPTY_COLOR}">` +
+      `${resetClock(weekly.resets_at)}${staleMark}</span>`;
+  }
+
   const separator = fiveHourExhausted ? '-' : '·';
   const parts = windows
     .map(w => {
@@ -254,10 +281,9 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
     })
     .join(`<span foreground="${NEUTRAL_COLOR}">${separator}</span>`);
   const staleMark = snapshot.stale
-    ? `<span foreground="${tagColor}">?</span>`
+    ? `<span foreground="${labelColor}">?</span>`
     : '';
-  const nameColor = snapshot.selected === false ? NEUTRAL_COLOR : tagColor;
-  return `<span foreground="${nameColor}">${tag} </span>${parts}${staleMark}`;
+  return `<span foreground="${labelColor}">${tag} </span>${parts}${staleMark}`;
 }
 
 /**
@@ -265,8 +291,9 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000)
  *
  * Agent Command Center registers extra ChatGPT logins as isolated
  * ``CODEX_HOME`` directories. Each account is tagged ``CX1``, ``CX2``, …
- * and the last ``caN`` / ``catN`` selection keeps its color while the other
- * tags are gray: ``CX1 43·57 | CX2 12``.
+ * with a light-blue→purple identity color. Remaining-percent digits keep
+ * the usual green→red usage gradient, including a red reset clock next to
+ * the tag when a window is exhausted.
  *
  * @param {string} tag - Unused; kept so the call site matches other CLIs.
  * @param {object} snapshot - Codex CLI entry from status.json.
@@ -277,17 +304,23 @@ function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000
   const instances = snapshot?.instances;
   if (!Array.isArray(instances) || instances.length < 1) {
     const id = snapshot?.selected || 1;
-    return segmentMarkup(`CX${id}`, Object.assign({}, snapshot, {selected: true}), nowEpoch);
+    return segmentMarkup(
+      `CX${id}`,
+      snapshot,
+      nowEpoch,
+      instanceTagColor(id, 1),
+    );
   }
-  const selectedId = snapshot?.selected
-    ?? instances.find(item => item?.selected)?.id
-    ?? instances[0]?.id
-    ?? 1;
+  const count = instances.length;
   const sep = `<span foreground="${NEUTRAL_COLOR}"> | </span>`;
   return instances.map((instance) => {
     const id = instance?.id ?? 1;
-    const tagged = Object.assign({}, instance, {selected: id === selectedId});
-    return segmentMarkup(`CX${id}`, tagged, nowEpoch);
+    return segmentMarkup(
+      `CX${id}`,
+      instance,
+      nowEpoch,
+      instanceTagColor(id, count),
+    );
   }).join(sep);
 }
 
