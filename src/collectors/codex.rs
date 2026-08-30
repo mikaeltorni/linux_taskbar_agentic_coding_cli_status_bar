@@ -236,6 +236,42 @@ fn last_instance_by_id(last: Option<&Value>, id: i64) -> Option<&Value> {
         })
 }
 
+/// Recover account identity metadata from the last complete status snapshot.
+///
+/// The ACC registry can be briefly unavailable while the desktop session is
+/// starting. Retaining these rows prevents a transient read failure from
+/// collapsing a multi-account panel to the historical single-home shape.
+fn last_account_registry(last: Option<&Value>) -> (Vec<CodexAccountInstance>, i64) {
+    let selected = last
+        .and_then(|snapshot| snapshot.get("selected"))
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let mut rows: Vec<_> = last
+        .and_then(|snapshot| snapshot.get("instances"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = row.get("id").and_then(Value::as_i64)?;
+            let home = row.get("home").and_then(Value::as_str)?;
+            if home.is_empty() {
+                return None;
+            }
+            Some(CodexAccountInstance {
+                id,
+                home: PathBuf::from(home),
+                label: row
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            })
+        })
+        .collect();
+    rows.sort_by_key(|row| row.id);
+    (rows, selected)
+}
+
 /// Collect every ACC-registered ChatGPT Codex account independently.
 ///
 /// A missing registry returns the historical single-home `~/.codex` snapshot
@@ -243,7 +279,18 @@ fn last_instance_by_id(last: Option<&Value>, id: i64) -> Option<&Value> {
 /// `instances` array and a `selected` id. Top-level windows belong to the
 /// selected instance so the panel can render `CX2` with that account's usage.
 pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value>) -> Value {
-    let (rows, selected_id) = load_codex_account_registry(home);
+    let (mut rows, mut selected_id) = load_codex_account_registry(home);
+    if rows.is_empty() {
+        let (previous_rows, previous_selected) = last_account_registry(last);
+        if !previous_rows.is_empty() {
+            logging::debug(format!(
+                "ACC Codex registry unavailable; retaining {} previously tracked instances",
+                previous_rows.len()
+            ));
+            rows = previous_rows;
+            selected_id = previous_selected;
+        }
+    }
     if rows.is_empty() {
         let mut snapshot = collect_codex(home, now);
         snapshot["selected"] = json!(1);
@@ -922,5 +969,50 @@ mod tests {
             result["instances"][0]["windows"][0]["used_percent"],
             json!(10.0)
         );
+    }
+
+    #[test]
+    fn transiently_missing_registry_keeps_every_previous_instance() {
+        let sandbox = Sandbox::new();
+        let primary = sandbox.home.join(".codex");
+        let extra = sandbox.home.join(".codex-account-2");
+        let third = sandbox.home.join(".codex-account-3");
+        write_rollout_at(
+            &primary,
+            "2026/07/03",
+            "rollout-a.jsonl",
+            &[codex_token_count_event(10.0, 5.0)],
+        );
+        write_rollout_at(
+            &extra,
+            "2026/07/03",
+            "rollout-b.jsonl",
+            &[codex_token_count_event(20.0, 15.0)],
+        );
+        write_rollout_at(
+            &third,
+            "2026/07/03",
+            "rollout-c.jsonl",
+            &[codex_token_count_event(30.0, 25.0)],
+        );
+        write_registry(
+            &sandbox.home,
+            &json!([
+                {"id": 1, "home": primary.to_string_lossy(), "label": ""},
+                {"id": 2, "home": extra.to_string_lossy(), "label": "trial"},
+                {"id": 3, "home": third.to_string_lossy(), "label": "spare"},
+            ]),
+            3,
+        );
+        let previous = collect_codex_accounts(&sandbox.home, None, None);
+        std::fs::remove_file(tracker_state_dir(&sandbox.home).join(CODEX_INSTANCES_FILE)).unwrap();
+
+        let result = collect_codex_accounts(&sandbox.home, None, Some(&previous));
+
+        assert_eq!(result["selected"], json!(3));
+        assert_eq!(result["instances"].as_array().unwrap().len(), 3);
+        assert_eq!(result["instances"][0]["id"], json!(1));
+        assert_eq!(result["instances"][1]["id"], json!(2));
+        assert_eq!(result["instances"][2]["id"], json!(3));
     }
 }
