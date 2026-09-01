@@ -45,6 +45,11 @@ pub fn carry_last_reading(mut snapshot: Value, last_result: Option<&Value>) -> V
         {
             snapshot["windows"] = last["windows"].clone();
             snapshot["observed_at"] = last.get("observed_at").cloned().unwrap_or(Value::Null);
+            if let Some(credits) = last.get("credits") {
+                if !credits.is_null() {
+                    snapshot["credits"] = credits.clone();
+                }
+            }
             if snapshot.get("plan").map(|p| p.is_null()).unwrap_or(true) {
                 snapshot["plan"] = last.get("plan").cloned().unwrap_or(Value::Null);
             }

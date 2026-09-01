@@ -32,6 +32,30 @@ const results = {
     {label: 'week', used_percent: 59, resets_at: 1783617000},
     {label: 'fable', used_percent: 59, resets_at: 1783617000}]
   }, NOW),
+  credit_block_team: creditDetailText({
+    has_credits: false, unlimited: false, balance: null,
+    reached_type: 'workspace_member_credits_depleted', blocked: true}),
+  credit_block_generic: creditDetailText({
+    has_credits: false, unlimited: false, balance: '0',
+    reached_type: 'user_credits_depleted', blocked: true}),
+  credit_balance_only: creditDetailText({
+    has_credits: false, unlimited: false, balance: '0',
+    reached_type: null, blocked: false}),
+  credit_unlimited: creditDetailText({unlimited: true, balance: null}),
+  credit_absent: creditDetailText(null),
+  credit_blocked_true: creditBlocked({blocked: true}),
+  credit_blocked_false: creditBlocked({blocked: false, balance: '0'}),
+  // A healthy-looking window set still flags the credit block.
+  credit_marked_segment: segmentMarkup('CX1', {windows: [
+    {label: '5h', used_percent: 20, resets_at: NOW + 3600},
+    {label: 'week', used_percent: 10, resets_at: 1783617000}],
+    credits: {blocked: true, reached_type: 'workspace_member_credits_depleted'}
+  }, NOW),
+  credit_unmarked_segment: segmentMarkup('CX1', {windows: [
+    {label: '5h', used_percent: 20, resets_at: NOW + 3600},
+    {label: 'week', used_percent: 10, resets_at: 1783617000}],
+    credits: {blocked: false, balance: '0'}
+  }, NOW),
   countdown_59m: resetCountdown(NOW + 3540, NOW),
   countdown_60m: resetCountdown(NOW + 3600, NOW),
   rounded_reset_clock: resetClock(1783259999),

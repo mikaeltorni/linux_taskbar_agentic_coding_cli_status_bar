@@ -206,6 +206,7 @@ fn instance_snapshot(row: &CodexAccountInstance, collected: Value, selected_id: 
         "observed_at": collected.get("observed_at").cloned().unwrap_or(Value::Null),
         "plan": collected.get("plan").cloned().unwrap_or(Value::Null),
         "windows": collected.get("windows").cloned().unwrap_or(json!([])),
+        "credits": collected.get("credits").cloned().unwrap_or(Value::Null),
         "error": collected.get("error").cloned().unwrap_or(Value::Null),
     })
 }
@@ -417,10 +418,65 @@ struct Candidate {
     order: usize,
 }
 
+/// Human-readable reason Codex refused a turn for credit reasons.
+///
+/// Args:
+///     reached_type: Raw `rate_limit_reached_type` from a rollout event.
+///
+/// Returns:
+///     A short phrase, or None when the value is not a credit block.
+pub fn credit_block_phrase(reached_type: &str) -> Option<String> {
+    match reached_type.trim() {
+        "" => None,
+        "workspace_member_credits_depleted" => Some("team credits out".into()),
+        other if other.contains("credit") => Some("credits out".into()),
+        _ => None,
+    }
+}
+
+/// Read the credit half of one `rate_limits` event.
+///
+/// Codex reports two limit families per turn: `limit_id: "codex"` carries the
+/// 5h/weekly windows, while `limit_id: "premium"` carries the pay-as-you-go
+/// credit balance and, when a turn was actually refused,
+/// `rate_limit_reached_type`. A window countdown says nothing about a credit
+/// block — the window can reset without unblocking the account — so the credit
+/// state is published alongside the windows instead of being dropped.
+///
+/// Args:
+///     limits: The `rate_limits` object from one rollout event.
+///     observed_at: Epoch seconds the event was written.
+///
+/// Returns:
+///     A publishable credit snapshot, or None when the event carries no
+///     credit information at all.
+fn credit_state(limits: &serde_json::Map<String, Value>, observed_at: f64) -> Option<Value> {
+    let credits = limits.get("credits").and_then(Value::as_object);
+    let reached = limits
+        .get("rate_limit_reached_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if credits.is_none() && reached.is_none() {
+        return None;
+    }
+    let get = |key: &str| credits.and_then(|map| map.get(key)).cloned();
+    Some(json!({
+        "has_credits": get("has_credits").unwrap_or(Value::Null),
+        "unlimited": get("unlimited").unwrap_or(Value::Null),
+        "balance": get("balance").unwrap_or(Value::Null),
+        "reached_type": reached.map(Value::from).unwrap_or(Value::Null),
+        "blocked": reached.and_then(credit_block_phrase).is_some(),
+        "observed_at": observed_at,
+    }))
+}
+
 fn codex_last_rate_limits(rollout: &Path, now: f64) -> Option<Value> {
     let mut candidates: std::collections::BTreeMap<String, Vec<Candidate>> =
         std::collections::BTreeMap::new();
     let mut plan_type: Option<Value> = None;
+    // Newest credit state seen in this rollout, whatever `limit_id` carried it.
+    let mut credits: Option<(f64, usize, Value)> = None;
     let lines = match tail_lines(rollout, TAIL_READ_BYTES) {
         Ok(lines) => lines,
         Err(exc) => {
@@ -488,10 +544,19 @@ fn codex_last_rate_limits(rollout: &Path, now: f64) -> Option<Value> {
                     }
                 }
             }
-            if let Some(plan) = limits.get("plan_type") {
-                if !plan.is_null() && plan != &json!("") {
-                    plan_type = Some(plan.clone());
-                }
+        }
+        if let Some(plan) = limits.get("plan_type") {
+            if !plan.is_null() && plan != &json!("") {
+                plan_type = Some(plan.clone());
+            }
+        }
+        if let Some(state) = credit_state(limits, observed_at) {
+            let newer = credits
+                .as_ref()
+                .map(|(seen_at, seen_order, _)| (observed_at, order) >= (*seen_at, *seen_order))
+                .unwrap_or(true);
+            if newer {
+                credits = Some((observed_at, order, state));
             }
         }
     }
@@ -540,13 +605,17 @@ fn codex_last_rate_limits(rollout: &Path, now: f64) -> Option<Value> {
         rollout.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
         plan_type
     ));
-    Some(snapshot(
+    let mut result = snapshot(
         "codex_sessions",
         Some(newest_observed),
         plan_type,
         windows,
         None,
-    ))
+    );
+    if let Some((_, _, state)) = credits {
+        result["credits"] = state;
+    }
+    Some(result)
 }
 
 #[cfg(test)]
@@ -627,6 +696,92 @@ mod tests {
         let windows = result["windows"].as_array().unwrap();
         assert_eq!(windows[0]["used_percent"], json!(100.0));
         assert_eq!(windows[1]["used_percent"], json!(16.0));
+    }
+
+    #[test]
+    fn publishes_the_credit_block_that_refused_the_turn() {
+        // Real shape from a team login: the window family and the credit
+        // family arrive as two events, and only the second says why Codex
+        // actually refused.
+        let sandbox = Sandbox::new();
+        let events = vec![
+            json!({
+                "timestamp": "2026-07-03T10:40:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "rate_limits": {
+                        "limit_id": "codex",
+                        "primary": {"used_percent": 100.0, "window_minutes": 300, "resets_at": 1783085000_i64},
+                        "secondary": {"used_percent": 16.0, "window_minutes": 10080, "resets_at": 1783579000_i64},
+                        "credits": {"has_credits": false, "unlimited": false, "balance": null},
+                        "plan_type": "team",
+                        "rate_limit_reached_type": null,
+                    }
+                },
+            }),
+            json!({
+                "timestamp": "2026-07-03T10:41:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "rate_limits": {
+                        "limit_id": "premium",
+                        "primary": null,
+                        "secondary": null,
+                        "credits": {"has_credits": false, "unlimited": false, "balance": null},
+                        "plan_type": "team",
+                        "rate_limit_reached_type": "workspace_member_credits_depleted",
+                    }
+                },
+            }),
+        ];
+        write_codex_rollout(&sandbox.home, "2026/07/03", "rollout-a.jsonl", &events);
+        let result = collect_codex(&sandbox.home, None);
+        // plan_type now survives even though it arrived on a windowless event.
+        assert_eq!(result["plan"], json!("team"));
+        assert_eq!(
+            result["credits"]["reached_type"],
+            json!("workspace_member_credits_depleted")
+        );
+        assert_eq!(result["credits"]["blocked"], json!(true));
+        assert_eq!(result["credits"]["has_credits"], json!(false));
+        assert_eq!(result["windows"][0]["used_percent"], json!(100.0));
+    }
+
+    #[test]
+    fn reports_credit_balance_without_a_block_for_an_unblocked_login() {
+        let sandbox = Sandbox::new();
+        let events = vec![json!({
+            "timestamp": "2026-07-03T10:40:00Z",
+            "type": "event_msg",
+            "payload": {
+                "rate_limits": {
+                    "limit_id": "codex",
+                    "primary": {"used_percent": 12.0, "window_minutes": 300, "resets_at": 1783085000_i64},
+                    "credits": {"has_credits": false, "unlimited": false, "balance": "0"},
+                    "plan_type": "plus",
+                    "rate_limit_reached_type": null,
+                }
+            },
+        })];
+        write_codex_rollout(&sandbox.home, "2026/07/03", "rollout-b.jsonl", &events);
+        let result = collect_codex(&sandbox.home, None);
+        assert_eq!(result["credits"]["balance"], json!("0"));
+        assert_eq!(result["credits"]["reached_type"], json!(null));
+        assert_eq!(result["credits"]["blocked"], json!(false));
+    }
+
+    #[test]
+    fn credit_block_phrase_names_the_plan_that_ran_out() {
+        assert_eq!(
+            credit_block_phrase("workspace_member_credits_depleted").as_deref(),
+            Some("team credits out")
+        );
+        assert_eq!(
+            credit_block_phrase("user_credits_depleted").as_deref(),
+            Some("credits out")
+        );
+        assert_eq!(credit_block_phrase("usage_limit_reached"), None);
+        assert_eq!(credit_block_phrase(""), None);
     }
 
     #[test]

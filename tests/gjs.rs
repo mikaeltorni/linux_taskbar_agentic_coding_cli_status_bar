@@ -125,6 +125,8 @@ fn agentic_results() -> Option<Value> {
         "resetCountdown",
         "resetsText",
         "resetAvailabilityText",
+        "creditBlocked",
+        "creditDetailText",
         "segmentMarkup",
         "codexBarMarkup",
         "codexInstanceTitle",
@@ -247,6 +249,29 @@ fn gradient_and_segments() {
     let og_index = source.find("['opencode_go', 'OG']").unwrap();
     let or_index = source.find("['openrouter', 'OR']").unwrap();
     assert!(og_index < or_index);
+}
+
+#[test]
+fn credit_state_is_visible_on_the_bar_and_in_the_menu() {
+    let Some(js) = agentic_results() else {
+        return;
+    };
+    assert_eq!(js["credit_block_team"], "credits: team credits out");
+    assert_eq!(js["credit_block_generic"], "credits: credits out");
+    assert_eq!(js["credit_balance_only"], "credits: 0 left");
+    assert_eq!(js["credit_unlimited"], "credits: unlimited");
+    assert_eq!(js["credit_absent"], "");
+    assert_eq!(js["credit_blocked_true"], true);
+    assert_eq!(js["credit_blocked_false"], false);
+    // The block marker rides along even though both windows have budget left,
+    // because a window reset will not lift a credit block.
+    let marked = js["credit_marked_segment"].as_str().unwrap();
+    assert!(
+        marked.ends_with("<span foreground=\"#ff0000\">$</span>"),
+        "credit block not marked: {marked}"
+    );
+    let unmarked = js["credit_unmarked_segment"].as_str().unwrap();
+    assert!(!unmarked.contains('$'), "unexpected credit mark: {unmarked}");
 }
 
 #[test]
