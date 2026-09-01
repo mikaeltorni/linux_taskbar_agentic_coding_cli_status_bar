@@ -541,6 +541,14 @@ fn merge_cli_pane(
             .filter(|p| !p.is_null())
             .unwrap_or_else(|| pane_snapshot.get("plan").cloned().unwrap_or(Value::Null));
         pane_snapshot["observed_at"] = json!(pane_observed_at);
+        // `/status` prints windows only. Dropping the rollout's credit state
+        // here would hide a credit block behind a window countdown that will
+        // not unblock the account.
+        if let Some(credits) = snapshot.get("credits") {
+            if !credits.is_null() {
+                pane_snapshot["credits"] = credits.clone();
+            }
+        }
         if cli_id == "codex" && pane_snapshot.get("resets_available").is_none() {
             if let Some(obj) = prior_reset_metadata.as_object() {
                 for (key, value) in obj {
@@ -909,6 +917,7 @@ fn promote_codex_selected_instance(mut snapshot: Value) -> Value {
     for key in [
         "windows",
         "plan",
+        "credits",
         "observed_at",
         "error",
         "source",
@@ -1022,6 +1031,7 @@ fn apply_codex_live_pane(
         for key in [
             "windows",
             "plan",
+            "credits",
             "observed_at",
             "error",
             "source",

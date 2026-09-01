@@ -218,6 +218,45 @@ function resetCountdown(epoch, nowEpoch) {
 }
 
 /**
+ * Whether a snapshot's credit state is what is blocking the account.
+ *
+ * Codex reports two independent limit families per turn: the 5h/weekly
+ * windows, and a pay-as-you-go credit balance. A depleted balance refuses
+ * turns while every window still shows budget, so the window countdown alone
+ * would claim the account is fine.
+ *
+ * @param {?object} credits - The `credits` object from a status snapshot.
+ * @returns {boolean} True while a credit block is in force.
+ */
+function creditBlocked(credits) {
+  return Boolean(credits && credits.blocked);
+}
+
+/**
+ * Details-menu line describing a snapshot's credit state.
+ *
+ * @param {?object} credits - The `credits` object from a status snapshot.
+ * @returns {string} Line text, or an empty string when there is nothing to say.
+ */
+function creditDetailText(credits) {
+  if (!credits)
+    return '';
+  if (credits.unlimited === true)
+    return 'credits: unlimited';
+  const reached = String(credits.reached_type ?? '').trim();
+  if (reached) {
+    const phrase = reached === 'workspace_member_credits_depleted'
+      ? 'team credits out'
+      : 'credits out';
+    return `credits: ${phrase}`;
+  }
+  const balance = credits.balance;
+  if (balance === null || balance === undefined || balance === '')
+    return '';
+  return `credits: ${balance} left`;
+}
+
+/**
  * Format the compact taskbar Pango markup for one CLI, e.g. "CX 43·57".
  *
  * Percentages shown are the limits LEFT (remaining), matching how the CLIs
@@ -241,11 +280,16 @@ function resetCountdown(epoch, nowEpoch) {
  */
 function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000, nameColor = null) {
   const windows = snapshot?.windows ?? [];
+  // A credit block outlives any window reset, so it is flagged even when the
+  // segment has no usable window numbers to color.
+  const creditMark = creditBlocked(snapshot?.credits)
+    ? `<span foreground="${EMPTY_COLOR}">$</span>`
+    : '';
   if (!windows.length)
-    return `<span foreground="${nameColor || NEUTRAL_COLOR}">${tag} –</span>`;
+    return `<span foreground="${nameColor || NEUTRAL_COLOR}">${tag} –</span>${creditMark}`;
   if (snapshot.error) {
     const marker = snapshot.stale ? '?' : '!';
-    return `<span foreground="${nameColor || NEUTRAL_COLOR}">${tag} –${marker}</span>`;
+    return `<span foreground="${nameColor || NEUTRAL_COLOR}">${tag} –${marker}</span>${creditMark}`;
   }
 
   const weekly = windows.find(w => w.label === 'week');
@@ -259,7 +303,7 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000,
     const staleMark = snapshot.stale ? '?' : '';
     return `<span foreground="${labelColor}">${tag} </span>` +
       `<span foreground="${EMPTY_COLOR}">` +
-      `${resetClock(weekly.resets_at)}${staleMark}</span>`;
+      `${resetClock(weekly.resets_at)}${staleMark}</span>${creditMark}`;
   }
 
   const separator = fiveHourExhausted ? '-' : '·';
@@ -283,7 +327,7 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000,
   const staleMark = snapshot.stale
     ? `<span foreground="${labelColor}">?</span>`
     : '';
-  return `<span foreground="${labelColor}">${tag} </span>${parts}${staleMark}`;
+  return `<span foreground="${labelColor}">${tag} </span>${parts}${staleMark}${creditMark}`;
 }
 
 /**
@@ -454,6 +498,15 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       return;
     }
     const nowEpoch = GLib.get_real_time() / 1000000;
+    const creditLine = creditDetailText(snapshot.credits);
+    if (creditLine) {
+      const item = new PopupMenu.PopupMenuItem('', { reactive: false });
+      const color = creditBlocked(snapshot.credits) ? EMPTY_COLOR : NEUTRAL_COLOR;
+      item.label.clutter_text.set_markup(
+        `   <span foreground="${color}">` +
+        `${GLib.markup_escape_text(creditLine, -1)}</span>`);
+      this.menu.addMenuItem(item);
+    }
     for (const window of snapshot.windows ?? []) {
       const left = percentLeft(window, nowEpoch);
       // A window that has already rolled over reads as full; its old reset
