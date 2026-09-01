@@ -151,7 +151,19 @@ fn read_proc_environ_var(pid: &str, key: &str) -> Option<String> {
         .find_map(|entry| entry.strip_prefix(&prefix).map(str::to_string))
 }
 
-fn console_codex_home(tmux: &dyn TmuxRunner, session: &str) -> Option<String> {
+/// Return the `CODEX_HOME` the tmux debug console is currently logged into.
+///
+/// Read straight from the console process environment, so the reading is the
+/// account identity itself rather than a guess from usage numbers.
+///
+/// Args:
+///     tmux: Runner used to query the console session.
+///     session: Detached console session name.
+///
+/// Returns:
+///     The console pane's `CODEX_HOME`, or None when the window or the
+///     variable is missing.
+pub fn console_codex_home(tmux: &dyn TmuxRunner, session: &str) -> Option<String> {
     let result = tmux.run(&[
         "list-panes".into(),
         "-t".into(),
@@ -171,11 +183,6 @@ fn console_codex_home(tmux: &dyn TmuxRunner, session: &str) -> Option<String> {
 
 fn homes_match(left: &str, right: &Path) -> bool {
     Path::new(left) == right
-}
-
-/// Return whether the Codex debug pane is logged into `desired` `CODEX_HOME`.
-pub fn console_uses_codex_home(tmux: &dyn TmuxRunner, session: &str, desired: &Path) -> bool {
-    console_codex_home(tmux, session).is_some_and(|current| homes_match(&current, desired))
 }
 
 /// Kill the Codex debug window when it is logged into a different ACC instance.
