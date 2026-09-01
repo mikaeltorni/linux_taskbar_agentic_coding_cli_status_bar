@@ -1,5 +1,6 @@
 //! Codex collector: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -62,27 +63,9 @@ pub fn collect_codex_at(codex_home: &Path, now: Option<f64>) -> Value {
             Some(format!("no {}/sessions directory", codex_home.display())),
         );
     }
-    let mut day_dirs: Vec<_> = walk_day_dirs(&sessions);
-    day_dirs.sort_by(|a, b| b.as_os_str().cmp(a.as_os_str()));
-    for day_dir in day_dirs.into_iter().take(CODEX_SCAN_DAYS) {
-        let mut files: Vec<_> = match std::fs::read_dir(&day_dir) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
-                        .unwrap_or(false)
-                })
-                .collect(),
-            Err(_) => continue,
-        };
-        files.sort_by(|a, b| b.as_os_str().cmp(a.as_os_str()));
-        for rollout in files {
-            if let Some(found) = codex_last_rate_limits(&rollout, now) {
-                return found;
-            }
+    for rollout in recent_rollouts(&sessions) {
+        if let Some(found) = codex_last_rate_limits(&rollout, now) {
+            return found;
         }
     }
     snapshot(
@@ -324,6 +307,76 @@ pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value
     combined
 }
 
+/// Return a file's modification time in epoch seconds, or 0 when unknown.
+fn file_mtime(path: &Path) -> f64 {
+    path.metadata()
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|delta| delta.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+/// Return rollout files worth reading, most recently written first.
+///
+/// Codex names a rollout after the moment the session *started*, but keeps
+/// appending to it while the session is resumed. Ordering by file name
+/// therefore hands the newest limits of a long-lived `ca1` console to a dead
+/// session that merely started later, which freezes one account's percentages
+/// (and makes two accounts look like they share one reading). Ranking by
+/// modification time instead always reaches the session that is actually
+/// running. `CODEX_SCAN_DAYS` still bounds the work: only the day directories
+/// holding the most recently written rollouts are considered.
+///
+/// Args:
+///     sessions: `CODEX_HOME/sessions` directory for one account.
+///
+/// Returns:
+///     Rollout paths ordered newest modification first.
+fn recent_rollouts(sessions: &Path) -> Vec<PathBuf> {
+    let mut newest_by_day: HashMap<PathBuf, f64> = HashMap::new();
+    let mut files: Vec<(f64, PathBuf, PathBuf)> = Vec::new();
+    for day_dir in walk_day_dirs(sessions) {
+        let Ok(entries) = std::fs::read_dir(&day_dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let is_rollout = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("rollout-") && n.ends_with(".jsonl"))
+                .unwrap_or(false);
+            if !is_rollout {
+                continue;
+            }
+            let mtime = file_mtime(&path);
+            newest_by_day
+                .entry(day_dir.clone())
+                .and_modify(|best| {
+                    if mtime > *best {
+                        *best = mtime;
+                    }
+                })
+                .or_insert(mtime);
+            files.push((mtime, day_dir.clone(), path));
+        }
+    }
+    let mut days: Vec<(f64, PathBuf)> = newest_by_day
+        .into_iter()
+        .map(|(day, mtime)| (mtime, day))
+        .collect();
+    days.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    let kept: HashSet<PathBuf> = days
+        .into_iter()
+        .take(CODEX_SCAN_DAYS)
+        .map(|(_, day)| day)
+        .collect();
+    files.retain(|(_, day, _)| kept.contains(day));
+    files.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| b.2.cmp(&a.2)));
+    files.into_iter().map(|(_, _, path)| path).collect()
+}
+
 fn walk_day_dirs(sessions: &Path) -> Vec<std::path::PathBuf> {
     let mut days = Vec::new();
     let Ok(years) = std::fs::read_dir(sessions) else {
@@ -535,6 +588,45 @@ mod tests {
         );
         let observed = result["observed_at"].as_f64().unwrap();
         assert!((observed - 1_783_075_285.0).abs() < 2.0);
+    }
+
+    #[test]
+    fn prefers_the_resumed_session_still_being_written_over_a_newer_named_one() {
+        // A `ca1` console started on 07/02 and is still appending; a short
+        // session started on 07/03 finished long ago. Name ordering picks the
+        // dead one and freezes the account at 0%.
+        let sandbox = Sandbox::new();
+        let live = write_codex_rollout(
+            &sandbox.home,
+            "2026/07/02",
+            "rollout-2026-07-02T09-00-00-live.jsonl",
+            &[codex_token_count_event(100.0, 16.0)],
+        );
+        let dead = write_codex_rollout(
+            &sandbox.home,
+            "2026/07/03",
+            "rollout-2026-07-03T10-32-59-dead.jsonl",
+            &[codex_token_count_event(0.0, 0.0)],
+        );
+        let base =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_783_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&dead)
+            .unwrap()
+            .set_modified(base)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&live)
+            .unwrap()
+            .set_modified(base + std::time::Duration::from_secs(3_600))
+            .unwrap();
+
+        let result = collect_codex(&sandbox.home, None);
+        let windows = result["windows"].as_array().unwrap();
+        assert_eq!(windows[0]["used_percent"], json!(100.0));
+        assert_eq!(windows[1]["used_percent"], json!(16.0));
     }
 
     #[test]

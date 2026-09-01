@@ -19,7 +19,7 @@ use crate::http::HttpOpener;
 use crate::logging;
 use crate::snapshot::carry_last_reading;
 use crate::tmux::{
-    console_uses_codex_home, ensure_console, real_sleep, refresh_and_capture,
+    console_codex_home, ensure_console, real_sleep, refresh_and_capture,
     take_codex_console_refresh, tmux_available, tmux_console_cli_ids, RealTmux, TmuxRunner,
 };
 
@@ -103,6 +103,46 @@ fn carry_fresher_reading(snapshot: Value, last: Option<&Value>) -> Value {
         carried["plan"] = last.get("plan").cloned().unwrap_or(Value::Null);
     }
     carried
+}
+
+/// Return the previous snapshot only when it describes the same account.
+///
+/// Every non-Codex CLI is a single login, so its previous reading always
+/// belongs to it. Codex can hold several ChatGPT logins, and the top-level
+/// fields belong to the selected one; when the selection moved between ticks
+/// the previous reading is another account's and carrying it would publish one
+/// login's limits under another's name.
+///
+/// Args:
+///     cli_id: Poller CLI id being collected.
+///     snapshot: Snapshot built for this tick.
+///     last: Previous tick's snapshot for the same CLI.
+///
+/// Returns:
+///     `last` when it is safe to carry forward, otherwise None.
+fn codex_same_account_last<'a>(
+    cli_id: &str,
+    snapshot: &Value,
+    last: Option<&'a Value>,
+) -> Option<&'a Value> {
+    let last = last?;
+    if cli_id != "codex" {
+        return Some(last);
+    }
+    if snapshot.get("instances").is_none() {
+        return Some(last);
+    }
+    let now_selected = snapshot.get("selected").and_then(Value::as_i64);
+    let then_selected = last.get("selected").and_then(Value::as_i64);
+    match (now_selected, then_selected) {
+        (Some(now), Some(then)) if now != then => {
+            logging::info(format!(
+                "codex selection moved {then} -> {now}; not carrying the previous account's reading"
+            ));
+            None
+        }
+        _ => Some(last),
+    }
 }
 
 fn carry_codex_reset_metadata(snapshot: Value, last: Option<&Value>) -> Value {
@@ -571,9 +611,15 @@ fn collect_cli(
         snapshot = headless_snapshot
             .unwrap_or_else(|| collect_headless(cli_id, home, last, cli_config, now, hooks));
     }
-    snapshot = carry_fresher_reading(snapshot, last);
+    // Carrying a previous reading forward is only ever valid inside one
+    // account. The top-level Codex snapshot is a projection of whichever
+    // instance ACC has selected, so once `caN` moves the selection the previous
+    // tick describes a *different* ChatGPT login and must not be carried onto
+    // the new one.
+    let account_last = codex_same_account_last(cli_id, &snapshot, last);
+    snapshot = carry_fresher_reading(snapshot, account_last);
     if cli_id == "codex" {
-        snapshot = carry_codex_reset_metadata(snapshot, last);
+        snapshot = carry_codex_reset_metadata(snapshot, account_last);
     }
     let headless_snapshot = snapshot.clone();
     let mut last_tmux_attempt = last.and_then(|l| l.get("tmux_attempt_at").and_then(Value::as_f64));
@@ -606,6 +652,31 @@ fn collect_cli(
     }
     let mut pane_text = None;
     let mut pane_observed_at = None;
+    // Identity of the login the debug console is running, read from the pane
+    // process environment. Every `/status` capture belongs to this account and
+    // to no other, which is what keeps two ChatGPT logins from sharing one
+    // reading.
+    let console_home: Option<String> = if cli_id == "codex"
+        && tmux_config
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    {
+        let session = tmux_config
+            .get("session")
+            .and_then(Value::as_str)
+            .unwrap_or("agentic-cli-status");
+        match &hooks.tmux {
+            Some(tmux) => console_codex_home(tmux.as_ref(), session),
+            None => console_codex_home(&RealTmux, session),
+        }
+    } else {
+        None
+    };
+    let console_follows_selected = cli_id == "codex"
+        && console_home
+            .as_deref()
+            .is_some_and(|console| Path::new(console) == selected_codex_home(home));
     if tmux_wanted {
         let session = tmux_config
             .get("session")
@@ -631,20 +702,6 @@ fn collect_cli(
             .unwrap_or(true)
         && (source_mode == "auto" || source_mode == "tmux")
     {
-        let session = tmux_config
-            .get("session")
-            .and_then(Value::as_str)
-            .unwrap_or("agentic-cli-status");
-        let console_follows_selected = if cli_id == "codex" {
-            let desired = selected_codex_home(home);
-            if let Some(tmux) = &hooks.tmux {
-                console_uses_codex_home(tmux.as_ref(), session, &desired)
-            } else {
-                console_uses_codex_home(&RealTmux, session, &desired)
-            }
-        } else {
-            false
-        };
         let (saved_text, saved_at) = load_pane_capture(home, cli_id);
         if let (Some(saved_text), Some(saved_at)) = (saved_text, saved_at) {
             let last_checked = last
@@ -667,7 +724,7 @@ fn collect_cli(
                     stale_after,
                     last,
                     now,
-                    console_follows_selected,
+                    console_home.as_deref(),
                 )
             } else {
                 merge_cli_pane(
@@ -694,7 +751,7 @@ fn collect_cli(
                 stale_after,
                 last,
                 now,
-                false,
+                console_home.as_deref(),
             )
         } else {
             merge_cli_pane(
@@ -709,7 +766,10 @@ fn collect_cli(
             )
         };
     }
-    snapshot = carry_window_resets(snapshot, &[&headless_snapshot, last.unwrap_or(&json!({}))]);
+    snapshot = carry_window_resets(
+        snapshot,
+        &[&headless_snapshot, account_last.unwrap_or(&json!({}))],
+    );
     if let Some(obj) = endpoint_marks.as_object() {
         for (key, value) in obj {
             snapshot[key] = value.clone();
@@ -769,6 +829,34 @@ fn codex_pane_distance(instance: &Value, pane: &Value) -> Option<f64> {
         }
     }
     (matched > 0).then_some(total)
+}
+
+/// Return the ACC instance registered at `home`, if any.
+///
+/// Identity beats inference: when the debug console's `CODEX_HOME` names a
+/// registered account, its `/status` capture belongs to that account with no
+/// guessing, so two logins at similar usage can never be handed each other's
+/// numbers.
+///
+/// Args:
+///     snapshot: Combined Codex snapshot carrying the `instances` array.
+///     home: `CODEX_HOME` read from the console pane process, if known.
+///
+/// Returns:
+///     The matching instance id, or None when `home` is unknown or
+///     unregistered.
+fn codex_instance_for_home(snapshot: &Value, home: Option<&str>) -> Option<i64> {
+    let home = Path::new(home?);
+    snapshot
+        .get("instances")?
+        .as_array()?
+        .iter()
+        .find(|row| {
+            row.get("home")
+                .and_then(Value::as_str)
+                .is_some_and(|registered| Path::new(registered) == home)
+        })
+        .and_then(|row| row.get("id").and_then(Value::as_i64))
 }
 
 /// Return the ACC instance whose usage matches a captured `/status` pane.
@@ -848,18 +936,25 @@ fn apply_codex_live_pane(
     stale_after: i64,
     last: Option<&Value>,
     now: f64,
-    console_follows_selected: bool,
+    console_home: Option<&str>,
 ) -> Value {
     let selected_id = snapshot
         .get("selected")
         .and_then(Value::as_i64)
         .unwrap_or(1);
-    let owner_id = if console_follows_selected {
+    let console_owner = codex_instance_for_home(&snapshot, console_home);
+    let owner_id = if let Some(owner_id) = console_owner {
         logging::debug(format!(
-            "codex pane /status applied to selected instance {selected_id} (console CODEX_HOME matches)"
+            "codex pane /status applied to instance {owner_id} (console CODEX_HOME={})",
+            console_home.unwrap_or("unset")
         ));
-        selected_id
+        owner_id
     } else {
+        if let Some(home) = console_home {
+            logging::warn(format!(
+                "codex console CODEX_HOME={home} is not a registered ACC instance; falling back to usage matching"
+            ));
+        }
         let pane = parse_pane("codex", pane_text, Some(pane_observed_at));
         let Some(owner_id) = match_codex_pane_instance(&snapshot, &pane) else {
             logging::warn(
@@ -905,7 +1000,10 @@ fn apply_codex_live_pane(
             map.remove(key);
         }
     }
-    let merge_mode = if console_follows_selected {
+    // A capture whose account is known from the console process environment is
+    // authoritative for that account, even when its percentages look older
+    // than the rollout reading.
+    let merge_mode = if console_owner.is_some() {
         "tmux"
     } else {
         source_mode
@@ -1575,7 +1673,7 @@ mod tests {
             "│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 17:05) │\n",
             "│  Weekly limit:         [█████████░░░░░░░░░░░] 43% left               │\n",
         );
-        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, false);
+        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, None);
         assert_eq!(applied["selected"], json!(2));
         assert_eq!(applied["plan"], json!("plus"));
         assert_eq!(applied["windows"][0]["used_percent"], json!(29.0));
@@ -1611,6 +1709,7 @@ mod tests {
             "instances": [
                 {
                     "id": 1,
+                    "home": "/home/u/.codex",
                     "plan": "team",
                     "windows": [
                         {"label": "5h", "used_percent": 100.0},
@@ -1619,6 +1718,7 @@ mod tests {
                 },
                 {
                     "id": 2,
+                    "home": "/home/u/.codex-account-2",
                     "plan": "plus",
                     "windows": [
                         {"label": "5h", "used_percent": 94.0},
@@ -1631,7 +1731,16 @@ mod tests {
             "│  5h limit:             [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 18:34) │\n",
             "│  Weekly limit:         [█████████████████░░░] 86% left               │\n",
         );
-        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, true);
+        let applied = apply_codex_live_pane(
+            snapshot,
+            pane,
+            80.0,
+            "auto",
+            1800,
+            None,
+            80.0,
+            Some("/home/u/.codex-account-2"),
+        );
         assert_eq!(applied["windows"][0]["used_percent"], json!(100.0));
         assert_eq!(applied["windows"][1]["used_percent"], json!(14.0));
         assert_eq!(
@@ -1642,6 +1751,90 @@ mod tests {
             applied["instances"][0]["windows"][0]["used_percent"],
             json!(100.0)
         );
+    }
+
+    #[test]
+    fn console_home_owns_the_pane_when_both_accounts_sit_at_the_same_usage() {
+        // Two exhausted logins read identically, so usage matching cannot tell
+        // them apart. The console CODEX_HOME can, and must.
+        let snapshot = json!({
+            "selected": 1,
+            "windows": [
+                {"label": "5h", "used_percent": 100.0},
+                {"label": "week", "used_percent": 16.0}
+            ],
+            "plan": "team",
+            "observed_at": 50.0,
+            "instances": [
+                {
+                    "id": 1,
+                    "home": "/home/u/.codex",
+                    "plan": "team",
+                    "windows": [
+                        {"label": "5h", "used_percent": 100.0},
+                        {"label": "week", "used_percent": 16.0}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "home": "/home/u/.codex-account-2",
+                    "plan": "plus",
+                    "windows": [
+                        {"label": "5h", "used_percent": 100.0},
+                        {"label": "week", "used_percent": 16.0}
+                    ]
+                },
+            ]
+        });
+        let pane = concat!(
+            "│  5h limit:             [████████████████████] 70% left (resets 17:05) │\n",
+            "│  Weekly limit:         [████████████████████] 90% left               │\n",
+        );
+        let applied = apply_codex_live_pane(
+            snapshot,
+            pane,
+            80.0,
+            "auto",
+            1800,
+            None,
+            80.0,
+            Some("/home/u/.codex-account-2"),
+        );
+        // Instance 2 took the fresh console reading; instance 1 kept its own.
+        assert_eq!(
+            applied["instances"][1]["windows"][0]["used_percent"],
+            json!(30.0)
+        );
+        assert_eq!(
+            applied["instances"][0]["windows"][0]["used_percent"],
+            json!(100.0)
+        );
+        // Selected is still 1, so the compact bar keeps showing account 1.
+        assert_eq!(applied["windows"][0]["used_percent"], json!(100.0));
+    }
+
+    #[test]
+    fn selection_change_does_not_carry_the_previous_account_forward() {
+        let fresh = json!({
+            "selected": 2,
+            "observed_at": 100.0,
+            "windows": [{"label": "5h", "used_percent": 3.0}],
+            "instances": [{"id": 2, "home": "/home/u/.codex-account-2"}],
+        });
+        let previous = json!({
+            "selected": 1,
+            "observed_at": 900.0,
+            "windows": [{"label": "5h", "used_percent": 100.0}],
+        });
+        assert!(codex_same_account_last("codex", &fresh, Some(&previous)).is_none());
+
+        let same_account = json!({
+            "selected": 2,
+            "observed_at": 900.0,
+            "windows": [{"label": "5h", "used_percent": 100.0}],
+        });
+        assert!(codex_same_account_last("codex", &fresh, Some(&same_account)).is_some());
+        assert!(codex_same_account_last("claude_code", &fresh, Some(&previous)).is_some());
     }
 
     #[test]
@@ -1677,7 +1870,7 @@ mod tests {
             "│  5h limit:             [████████████████████] 65% left (resets 17:05) │\n",
             "│  Weekly limit:         [████████████████████] 94% left               │\n",
         );
-        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, false);
+        let applied = apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, None);
         assert_eq!(applied["windows"][0]["used_percent"], json!(35.0));
         assert_eq!(applied["windows"][1]["used_percent"], json!(6.0));
         assert_eq!(
