@@ -566,6 +566,33 @@ fn codex_last_rate_limits(rollout: &Path, now: f64) -> Option<Value> {
             .iter()
             .filter(|c| c.resets_at.map(|r| r as f64 > now).unwrap_or(true))
             .collect();
+        if active.is_empty() {
+            // Every reading for this window expired before `now` — typically an
+            // idle account whose newest rollout predates a reboot. The window
+            // has since rolled over, so the recorded percentage no longer
+            // describes it. Publish the reset instead of a stale usage bar with
+            // a countdown that already elapsed.
+            let expired_at = label_candidates
+                .iter()
+                .filter_map(|c| c.resets_at)
+                .max()
+                .map(|r| r as f64);
+            if let Some(expired_at) = expired_at {
+                logging::debug(format!(
+                    "codex window {label} expired at {expired_at}; reporting it as reset"
+                ));
+                selected.push((
+                    label.clone(),
+                    Candidate {
+                        used_percent: 0.0,
+                        resets_at: None,
+                        observed_at: expired_at,
+                        order: 0,
+                    },
+                ));
+                continue;
+            }
+        }
         let selectable: Vec<&Candidate> = if active.is_empty() {
             label_candidates.iter().collect()
         } else {
@@ -626,6 +653,33 @@ mod tests {
     };
     use serde_json::json;
 
+    /// Wall clock used by the fixtures below: just after their rollout
+    /// timestamps and before every `resets_at` they carry, so window
+    /// selection is exercised without the readings counting as expired.
+    const FIXTURE_NOW: f64 = 1_783_075_290.0;
+
+    #[test]
+    fn windows_whose_reset_already_passed_report_as_reset() {
+        // The reboot case: an idle account's newest rollout is older than its
+        // own reset moment, so both windows rolled over while the machine was
+        // off. The instance must report a reset window, not the pre-reboot
+        // percentage with a countdown that already elapsed.
+        let sandbox = Sandbox::new();
+        write_codex_rollout(
+            &sandbox.home,
+            "2026/07/03",
+            "rollout-before-reboot.jsonl",
+            &[codex_token_count_event(57.0, 43.0)],
+        );
+        // Well past both fixture resets (1783080635 and 1783577400).
+        let result = collect_codex(&sandbox.home, Some(1_783_600_000.0));
+        let windows = result["windows"].as_array().unwrap();
+        for window in windows {
+            assert_eq!(window["used_percent"], json!(0.0), "{window}");
+            assert!(window["resets_at"].is_null(), "{window}");
+        }
+    }
+
     #[test]
     fn reads_last_rate_limits_event_of_newest_rollout() {
         let sandbox = Sandbox::new();
@@ -644,7 +698,7 @@ mod tests {
                 codex_token_count_event(57.0, 43.0),
             ],
         );
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         assert!(result.get("error").unwrap().is_null());
         assert_eq!(result["plan"], json!("plus"));
         assert!(result.get("resets_available").is_none());
@@ -692,7 +746,7 @@ mod tests {
             .set_modified(base + std::time::Duration::from_secs(3_600))
             .unwrap();
 
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         let windows = result["windows"].as_array().unwrap();
         assert_eq!(windows[0]["used_percent"], json!(100.0));
         assert_eq!(windows[1]["used_percent"], json!(16.0));
@@ -735,7 +789,7 @@ mod tests {
             }),
         ];
         write_codex_rollout(&sandbox.home, "2026/07/03", "rollout-a.jsonl", &events);
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         // plan_type now survives even though it arrived on a windowless event.
         assert_eq!(result["plan"], json!("team"));
         assert_eq!(
@@ -764,7 +818,7 @@ mod tests {
             },
         })];
         write_codex_rollout(&sandbox.home, "2026/07/03", "rollout-b.jsonl", &events);
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         assert_eq!(result["credits"]["balance"], json!("0"));
         assert_eq!(result["credits"]["reached_type"], json!(null));
         assert_eq!(result["credits"]["blocked"], json!(false));
@@ -813,7 +867,7 @@ mod tests {
             }),
         ];
         write_codex_rollout(&sandbox.home, "2026/07/03", "rollout-x.jsonl", &events);
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         let by_label: std::collections::HashMap<_, _> = result["windows"]
             .as_array()
             .unwrap()
@@ -852,7 +906,7 @@ mod tests {
             }),
         ];
         write_codex_rollout(&sandbox.home, "2026/07/10", "rollout-x.jsonl", &events);
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         let by_label: std::collections::HashMap<_, _> = result["windows"]
             .as_array()
             .unwrap()
@@ -921,7 +975,7 @@ mod tests {
                 "payload": {"rate_limits": {"primary": {"window_minutes": 300, "resets_at": 1}}},
             })],
         );
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         assert_eq!(result["error"], json!("no rate_limits events found"));
     }
 
@@ -940,14 +994,14 @@ mod tests {
             "rollout-good.jsonl",
             &[codex_token_count_event(11.0, 22.0)],
         );
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         assert_eq!(result["windows"][0]["used_percent"], json!(11.0));
     }
 
     #[test]
     fn missing_sessions_dir_reports_error() {
         let sandbox = Sandbox::new();
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         assert!(result["error"]
             .as_str()
             .unwrap()
@@ -971,7 +1025,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         assert_eq!(result["windows"][0]["used_percent"], json!(57.0));
     }
 
@@ -996,7 +1050,7 @@ mod tests {
                 }
             })],
         );
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         assert_eq!(
             result["windows"],
             json!([{"label": "month", "used_percent": 12.0, "resets_at": 1784998206_i64}])
@@ -1012,7 +1066,7 @@ mod tests {
             "rollout-a.jsonl",
             &[codex_token_count_event(57.0, 43.0)],
         );
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         let labels: Vec<_> = result["windows"]
             .as_array()
             .unwrap()
@@ -1043,7 +1097,7 @@ mod tests {
                 }
             })],
         );
-        let result = collect_codex(&sandbox.home, None);
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         assert_eq!(
             result["windows"],
             json!([{"label": "week", "used_percent": 93.0, "resets_at": 1784998206_i64}])
@@ -1094,7 +1148,7 @@ mod tests {
             "rollout-a.jsonl",
             &[codex_token_count_event(57.0, 43.0)],
         );
-        let result = collect_codex_accounts(&sandbox.home, None, None);
+        let result = collect_codex_accounts(&sandbox.home, Some(FIXTURE_NOW), None);
         assert!(result.get("instances").is_none());
         assert_eq!(result["selected"], json!(1));
         assert_eq!(result["windows"][0]["used_percent"], json!(57.0));
@@ -1157,7 +1211,7 @@ mod tests {
             ]),
             2,
         );
-        let result = collect_codex_accounts(&sandbox.home, None, None);
+        let result = collect_codex_accounts(&sandbox.home, Some(FIXTURE_NOW), None);
         assert_eq!(result["windows"][0]["used_percent"], json!(12.0));
         assert_eq!(result["windows"][0]["label"], json!("month"));
         assert_eq!(result["plan"], json!("free"));
@@ -1206,7 +1260,7 @@ mod tests {
                 },
             ]
         });
-        let result = collect_codex_accounts(&sandbox.home, None, Some(&last));
+        let result = collect_codex_accounts(&sandbox.home, Some(FIXTURE_NOW), Some(&last));
         assert_eq!(
             result["instances"][1]["windows"][0]["used_percent"],
             json!(33.0)
@@ -1251,10 +1305,10 @@ mod tests {
             ]),
             3,
         );
-        let previous = collect_codex_accounts(&sandbox.home, None, None);
+        let previous = collect_codex_accounts(&sandbox.home, Some(FIXTURE_NOW), None);
         std::fs::remove_file(tracker_state_dir(&sandbox.home).join(CODEX_INSTANCES_FILE)).unwrap();
 
-        let result = collect_codex_accounts(&sandbox.home, None, Some(&previous));
+        let result = collect_codex_accounts(&sandbox.home, Some(FIXTURE_NOW), Some(&previous));
 
         assert_eq!(result["selected"], json!(3));
         assert_eq!(result["instances"].as_array().unwrap().len(), 3);
