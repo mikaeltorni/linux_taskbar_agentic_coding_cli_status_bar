@@ -120,6 +120,11 @@ const PANE_RESET_DATE: &str = r"(?i)\b(\d{1,2})\s+([A-Za-z]{3})";
 const PANE_RESET_IN: &str = r"(?i)\bresets?\s+in\s+(?:(\d+)d\s*)?(?:(\d+)h\s*)?(?:(\d+)m)?";
 const PANE_PERIOD_END: &str = r"(?i)\bperiod\s+ends?\b\s*(.+)$";
 const LEFT_WORD: &str = r"(?i)\bleft\b";
+const USED_WORD: &str = r"(?i)\bused\b";
+/// A percentage that is explicitly qualified as remaining budget.
+const LEFT_QUALIFIED_PERCENT: &str = r"(?i)\d\s*%\s*left\b";
+/// A percentage that is explicitly qualified as consumed budget.
+const USED_QUALIFIED_PERCENT: &str = r"(?i)\d\s*%\s*used\b";
 const DAY_MONTH: &str = r"(?i)\b(\d{1,2})\s+([A-Za-z]{3})\b";
 const MONTH_DAY: &str = r"(?i)\b([A-Za-z]{3})\s+(\d{1,2})\b";
 
@@ -325,7 +330,90 @@ fn pane_window_reset(
     None
 }
 
-fn pane_window_percent(lines: &[&str], keyword: &Regex) -> Option<f64> {
+/// How many lines after a window's keyword line may still carry its qualifier.
+///
+/// The Codex TUI wraps `NN% left (resets …)` onto following lines in a narrow
+/// pane, so the `used`/`left` word that decides the reading's polarity is not
+/// always on the line holding the number.
+const PANE_QUALIFIER_LOOKAHEAD: usize = 3;
+
+/// Which direction a rendered percentage counts in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PanePolarity {
+    /// `NN% used` — the number is consumed budget.
+    Used,
+    /// `NN% left` — the number is remaining budget and must be inverted.
+    Left,
+}
+
+/// Read the polarity qualifier out of a stop-bounded region of pane lines.
+///
+/// Scans from `index` across at most [`PANE_QUALIFIER_LOOKAHEAD`] lines,
+/// stopping early at another window's keyword so one window can never adopt
+/// the qualifier printed for the next one.
+///
+/// Parameters: `lines` - the captured pane; `index` - the window's keyword
+/// line; `stop_keywords` - the other windows' keywords.
+///
+/// Returns: the qualifier when the region states one, otherwise `None`.
+fn pane_region_polarity(
+    lines: &[&str],
+    index: usize,
+    stop_keywords: &[&Regex],
+) -> Option<PanePolarity> {
+    for offset in 0..PANE_QUALIFIER_LOOKAHEAD {
+        let probe = index + offset;
+        if probe >= lines.len() {
+            break;
+        }
+        if offset > 0 && stop_keywords.iter().any(|k| k.is_match(lines[probe])) {
+            break;
+        }
+        if re(LEFT_WORD).is_match(lines[probe]) {
+            return Some(PanePolarity::Left);
+        }
+        if re(USED_WORD).is_match(lines[probe]) {
+            return Some(PanePolarity::Used);
+        }
+    }
+    None
+}
+
+/// Infer the polarity dialect the whole render uses.
+///
+/// A single Codex render is internally consistent: every window is printed
+/// either as `used` or as `left`. When one window's own qualifier wrapped out
+/// of reach, the dialect its siblings used is a far safer answer than assuming
+/// `used`, which silently inverts a just-reset `100% left` into `100% used`.
+///
+/// Parameters: `text` - the full captured pane.
+///
+/// Returns: the dialect when the render is unambiguous, otherwise `None`.
+fn pane_text_polarity(text: &str) -> Option<PanePolarity> {
+    let has_left = re(LEFT_QUALIFIED_PERCENT).is_match(text);
+    let has_used = re(USED_QUALIFIED_PERCENT).is_match(text);
+    match (has_left, has_used) {
+        (true, false) => Some(PanePolarity::Left),
+        (false, true) => Some(PanePolarity::Used),
+        _ => None,
+    }
+}
+
+/// Extract one window's used-percentage from the captured pane.
+///
+/// Parameters: `lines` - the captured pane; `keyword` - the window's keyword;
+/// `stop_keywords` - the other windows' keywords; `text_polarity` - the
+/// dialect inferred from the whole render, used when this window's own
+/// qualifier is out of reach.
+///
+/// Returns: the percentage as consumed budget, or `None` when the window is
+/// absent or its polarity cannot be established.
+fn pane_window_percent(
+    lines: &[&str],
+    keyword: &Regex,
+    stop_keywords: &[&Regex],
+    text_polarity: Option<PanePolarity>,
+) -> Option<f64> {
     for (index, line) in lines.iter().enumerate() {
         if !keyword.is_match(line) {
             continue;
@@ -333,20 +421,20 @@ fn pane_window_percent(lines: &[&str], keyword: &Regex) -> Option<f64> {
         if line.to_ascii_lowercase().contains("gpt-reserve") {
             continue;
         }
-        let mut source_line = *line;
         let mut matched = re(PANE_PERCENT).captures(line);
         if matched.is_none() && index + 1 < lines.len() {
-            source_line = lines[index + 1];
-            matched = re(PANE_PERCENT).captures(source_line);
+            matched = re(PANE_PERCENT).captures(lines[index + 1]);
         }
         let caps = matched?;
         let percent_val = caps.get(1)?.as_str().parse::<f64>().ok()?;
-        let mut percent = to_percent(&json!(percent_val))?;
-        let combined = format!("{line} {source_line}");
-        if re(LEFT_WORD).is_match(&combined) {
-            percent = 100.0 - percent;
-        }
-        return Some(percent);
+        let percent = to_percent(&json!(percent_val))?;
+        let polarity = pane_region_polarity(lines, index, stop_keywords).or(text_polarity);
+        return match polarity {
+            Some(PanePolarity::Left) => Some(100.0 - percent),
+            // No qualifier anywhere: the historical readings are bare `NN%`
+            // percentages that have always meant consumed budget.
+            Some(PanePolarity::Used) | None => Some(percent),
+        };
     }
     None
 }
@@ -360,18 +448,19 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
         .iter()
         .map(|k| compiled_keyword(k.pattern))
         .collect();
+    let text_polarity = pane_text_polarity(text);
     let mut windows = Vec::new();
     for (idx, spec) in keywords.iter().enumerate() {
         let keyword = compiled[idx];
-        let Some(percent) = pane_window_percent(&lines, keyword) else {
-            continue;
-        };
         let others: Vec<&Regex> = compiled
             .iter()
             .enumerate()
             .filter(|(i, _)| *i != idx)
             .map(|(_, r)| *r)
             .collect();
+        let Some(percent) = pane_window_percent(&lines, keyword, &others, text_polarity) else {
+            continue;
+        };
         windows.push(Window {
             label: spec.label.into(),
             used_percent: percent,
@@ -414,6 +503,90 @@ mod tests {
             .single()
             .unwrap()
             .timestamp()
+    }
+
+    fn percents(result: &Value) -> Vec<(String, f64)> {
+        result["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                (
+                    w["label"].as_str().unwrap().to_string(),
+                    w["used_percent"].as_f64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn left_qualifier_wrapped_onto_the_next_line_still_inverts() {
+        // The reported jump: right after a reset the pane shows `100% left`,
+        // but a narrow render wraps the qualifier onto the following line. The
+        // window is fully available and must not read as fully consumed.
+        let text = concat!(
+            "│  5h limit:             [████████████████████] 100%   │\n",
+            "│  left (resets 20:12)                                 │\n",
+        );
+        assert_eq!(
+            percents(&parse_pane("codex", text, Some(5.0))),
+            vec![("5h".into(), 0.0)]
+        );
+    }
+
+    #[test]
+    fn left_qualifier_two_lines_below_the_keyword_still_inverts() {
+        let text = concat!(
+            "│  5h limit:                                           │\n",
+            "│                        [████████████████████] 100%   │\n",
+            "│                        left (resets 20:12)           │\n",
+        );
+        assert_eq!(
+            percents(&parse_pane("codex", text, Some(5.0))),
+            vec![("5h".into(), 0.0)]
+        );
+    }
+
+    #[test]
+    fn unqualified_window_adopts_the_dialect_of_its_siblings() {
+        // The 5h qualifier wrapped out of reach entirely; the weekly line in
+        // the same render still proves this pane speaks `left`.
+        let text = concat!(
+            "│  5h limit:             [████████████████████] 97%    │\n",
+            "│                                                      │\n",
+            "│                                                      │\n",
+            "│  ... left (resets 20:12)                             │\n",
+            "│  Weekly limit:         [██████████░░░░░░░░░░] 62% left│\n",
+        );
+        assert_eq!(
+            percents(&parse_pane("codex", text, Some(5.0))),
+            vec![("5h".into(), 3.0), ("week".into(), 38.0)]
+        );
+    }
+
+    #[test]
+    fn a_window_never_borrows_the_next_windows_qualifier() {
+        // `5h` is bare and `week` says `left`, but a `used` elsewhere makes the
+        // render's dialect ambiguous, so no pane-level fallback applies. The
+        // stop keyword must then keep the bare 5h reading from reaching across
+        // into the weekly line's `left`.
+        let text = concat!(
+            "│  Token usage: 32,950 total (12% used)                │\n",
+            "│  5h limit:             [████████████████████] 40%    │\n",
+            "│  Weekly limit:         [██████████░░░░░░░░░░] 62% left│\n",
+        );
+        assert_eq!(
+            percents(&parse_pane("codex", text, Some(5.0))),
+            vec![("5h".into(), 40.0), ("week".into(), 38.0)]
+        );
+    }
+
+    #[test]
+    fn mixed_dialect_render_does_not_infer_a_pane_wide_polarity() {
+        assert_eq!(pane_text_polarity("30% used\n40% left\n"), None);
+        assert_eq!(pane_text_polarity("30% used\n"), Some(PanePolarity::Used));
+        assert_eq!(pane_text_polarity("40% left\n"), Some(PanePolarity::Left));
+        assert_eq!(pane_text_polarity("40%\n"), None);
     }
 
     #[test]
