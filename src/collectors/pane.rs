@@ -7,12 +7,30 @@ use regex::Regex;
 use serde_json::{json, Value};
 
 use super::util::{now_epoch, to_percent};
+use crate::logging;
 use crate::snapshot::{snapshot, Window};
 
 struct WindowKeyword {
     label: &'static str,
     pattern: &'static str,
+    /// How long the window itself lasts, in seconds, when that is known.
+    ///
+    /// A reset can never be further away than one full window, so this bounds
+    /// what a parsed reset moment is allowed to claim. `None` means the window
+    /// length is unknown and no bound is applied.
+    max_seconds: Option<i64>,
 }
+
+/// Grace added to a window length before a parsed reset is called impossible.
+///
+/// Pane text is rendered to whole minutes and can be captured a moment after
+/// the CLI drew it, so a genuine "resets in one full window" reading may land
+/// slightly beyond the exact window length.
+const RESET_HORIZON_SLACK_SECONDS: i64 = 180;
+
+const FIVE_HOUR_SECONDS: Option<i64> = Some(5 * 3600);
+const WEEK_SECONDS: Option<i64> = Some(7 * 86400);
+const MONTH_SECONDS: Option<i64> = Some(31 * 86400);
 
 fn pane_window_keywords(cli_id: &str) -> &'static [WindowKeyword] {
     match cli_id {
@@ -20,46 +38,56 @@ fn pane_window_keywords(cli_id: &str) -> &'static [WindowKeyword] {
             WindowKeyword {
                 label: "5h",
                 pattern: r"(?i)5h(?:our)?\s+limit",
+                max_seconds: FIVE_HOUR_SECONDS,
             },
             WindowKeyword {
                 label: "week",
                 pattern: r"(?i)week(?:ly)?\s+limit",
+                max_seconds: WEEK_SECONDS,
             },
             WindowKeyword {
                 label: "month",
                 pattern: r"(?i)month(?:ly)?\s+limit",
+                max_seconds: MONTH_SECONDS,
             },
         ],
         "claude_code" => &[
             WindowKeyword {
                 label: "5h",
                 pattern: r"(?i)current\s+session|5-?h(?:our)?\s+limit",
+                max_seconds: FIVE_HOUR_SECONDS,
             },
             WindowKeyword {
                 label: "week",
                 pattern: r"(?i)current\s+week|week(?:ly)?\s+limit",
+                max_seconds: WEEK_SECONDS,
             },
             WindowKeyword {
                 label: "fable",
                 pattern: r"(?i)(?:current\s+week[^\n]*\b)?fable(?:\s+only)?",
+                max_seconds: WEEK_SECONDS,
             },
         ],
         "grok" => &[WindowKeyword {
             label: "week",
             pattern: r"(?i)week(?:ly)?\s+limit|credits?|usage",
+            max_seconds: WEEK_SECONDS,
         }],
         "opencode_go" => &[
             WindowKeyword {
                 label: "rolling",
                 pattern: r"(?i)\brolling\b",
+                max_seconds: None,
             },
             WindowKeyword {
                 label: "week",
                 pattern: r"(?i)\bweekly\b",
+                max_seconds: WEEK_SECONDS,
             },
             WindowKeyword {
                 label: "month",
                 pattern: r"(?i)\bmonthly\b",
+                max_seconds: MONTH_SECONDS,
             },
         ],
         _ => &[],
@@ -181,7 +209,31 @@ fn pane_period_end_epoch(line: &str, now: f64) -> Option<i64> {
     Some(candidate.timestamp())
 }
 
-fn pane_reset_epoch(line: &str, now: f64) -> Option<i64> {
+/// Whether a parsed reset moment can belong to a window of `max_seconds`.
+///
+/// A window resets at most one window length from now, so anything further out
+/// came from a mis-read line (or an invented day rollover) and is dropped.
+/// Moments already in the past stay plausible: they mean the window rolled over
+/// while the pane text aged, which consumers render as replenished.
+fn reset_within_window(epoch: i64, now: f64, max_seconds: Option<i64>) -> bool {
+    match max_seconds {
+        Some(max) => epoch - now as i64 <= max + RESET_HORIZON_SLACK_SECONDS,
+        None => true,
+    }
+}
+
+/// Parse a "resets HH:MM" clock descriptor into an epoch.
+///
+/// A bare clock time carries no date, so a time that already passed today
+/// normally means tomorrow. That inference is only valid when tomorrow still
+/// fits inside the window: a 5h window cannot reset 24h from now. When it does
+/// not fit, the pane text is simply older than the reset it names, so the
+/// already-passed moment is returned as-is and the window counts as reset.
+///
+/// * `line` - One pane line, expected to contain a `resets ...` descriptor.
+/// * `now` - Epoch seconds the pane text was observed at.
+/// * `max_seconds` - Window length bounding the rollover, when known.
+fn pane_reset_epoch(line: &str, now: f64, max_seconds: Option<i64>) -> Option<i64> {
     let reset = re(PANE_RESET).captures(line)?;
     let descriptor = reset.get(1)?.as_str();
     let clock = re(PANE_RESET_CLOCK).captures(descriptor)?;
@@ -210,7 +262,16 @@ fn pane_reset_epoch(line: &str, now: f64) -> Option<i64> {
         .with_second(0)?
         .with_nanosecond(0)?;
     if candidate.timestamp() <= now as i64 {
-        candidate += Duration::days(1);
+        let rolled = candidate + Duration::days(1);
+        if reset_within_window(rolled.timestamp(), now, max_seconds) {
+            candidate = rolled;
+        } else {
+            logging::debug(format!(
+                "pane reset {} already passed and a day rollover exceeds the window; \
+treating the window as reset",
+                candidate.format("%H:%M")
+            ));
+        }
     }
     Some(candidate.timestamp())
 }
@@ -219,11 +280,23 @@ fn compiled_keyword(pattern: &'static str) -> &'static Regex {
     compiled_regex(pattern)
 }
 
+/// Find the reset moment printed near a window's usage line.
+///
+/// * `lines` - Pane text split into lines.
+/// * `keyword` - Regex identifying the window's own line.
+/// * `stop_keywords` - Other windows' regexes; scanning stops at them so one
+///   window never adopts another's reset.
+/// * `now` - Epoch seconds the pane text was observed at.
+/// * `max_seconds` - Window length, used to bound the bare-clock rollover
+///   inference. Explicit dated descriptors ("period ends Jul 12") are trusted
+///   as printed, since they carry their own date and can legitimately sit
+///   further out than the nominal window length.
 fn pane_window_reset(
     lines: &[&str],
     keyword: &Regex,
     stop_keywords: &[&Regex],
     now: f64,
+    max_seconds: Option<i64>,
 ) -> Option<i64> {
     for (index, line) in lines.iter().enumerate() {
         if !keyword.is_match(line) {
@@ -242,7 +315,7 @@ fn pane_window_reset(
             }
             if let Some(epoch) = pane_period_end_epoch(lines[probe], now)
                 .or_else(|| pane_reset_duration_epoch(lines[probe], now))
-                .or_else(|| pane_reset_epoch(lines[probe], now))
+                .or_else(|| pane_reset_epoch(lines[probe], now, max_seconds))
             {
                 return Some(epoch);
             }
@@ -302,7 +375,7 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
         windows.push(Window {
             label: spec.label.into(),
             used_percent: percent,
-            resets_at: pane_window_reset(&lines, keyword, &others, now),
+            resets_at: pane_window_reset(&lines, keyword, &others, now, spec.max_seconds),
         });
     }
     let error = if windows.is_empty() {
@@ -512,12 +585,39 @@ mod tests {
 
     #[test]
     fn codex_pane_clock_already_past_rolls_to_tomorrow() {
+        // A weekly window is long enough for tomorrow to be a plausible reset.
         let now = local_ts(2026, 7, 4, 21, 0);
-        let text = "  5h limit: [########  ] 57% used (resets 20:12)\n";
+        let text = "  Weekly limit: [####      ] 43% used (resets 20:12)\n";
         let result = parse_pane("codex", text, Some(now));
         assert_eq!(
             result["windows"][0]["resets_at"],
             json!(local_ts_hms(2026, 7, 5, 20, 12, 0))
+        );
+    }
+
+    #[test]
+    fn codex_pane_five_hour_reset_never_rolls_a_full_day() {
+        // Reproduces the 24h countdown: a stale 5h pane whose reset already
+        // passed must not be pushed to tomorrow, because a 5h window cannot
+        // reset ~23h from now. It reads as already reset instead.
+        let now = local_ts(2026, 7, 4, 21, 0);
+        let text = "  5h limit: [########  ] 57% used (resets 20:12)\n";
+        let result = parse_pane("codex", text, Some(now));
+        let resets_at = result["windows"][0]["resets_at"].as_i64().unwrap();
+        assert_eq!(resets_at, local_ts_hms(2026, 7, 4, 20, 12, 0));
+        assert!(resets_at - now as i64 <= 5 * 3600 + RESET_HORIZON_SLACK_SECONDS);
+    }
+
+    #[test]
+    fn codex_pane_five_hour_reset_still_rolls_within_the_window() {
+        // 23:40 now, reset 01:15 -> tomorrow, and that is only ~1.5h out, so
+        // the rollover is legitimate and must be kept.
+        let now = local_ts(2026, 7, 4, 23, 40);
+        let text = "  5h limit: [##        ] 20% used (resets 01:15)\n";
+        let result = parse_pane("codex", text, Some(now));
+        assert_eq!(
+            result["windows"][0]["resets_at"],
+            json!(local_ts_hms(2026, 7, 5, 1, 15, 0))
         );
     }
 
