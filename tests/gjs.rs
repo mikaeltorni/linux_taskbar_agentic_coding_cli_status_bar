@@ -126,6 +126,7 @@ fn agentic_results() -> Option<Value> {
         "resetsText",
         "resetAvailabilityText",
         "creditBlocked",
+        "zeroBalance",
         "creditDetailText",
         "segmentMarkup",
         "codexBarMarkup",
@@ -258,7 +259,12 @@ fn credit_state_is_visible_on_the_bar_and_in_the_menu() {
     };
     assert_eq!(js["credit_block_team"], "credits: team credits out");
     assert_eq!(js["credit_block_generic"], "credits: credits out");
-    assert_eq!(js["credit_balance_only"], "credits: 0 left");
+    // An account with no credit facility reports a permanent zero balance;
+    // that is noise, not information, so the menu stays quiet about it.
+    assert_eq!(js["credit_balance_only"], "");
+    assert_eq!(js["credit_zero_formatted"], "");
+    assert_eq!(js["credit_zero_with_facility"], "credits: 0 left");
+    assert_eq!(js["credit_nonzero_without_facility"], "credits: 12.50 left");
     assert_eq!(js["credit_unlimited"], "credits: unlimited");
     assert_eq!(js["credit_absent"], "");
     assert_eq!(js["credit_blocked_true"], true);

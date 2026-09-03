@@ -233,6 +233,24 @@ function creditBlocked(credits) {
 }
 
 /**
+ * Whether a reported credit balance amounts to nothing.
+ *
+ * Codex renders the balance as a string that may carry formatting, e.g. `"0"`,
+ * `"0.00"` or `"$0.00"`, so the digits are parsed out rather than compared
+ * textually.
+ *
+ * @param {*} balance - The `balance` field from a credit snapshot.
+ * @returns {boolean} True when the balance is present and numerically zero.
+ */
+function zeroBalance(balance) {
+  const digits = String(balance ?? '').replace(/[^0-9.-]/g, '');
+  if (digits === '')
+    return false;
+  const amount = Number.parseFloat(digits);
+  return Number.isFinite(amount) && amount === 0;
+}
+
+/**
  * Details-menu line describing a snapshot's credit state.
  *
  * @param {?object} credits - The `credits` object from a status snapshot.
@@ -252,6 +270,13 @@ function creditDetailText(credits) {
   }
   const balance = credits.balance;
   if (balance === null || balance === undefined || balance === '')
+    return '';
+  // An account without a pay-as-you-go credit facility still reports a zero
+  // balance. That is not "no credits left", it is "credits do not apply here",
+  // so saying nothing beats a permanent `credits: 0 left` on the menu. A real
+  // depletion still speaks through `reached_type` above, and an account that
+  // does carry credits keeps reporting its balance even when it hits zero.
+  if (credits.has_credits !== true && zeroBalance(balance))
     return '';
   return `credits: ${balance} left`;
 }

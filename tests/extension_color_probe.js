@@ -41,6 +41,17 @@ const results = {
   credit_balance_only: creditDetailText({
     has_credits: false, unlimited: false, balance: '0',
     reached_type: null, blocked: false}),
+  credit_zero_formatted: creditDetailText({
+    has_credits: false, unlimited: false, balance: '$0.00',
+    reached_type: null, blocked: false}),
+  // An account that really does carry credits keeps reporting a zero balance.
+  credit_zero_with_facility: creditDetailText({
+    has_credits: true, unlimited: false, balance: '0',
+    reached_type: null, blocked: false}),
+  // A non-zero balance is still worth saying regardless of the facility flag.
+  credit_nonzero_without_facility: creditDetailText({
+    has_credits: false, unlimited: false, balance: '12.50',
+    reached_type: null, blocked: false}),
   credit_unlimited: creditDetailText({unlimited: true, balance: null}),
   credit_absent: creditDetailText(null),
   credit_blocked_true: creditBlocked({blocked: true}),
