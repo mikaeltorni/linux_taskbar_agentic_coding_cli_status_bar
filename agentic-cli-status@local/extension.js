@@ -43,6 +43,17 @@ const CLI_TAGS = [
   ['openrouter', 'OR'],
 ];
 
+// Poller-side default enablement, mirroring `default_config()` in src/config.rs.
+// OpenCode Go and OpenRouter are opt-in: their segments must stay off the bar
+// until the user enables them, including before the first status.json write.
+const DEFAULT_CLI_ENABLED = {
+  codex: true,
+  claude_code: true,
+  grok: true,
+  opencode_go: false,
+  openrouter: false,
+};
+
 // Percent-LEFT gradient stops. Every rendered percentage gets its own
 // color: 100% left is green, ~50% left is yellow, 1% left is orange.
 // Interpolation is linear per RGB channel (full 8-bit precision) within each
@@ -86,6 +97,55 @@ function statusFilePath() {
   const stateHome = GLib.getenv('XDG_STATE_HOME') ||
     GLib.build_filenamev([GLib.get_home_dir(), '.local', 'state']);
   return GLib.build_filenamev([stateHome, 'agentic-cli-status', 'status.json']);
+}
+
+/**
+ * Resolve the poller's config file path honoring XDG_CONFIG_HOME.
+ *
+ * @returns {string} Absolute path to config.json.
+ */
+function configFilePath() {
+  const configHome = GLib.getenv('XDG_CONFIG_HOME') ||
+    GLib.build_filenamev([GLib.get_home_dir(), '.config']);
+  return GLib.build_filenamev([configHome, 'agentic-cli-status', 'config.json']);
+}
+
+/**
+ * Read the poller's config.json (best effort).
+ *
+ * Only consulted while status.json is missing; once the poller writes a
+ * status file, its per-CLI `enabled` flags are authoritative.
+ *
+ * @returns {?object} Parsed config object, or null when unreadable.
+ */
+function readPollerConfig() {
+  try {
+    const [ok, bytes] = Gio.File.new_for_path(configFilePath())
+      .load_contents(null);
+    if (ok)
+      return JSON.parse(new TextDecoder().decode(bytes));
+  } catch (error) {
+    log('debug', `config file unreadable: ${error}`);
+  }
+  return null;
+}
+
+/**
+ * Resolve which CLIs may occupy a segment on the bar.
+ *
+ * @param {?object} config - Parsed config.json content, or null.
+ * @param {object} defaults - Fallback enablement per CLI id.
+ * @returns {object} Map of cli id to boolean enablement.
+ */
+function cliEnabledFromConfig(config, defaults) {
+  const enabled = {};
+  for (const cliId of Object.keys(defaults)) {
+    const configured = config?.clis?.[cliId]?.enabled;
+    enabled[cliId] = typeof configured === 'boolean'
+      ? configured
+      : defaults[cliId];
+  }
+  return enabled;
 }
 
 /**
@@ -455,8 +515,16 @@ class AgenticCliStatusButton extends PanelMenu.Button {
     render(status) {
     this.menu.removeAll();
     if (!status) {
+      // No status file yet: fall back to the poller's own config so opt-in
+      // CLIs (OpenRouter, OpenCode Go) do not flash a placeholder segment
+      // the user never asked for.
+      const enabled = cliEnabledFromConfig(readPollerConfig(), DEFAULT_CLI_ENABLED);
       for (const [cliId, tag] of CLI_TAGS) {
         const label = this._segments.get(cliId);
+        if (enabled[cliId] === false) {
+          label.visible = false;
+          continue;
+        }
         label.text = `${tag} –`;
         label.style_class = 'acs-segment acs-off';
         label.visible = true;
