@@ -21,17 +21,13 @@ grows one.
 
 ## Clean Installation Compatibility
 
-All changes must remain compatible with a clean installation run through
-`installation_scripts/install.sh`. Do not rely on packages, files, settings, or
-manual steps that exist only on the current machine (tmux comes from
-`linux_installations_setup`). Add every required dependency, asset,
-configuration step, and migration to this repo's installer so a fresh checkout
-can reproduce the complete setup.
+The `linux-configuration` skill owns the clean-install and root-optional
+installer rules; they are not restated here. Repository-specific installer
+facts:
 
-Keep installation steps idempotent and verify the clean-install path for every
-change with tests (`cargo test` and `bash tests/test_install.sh`)
-before committing.
-
+tmux comes from `linux_installations_setup`; do not install it here. Verify the
+clean-install path with `cargo test` and `bash tests/test_install.sh` before
+committing.
 
 ## Mandatory programming guidelines prompt
 
