@@ -236,10 +236,7 @@ mod tests {
     #[test]
     fn requests_from_analytics_rows() {
         assert_eq!(
-            openrouter_requests_from_analytics(
-                &openrouter_analytics_fixture(),
-                "stealth/ox-alpha"
-            ),
+            openrouter_requests_from_analytics(&openrouter_analytics_fixture(), "stealth/ox-alpha"),
             420
         );
     }

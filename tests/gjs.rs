@@ -277,7 +277,10 @@ fn credit_state_is_visible_on_the_bar_and_in_the_menu() {
         "credit block not marked: {marked}"
     );
     let unmarked = js["credit_unmarked_segment"].as_str().unwrap();
-    assert!(!unmarked.contains('$'), "unexpected credit mark: {unmarked}");
+    assert!(
+        !unmarked.contains('$'),
+        "unexpected credit mark: {unmarked}"
+    );
 }
 
 #[test]
