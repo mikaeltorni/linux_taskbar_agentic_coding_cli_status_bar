@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicBool, Ordering};
+
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -30,16 +30,61 @@ const WINDOW_ENV: &[&str] = &[
 
 const BINARY_FALLBACK_DIRS: &[&str] = &[".local/bin", ".grok/bin", ".codex/bin", ".opencode/bin"];
 
-/// Set when the Codex debug window was recreated so the next poll captures `/status`.
-static CODEX_CONSOLE_REFRESH: AtomicBool = AtomicBool::new(false);
+/// Codex debug windows recreated since the last poll, by window name.
+///
+/// Each ACC account owns its own console window, so the pending set names the
+/// windows whose next poll must capture `/status` instead of trusting the pane
+/// text left behind by the login that window used to run.
+static CODEX_CONSOLE_REFRESH: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-/// Return whether the Codex console was recreated and needs an immediate `/status`.
-pub fn take_codex_console_refresh() -> bool {
-    CODEX_CONSOLE_REFRESH.swap(false, Ordering::SeqCst)
+fn codex_console_refresh() -> &'static Mutex<HashSet<String>> {
+    CODEX_CONSOLE_REFRESH.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn mark_codex_console_refresh() {
-    CODEX_CONSOLE_REFRESH.store(true, Ordering::SeqCst);
+/// Return and clear the Codex console windows that need an immediate `/status`.
+pub fn take_codex_console_refresh() -> HashSet<String> {
+    let mut pending = codex_console_refresh()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    std::mem::take(&mut *pending)
+}
+
+fn mark_codex_console_refresh(window: &str) {
+    codex_console_refresh()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(window.to_string());
+}
+
+/// One ACC Codex account's debug console window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodexConsole {
+    /// tmux window name, unique per account.
+    pub window: String,
+    /// `CODEX_HOME` the window's `codex` process runs with.
+    pub home: PathBuf,
+}
+
+/// Return the console window name that belongs to an ACC Codex instance.
+///
+/// Instance 1 keeps the historical `codex` window so single-account installs
+/// are untouched; every extra login gets `codex-<id>`. Names are derived from
+/// the instance id rather than the selection, so switching accounts never
+/// rebuilds a window and both logins stay monitored at the same time.
+pub fn codex_console_window(instance_id: i64) -> String {
+    if instance_id <= 1 {
+        "codex".to_string()
+    } else {
+        format!("codex-{instance_id}")
+    }
+}
+
+/// Return whether a tmux window name belongs to a Codex debug console.
+fn is_codex_window(window: &str) -> bool {
+    window == "codex"
+        || window
+            .strip_prefix("codex-")
+            .is_some_and(|id| !id.is_empty() && id.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 fn cli_binary_name(cli_id: &str) -> Option<&'static str> {
@@ -159,15 +204,16 @@ fn read_proc_environ_var(pid: &str, key: &str) -> Option<String> {
 /// Args:
 ///     tmux: Runner used to query the console session.
 ///     session: Detached console session name.
+///     window: Console window name, one per ACC account.
 ///
 /// Returns:
 ///     The console pane's `CODEX_HOME`, or None when the window or the
 ///     variable is missing.
-pub fn console_codex_home(tmux: &dyn TmuxRunner, session: &str) -> Option<String> {
+pub fn console_codex_home(tmux: &dyn TmuxRunner, session: &str, window: &str) -> Option<String> {
     let result = tmux.run(&[
         "list-panes".into(),
         "-t".into(),
-        format!("{session}:codex"),
+        format!("{session}:{window}"),
         "-F".into(),
         "#{pane_pid}".into(),
     ]);
@@ -185,17 +231,18 @@ fn homes_match(left: &str, right: &Path) -> bool {
     Path::new(left) == right
 }
 
-/// Kill the Codex debug window when it is logged into a different ACC instance.
+/// Kill a Codex debug window when it is logged into a different ACC instance.
 fn recreate_codex_window_if_stale(
     session: &str,
     existing: &mut HashSet<String>,
     tmux: &dyn TmuxRunner,
+    window: &str,
     desired_home: &Path,
 ) {
-    if !existing.contains("codex") {
+    if !existing.contains(window) {
         return;
     }
-    let current = console_codex_home(tmux, session);
+    let current = console_codex_home(tmux, session, window);
     if current
         .as_deref()
         .is_some_and(|home| homes_match(home, desired_home))
@@ -203,24 +250,57 @@ fn recreate_codex_window_if_stale(
         return;
     }
     logging::info(format!(
-        "recreating Codex debug console with CODEX_HOME={} (was {})",
+        "recreating Codex debug console {window} with CODEX_HOME={} (was {})",
         desired_home.display(),
         current.as_deref().unwrap_or("unset")
     ));
+    if !kill_console_window(session, tmux, window) {
+        return;
+    }
+    existing.remove(window);
+    mark_codex_console_refresh(window);
+}
+
+/// Kill one console window, reporting whether tmux accepted the request.
+fn kill_console_window(session: &str, tmux: &dyn TmuxRunner, window: &str) -> bool {
     let killed = tmux.run(&[
         "kill-window".into(),
         "-t".into(),
-        format!("{session}:codex"),
+        format!("{session}:{window}"),
     ]);
     if killed.0 != 0 {
         logging::warn(format!(
-            "could not restart Codex debug console: {}",
+            "could not restart Codex debug console {window}: {}",
             killed.2.trim()
         ));
-        return;
+        return false;
     }
-    existing.remove("codex");
-    mark_codex_console_refresh();
+    true
+}
+
+/// Kill Codex console windows whose ACC account is no longer registered.
+///
+/// ACC can retire a login while the poller runs. Leaving its window behind
+/// would keep a `codex` process alive for an account nothing reads.
+fn drop_unregistered_codex_windows(
+    session: &str,
+    existing: &mut HashSet<String>,
+    tmux: &dyn TmuxRunner,
+    desired: &HashSet<String>,
+) {
+    let orphans: Vec<String> = existing
+        .iter()
+        .filter(|window| is_codex_window(window) && !desired.contains(*window))
+        .cloned()
+        .collect();
+    for window in orphans {
+        logging::info(format!(
+            "closing Codex debug console {window}; its ACC account is no longer registered"
+        ));
+        if kill_console_window(session, tmux, &window) {
+            existing.remove(&window);
+        }
+    }
 }
 
 /// Log a missing CLI binary once per process so the five-second poll loop
@@ -238,18 +318,20 @@ fn note_missing_cli(cli_id: &str) {
     }
 }
 
-/// Ensure the detached console session exists with one window per CLI.
+/// Ensure the detached console session exists with one window per console.
 ///
-/// `codex_home` is the ACC-selected `CODEX_HOME`. The Codex window is
-/// recreated when it is still logged into a different instance, so `/status`
-/// updates the selected account instead of a stale primary login.
+/// `codex_consoles` lists every ACC Codex account and the window that keeps it
+/// logged in. Each account owns a window of its own, so `/status` reports both
+/// logins on every tick instead of only the selected one. A window still
+/// running a different `CODEX_HOME` — after ACC re-registers an account — is
+/// recreated, and windows for retired accounts are closed.
 pub fn ensure_console(
     session: &str,
     cli_ids: &[String],
     home: &Path,
     tmux: &dyn TmuxRunner,
     available: bool,
-    codex_home: Option<&Path>,
+    codex_consoles: &[CodexConsole],
 ) -> bool {
     if !available {
         logging::warn("tmux not installed; console disabled");
@@ -268,23 +350,57 @@ pub fn ensure_console(
         ]);
         existing = listed.1.split_whitespace().map(str::to_string).collect();
     }
-    if let Some(desired) = codex_home {
-        recreate_codex_window_if_stale(session, &mut existing, tmux, desired);
+    let wants_codex = cli_ids.iter().any(|id| id == "codex");
+    // Every window the session should end up with: one per non-Codex CLI plus
+    // one per registered Codex account.
+    let mut desired: Vec<(String, String, Option<PathBuf>)> = Vec::new();
+    for cli_id in cli_ids {
+        if cli_id == "codex" {
+            continue;
+        }
+        desired.push((cli_id.clone(), cli_id.clone(), None));
+    }
+    if wants_codex {
+        if codex_consoles.is_empty() {
+            // No ACC registry: the single historical window on the CLI's own
+            // default `CODEX_HOME`.
+            desired.push((codex_console_window(1), "codex".to_string(), None));
+        }
+        for console in codex_consoles {
+            desired.push((
+                console.window.clone(),
+                "codex".to_string(),
+                Some(console.home.clone()),
+            ));
+        }
+    }
+    if wants_codex {
+        let codex_windows: HashSet<String> = desired
+            .iter()
+            .filter(|(_, cli_id, _)| cli_id == "codex")
+            .map(|(window, _, _)| window.clone())
+            .collect();
+        for (window, _, codex_home) in &desired {
+            if let Some(codex_home) = codex_home {
+                recreate_codex_window_if_stale(session, &mut existing, tmux, window, codex_home);
+            }
+        }
+        drop_unregistered_codex_windows(session, &mut existing, tmux, &codex_windows);
     }
     let mut created_any = have_session;
-    for cli_id in cli_ids {
+    for (window, cli_id, codex_home) in &desired {
         if cli_binary_name(cli_id).is_none() {
             logging::debug(format!("cli {cli_id} has no tmux console; skipping window"));
             continue;
         }
-        if existing.contains(cli_id) {
+        if existing.contains(window) {
             continue;
         }
         let Some(binary) = resolve_cli_binary(cli_id, home) else {
             note_missing_cli(cli_id);
             continue;
         };
-        let mut env_args = window_env_args(cli_id, codex_home);
+        let mut env_args = window_env_args(cli_id, codex_home.as_deref());
         if !have_session {
             let mut args = vec!["new-session".into(), "-d".into()];
             args.append(&mut env_args);
@@ -292,7 +408,7 @@ pub fn ensure_console(
                 "-s".into(),
                 session.into(),
                 "-n".into(),
-                cli_id.clone(),
+                window.clone(),
                 binary.to_string_lossy().into_owned(),
             ]);
             let result = tmux.run(&args);
@@ -312,20 +428,20 @@ pub fn ensure_console(
                 "-t".into(),
                 session.into(),
                 "-n".into(),
-                cli_id.clone(),
+                window.clone(),
                 binary.to_string_lossy().into_owned(),
             ]);
             let result = tmux.run(&args);
             if result.0 != 0 {
                 logging::error(format!(
-                    "failed to create console window {cli_id}: {}",
+                    "failed to create console window {window}: {}",
                     result.2.trim()
                 ));
             }
             created_any = created_any || result.0 == 0;
         }
         logging::info(format!(
-            "created console window {cli_id} in session {session}"
+            "created console window {window} in session {session}"
         ));
     }
     created_any
@@ -395,13 +511,18 @@ fn capture_codex_status(
 }
 
 /// Send the CLI's rate-limit slash command and capture its pane text.
+///
+/// `window` names the console to drive; it differs from `cli_id` for the extra
+/// Codex accounts, which each own a `codex-<id>` window running their own
+/// `CODEX_HOME`.
 pub fn refresh_and_capture(
     session: &str,
     cli_id: &str,
+    window: &str,
     sleeper: &dyn Fn(f64),
     tmux: &dyn TmuxRunner,
 ) -> Option<String> {
-    let target = format!("{session}:{cli_id}");
+    let target = format!("{session}:{window}");
     let command = slash_command(cli_id)?;
     if !send_slash(tmux, &target, command, sleeper) {
         return None;
@@ -493,14 +614,7 @@ mod tests {
             codex_home_env: None,
         };
         let ids = vec!["codex".into(), "openrouter".into()];
-        assert!(ensure_console(
-            "acs",
-            &ids,
-            &sandbox.home,
-            &tmux,
-            true,
-            None,
-        ));
+        assert!(ensure_console("acs", &ids, &sandbox.home, &tmux, true, &[],));
         assert_eq!(
             tmux_console_cli_ids(&["codex".into(), "openrouter".into(), "grok".into()]),
             vec!["codex".to_string(), "grok".to_string()]
@@ -535,7 +649,7 @@ mod tests {
             &sandbox.home,
             &tmux,
             true,
-            None,
+            &[],
         ));
         let calls = tmux.calls.lock().unwrap().clone();
         let creations: Vec<_> = calls
@@ -603,7 +717,7 @@ mod tests {
             ]),
             codex_home_env: None,
         };
-        let text = refresh_and_capture("acs", "codex", &noop_sleep, &tmux).unwrap();
+        let text = refresh_and_capture("acs", "codex", "codex", &noop_sleep, &tmux).unwrap();
         assert!(text.contains("1 usage limit reset available"));
         assert!(text.contains("Weekly limit: 9% left"));
         let calls = tmux.calls.lock().unwrap().clone();
@@ -630,7 +744,7 @@ mod tests {
             ]),
             codex_home_env: None,
         };
-        let text = refresh_and_capture("acs", "codex", &noop_sleep, &tmux).unwrap();
+        let text = refresh_and_capture("acs", "codex", "codex", &noop_sleep, &tmux).unwrap();
         assert!(text.contains("2 usage limit resets available"));
         assert!(text.contains("5h limit: 99% left"));
         let calls = tmux.calls.lock().unwrap().clone();
@@ -669,7 +783,10 @@ mod tests {
             &sandbox.home,
             &tmux,
             true,
-            Some(extra.as_path()),
+            &[CodexConsole {
+                window: "codex".into(),
+                home: extra.clone(),
+            }],
         ));
         let calls = tmux.calls.lock().unwrap().clone();
         let creation = calls
@@ -685,6 +802,160 @@ mod tests {
                 None => std::env::remove_var("PATH"),
             }
         }
+    }
+
+    /// tmux runner that reports the windows it was told exist and answers
+    /// `CODEX_HOME` per window, the way two separate account consoles do.
+    struct MultiWindowTmux {
+        calls: Mutex<Vec<Vec<String>>>,
+        windows: Vec<String>,
+        homes: std::collections::HashMap<String, String>,
+    }
+
+    impl TmuxRunner for MultiWindowTmux {
+        fn run(&self, args: &[String]) -> (i32, String, String) {
+            self.calls.lock().unwrap().push(args.to_vec());
+            match args.first().map(String::as_str) {
+                Some("has-session") => (0, String::new(), String::new()),
+                Some("list-windows") => {
+                    (0, format!("{}\n", self.windows.join("\n")), String::new())
+                }
+                // The pane "pid" is the window name so the fake can answer a
+                // different CODEX_HOME per console.
+                Some("list-panes") => {
+                    let target = args.get(2).cloned().unwrap_or_default();
+                    let window = target.split(':').next_back().unwrap_or("").to_string();
+                    (0, format!("{window}\n"), String::new())
+                }
+                _ => (0, String::new(), String::new()),
+            }
+        }
+
+        fn process_codex_home(&self, pid: &str) -> Option<String> {
+            self.homes.get(pid).cloned()
+        }
+    }
+
+    fn install_fake_codex(home: &Path) -> Option<std::ffi::OsString> {
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("codex"), "#!/bin/sh\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut mode = std::fs::metadata(bin.join("codex")).unwrap().permissions();
+        mode.set_mode(0o755);
+        std::fs::set_permissions(bin.join("codex"), mode).unwrap();
+        let original = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", format!("{}:/usr/bin", bin.display()));
+        }
+        original
+    }
+
+    fn restore_path(original: Option<std::ffi::OsString>) {
+        unsafe {
+            match original {
+                Some(path) => std::env::set_var("PATH", path),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+    }
+
+    #[test]
+    fn instance_two_gets_its_own_console_window() {
+        assert_eq!(codex_console_window(1), "codex");
+        assert_eq!(codex_console_window(2), "codex-2");
+        assert_eq!(codex_console_window(3), "codex-3");
+    }
+
+    #[test]
+    fn every_registered_account_gets_a_console_of_its_own() {
+        // The reboot case: neither login has a rollout newer than the boot, so
+        // both need their own /status console to report a 5h limit.
+        let sandbox = Sandbox::new();
+        let original_path = install_fake_codex(&sandbox.home);
+        let first = sandbox.home.join(".codex");
+        let second = sandbox.home.join(".codex-account-2");
+        let tmux = MultiWindowTmux {
+            calls: Mutex::new(Vec::new()),
+            windows: vec!["codex".into()],
+            homes: std::collections::HashMap::from([(
+                "codex".to_string(),
+                first.display().to_string(),
+            )]),
+        };
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[
+                CodexConsole {
+                    window: "codex".into(),
+                    home: first.clone(),
+                },
+                CodexConsole {
+                    window: "codex-2".into(),
+                    home: second.clone(),
+                },
+            ],
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        let created: Vec<&Vec<String>> = calls
+            .iter()
+            .filter(|c| c.first().map(String::as_str) == Some("new-window"))
+            .collect();
+        assert_eq!(created.len(), 1, "only the missing account is created");
+        let joined = created[0].join(" ");
+        assert!(joined.contains("-n codex-2"), "{joined}");
+        assert!(
+            joined.contains(&format!("CODEX_HOME={}", second.display())),
+            "{joined}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|c| c.first().map(String::as_str) == Some("kill-window")),
+            "a console already on its own account is left running"
+        );
+        restore_path(original_path);
+    }
+
+    #[test]
+    fn console_of_an_unregistered_account_is_closed() {
+        let sandbox = Sandbox::new();
+        let original_path = install_fake_codex(&sandbox.home);
+        let first = sandbox.home.join(".codex");
+        let tmux = MultiWindowTmux {
+            calls: Mutex::new(Vec::new()),
+            windows: vec!["codex".into(), "codex-3".into()],
+            homes: std::collections::HashMap::from([
+                ("codex".to_string(), first.display().to_string()),
+                (
+                    "codex-3".to_string(),
+                    sandbox.home.join(".codex-account-3").display().to_string(),
+                ),
+            ]),
+        };
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[CodexConsole {
+                window: "codex".into(),
+                home: first,
+            }],
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        let killed: Vec<&Vec<String>> = calls
+            .iter()
+            .filter(|c| c.first().map(String::as_str) == Some("kill-window"))
+            .collect();
+        assert_eq!(killed.len(), 1);
+        assert_eq!(killed[0][2], "acs:codex-3");
+        restore_path(original_path);
     }
 
     #[test]
@@ -714,7 +985,10 @@ mod tests {
             &sandbox.home,
             &tmux,
             true,
-            Some(extra.as_path()),
+            &[CodexConsole {
+                window: "codex".into(),
+                home: extra.clone(),
+            }],
         ));
         let calls = tmux.calls.lock().unwrap().clone();
         assert!(calls
@@ -762,7 +1036,10 @@ mod tests {
             &sandbox.home,
             &tmux,
             true,
-            Some(extra.as_path()),
+            &[CodexConsole {
+                window: "codex".into(),
+                home: extra.clone(),
+            }],
         ));
         let calls = tmux.calls.lock().unwrap().clone();
         assert!(calls

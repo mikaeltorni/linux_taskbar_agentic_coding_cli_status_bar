@@ -1060,13 +1060,8 @@ mod tests {
                 panic!("should not call network");
             }
         }
-        let (token, subscription, error) = claude_refresh_oauth_token(
-            &sandbox.home,
-            None,
-            Some(&Boom),
-            Some(&|| true),
-            Some(1.0),
-        );
+        let (token, subscription, error) =
+            claude_refresh_oauth_token(&sandbox.home, None, Some(&Boom), Some(&|| true), Some(1.0));
         assert_eq!(token.as_deref(), Some("still-good"));
         assert_eq!(subscription, Some(json!("max")));
         assert!(error.is_none());

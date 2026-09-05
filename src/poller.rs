@@ -12,15 +12,16 @@ use serde_json::{json, Value};
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
     collect_claude, collect_codex_accounts, collect_grok, collect_opencode_go, collect_openrouter,
-    parse_pane, selected_codex_home,
+    load_codex_account_registry, parse_pane, selected_codex_home,
 };
 use crate::config::{load_config, slash_command, state_dir, CLI_IDS};
 use crate::http::HttpOpener;
 use crate::logging;
 use crate::snapshot::carry_last_reading;
 use crate::tmux::{
-    console_codex_home, ensure_console, real_sleep, refresh_and_capture,
-    take_codex_console_refresh, tmux_available, tmux_console_cli_ids, RealTmux, TmuxRunner,
+    codex_console_window, console_codex_home, ensure_console, real_sleep, refresh_and_capture,
+    take_codex_console_refresh, tmux_available, tmux_console_cli_ids, CodexConsole, RealTmux,
+    TmuxRunner,
 };
 
 pub const STATUS_FILE_NAME: &str = "status.json";
@@ -391,15 +392,121 @@ fn collect_headless(
     }
 }
 
-fn do_refresh_and_capture(session: &str, cli_id: &str, hooks: &PollHooks) -> Option<String> {
+fn do_refresh_and_capture(
+    session: &str,
+    cli_id: &str,
+    window: &str,
+    hooks: &PollHooks,
+) -> Option<String> {
     let sleeper = hooks
         .sleeper
         .clone()
         .unwrap_or_else(|| Arc::new(real_sleep));
     if let Some(tmux) = &hooks.tmux {
-        refresh_and_capture(session, cli_id, sleeper.as_ref(), tmux.as_ref())
+        refresh_and_capture(session, cli_id, window, sleeper.as_ref(), tmux.as_ref())
     } else {
-        refresh_and_capture(session, cli_id, sleeper.as_ref(), &RealTmux)
+        refresh_and_capture(session, cli_id, window, sleeper.as_ref(), &RealTmux)
+    }
+}
+
+/// Return the console window every registered Codex account should own.
+///
+/// One window per ACC login keeps both accounts' `/status` readings live, so
+/// the panel shows every instance's 5h limit rather than only the selected
+/// one's. Installs without a registry keep the single historical `codex`
+/// window on `~/.codex`.
+fn codex_console_plan(home: &Path) -> Vec<CodexConsole> {
+    let (rows, _) = load_codex_account_registry(home);
+    if rows.is_empty() {
+        return vec![CodexConsole {
+            window: codex_console_window(1),
+            home: selected_codex_home(home),
+        }];
+    }
+    rows.into_iter()
+        .map(|row| CodexConsole {
+            window: codex_console_window(row.id),
+            home: row.home,
+        })
+        .collect()
+}
+
+/// One CLI console window and the account it is expected to be logged into.
+struct ConsoleTarget {
+    /// tmux window name.
+    window: String,
+    /// ACC Codex instance id this window reports for, when there is one.
+    instance_id: Option<i64>,
+    /// `CODEX_HOME` the window should be running.
+    home: Option<PathBuf>,
+}
+
+/// Return every console window that reports for one CLI.
+///
+/// Non-Codex CLIs have a single login and so a single window. Codex gets one
+/// window per ACC-registered account, which is what lets both logins publish
+/// their own 5h limits on the same tick — including right after a reboot, when
+/// no account has a rollout newer than the boot.
+///
+/// Args:
+///     cli_id: CLI being polled.
+///     snapshot: Headless reading, carrying `instances` for Codex.
+///     home: User home used to resolve the default Codex login.
+///
+/// Returns:
+///     Console targets in instance order.
+fn console_targets(cli_id: &str, snapshot: &Value, home: &Path) -> Vec<ConsoleTarget> {
+    if cli_id != "codex" {
+        return vec![ConsoleTarget {
+            window: cli_id.to_string(),
+            instance_id: None,
+            home: None,
+        }];
+    }
+    let rows = snapshot.get("instances").and_then(Value::as_array);
+    let Some(rows) = rows.filter(|rows| !rows.is_empty()) else {
+        return vec![ConsoleTarget {
+            window: codex_console_window(1),
+            instance_id: None,
+            home: Some(selected_codex_home(home)),
+        }];
+    };
+    rows.iter()
+        .filter_map(|row| {
+            let id = row.get("id").and_then(Value::as_i64)?;
+            Some(ConsoleTarget {
+                window: codex_console_window(id),
+                instance_id: Some(id),
+                home: row.get("home").and_then(Value::as_str).map(PathBuf::from),
+            })
+        })
+        .collect()
+}
+
+/// Return when this console's account last had a pane capture applied.
+fn console_pane_checked_at(last: Option<&Value>, instance_id: Option<i64>) -> f64 {
+    let top_level = || {
+        last.and_then(|l| l.get("pane_checked_at").and_then(Value::as_f64))
+            .unwrap_or(0.0)
+    };
+    let Some(instance_id) = instance_id else {
+        return top_level();
+    };
+    last.and_then(|l| l.get("instances"))
+        .and_then(Value::as_array)
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get("id").and_then(Value::as_i64) == Some(instance_id))
+        })
+        .and_then(|row| row.get("pane_checked_at").and_then(Value::as_f64))
+        .unwrap_or(0.0)
+}
+
+/// Read the `CODEX_HOME` a console window is logged into.
+fn console_home_of(hooks: &PollHooks, session: &str, window: &str) -> Option<String> {
+    match &hooks.tmux {
+        Some(tmux) => console_codex_home(tmux.as_ref(), session, window),
+        None => console_codex_home(&RealTmux, session, window),
     }
 }
 
@@ -409,7 +516,7 @@ fn collect_grok_cli(
     home: &Path,
     last: Option<&Value>,
     now: f64,
-    tmux_refresh_request: Option<&dyn Fn(&str, &str) -> bool>,
+    tmux_refresh_request: Option<&dyn Fn(&str, &str, &str) -> bool>,
     hooks: &PollHooks,
 ) -> Value {
     let source_mode = cli_config
@@ -439,12 +546,12 @@ fn collect_grok_cli(
             .and_then(Value::as_str)
             .unwrap_or("agentic-cli-status");
         if let Some(request) = tmux_refresh_request {
-            if request(session, "grok") {
+            if request(session, "grok", "grok") {
                 last_tmux_attempt = Some(now);
             }
         } else {
             last_tmux_attempt = Some(now);
-            live_text = do_refresh_and_capture(session, "grok", hooks);
+            live_text = do_refresh_and_capture(session, "grok", "grok", hooks);
         }
     }
     let mut saved_text = None;
@@ -591,7 +698,7 @@ fn collect_cli(
     home: &Path,
     last: Option<&Value>,
     now: f64,
-    tmux_refresh_request: Option<&dyn Fn(&str, &str) -> bool>,
+    tmux_refresh_request: Option<&dyn Fn(&str, &str, &str) -> bool>,
     headless_snapshot: Option<Value>,
     hooks: &PollHooks,
 ) -> Value {
@@ -631,12 +738,23 @@ fn collect_cli(
     }
     let headless_snapshot = snapshot.clone();
     let mut last_tmux_attempt = last.and_then(|l| l.get("tmux_attempt_at").and_then(Value::as_f64));
-    let force_codex_refresh = cli_id == "codex" && take_codex_console_refresh();
-    if force_codex_refresh {
-        let stale_pane = state_dir(Some(home)).join(PANE_DIR_NAME).join("codex.txt");
+    // Windows rebuilt for a different login this tick: their saved pane text
+    // still shows the old account, so it is dropped and captured again now.
+    let recreated_consoles = if cli_id == "codex" {
+        take_codex_console_refresh()
+    } else {
+        HashSet::new()
+    };
+    let force_codex_refresh = !recreated_consoles.is_empty();
+    for window in &recreated_consoles {
+        let stale_pane = state_dir(Some(home))
+            .join(PANE_DIR_NAME)
+            .join(format!("{window}.txt"));
         if stale_pane.is_file() {
             let _ = fs::remove_file(&stale_pane);
-            logging::info("dropped stale Codex pane capture after console login change");
+            logging::info(format!(
+                "dropped stale Codex pane capture for {window} after console login change"
+            ));
         }
     }
     let tmux_wanted = slash_command(cli_id).is_some()
@@ -658,76 +776,70 @@ fn collect_cli(
             endpoint_marks[key] = value.clone();
         }
     }
-    let mut pane_text = None;
-    let mut pane_observed_at = None;
-    // Identity of the login the debug console is running, read from the pane
-    // process environment. Every `/status` capture belongs to this account and
-    // to no other, which is what keeps two ChatGPT logins from sharing one
-    // reading.
-    let console_home: Option<String> = if cli_id == "codex"
-        && tmux_config
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true)
-    {
-        let session = tmux_config
-            .get("session")
-            .and_then(Value::as_str)
-            .unwrap_or("agentic-cli-status");
-        match &hooks.tmux {
-            Some(tmux) => console_codex_home(tmux.as_ref(), session),
-            None => console_codex_home(&RealTmux, session),
-        }
-    } else {
-        None
-    };
-    let console_follows_selected = cli_id == "codex"
-        && console_home
-            .as_deref()
-            .is_some_and(|console| Path::new(console) == selected_codex_home(home));
-    if tmux_wanted {
-        let session = tmux_config
-            .get("session")
-            .and_then(Value::as_str)
-            .unwrap_or("agentic-cli-status");
-        if let Some(request) = tmux_refresh_request {
-            if request(session, cli_id) {
-                last_tmux_attempt = Some(now);
-            }
+    let session = tmux_config
+        .get("session")
+        .and_then(Value::as_str)
+        .unwrap_or("agentic-cli-status");
+    let tmux_enabled = tmux_config
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    // Every CLI owns one console window, and Codex owns one per ACC account,
+    // so an idle login keeps reporting its own limits instead of waiting for
+    // the selected account's window to be pointed at it.
+    for console in console_targets(cli_id, &snapshot, home) {
+        let mut pane_text: Option<String> = None;
+        let mut pane_observed_at: Option<f64> = None;
+        // Identity of the login this console is running, read from the pane
+        // process environment. Every `/status` capture belongs to that account
+        // and to no other, which is what keeps two ChatGPT logins from sharing
+        // one reading.
+        let console_home: Option<String> = if cli_id == "codex" && tmux_enabled {
+            console_home_of(hooks, session, &console.window)
         } else {
-            last_tmux_attempt = Some(now);
-            pane_text = do_refresh_and_capture(session, cli_id, hooks);
-            pane_observed_at = Some(now);
-            if let Some(text) = pane_text.as_deref() {
-                save_pane_capture(home, cli_id, text);
+            None
+        };
+        // A window dedicated to one account stays authoritative for it, so its
+        // capture is re-applied even when the pane text has not changed.
+        let console_owns_account = console
+            .home
+            .as_deref()
+            .zip(console_home.as_deref())
+            .is_some_and(|(want, got)| Path::new(got) == want);
+        if tmux_wanted {
+            if let Some(request) = tmux_refresh_request {
+                if request(session, cli_id, &console.window) {
+                    last_tmux_attempt = Some(now);
+                }
+            } else {
+                last_tmux_attempt = Some(now);
+                pane_text = do_refresh_and_capture(session, cli_id, &console.window, hooks);
+                pane_observed_at = Some(now);
+                if let Some(text) = pane_text.as_deref() {
+                    save_pane_capture(home, &console.window, text);
+                }
             }
         }
-    }
-    if tmux_refresh_request.is_some()
-        && tmux_config
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true)
-        && (source_mode == "auto" || source_mode == "tmux")
-    {
-        let (saved_text, saved_at) = load_pane_capture(home, cli_id);
-        if let (Some(saved_text), Some(saved_at)) = (saved_text, saved_at) {
-            let last_checked = last
-                .and_then(|l| l.get("pane_checked_at").and_then(Value::as_f64))
-                .unwrap_or(0.0);
-            let pane_fresh = now - saved_at <= stale_after as f64;
-            if pane_fresh && (saved_at > last_checked || console_follows_selected) {
-                pane_text = Some(saved_text);
-                pane_observed_at = Some(saved_at);
-            }
-        }
-        if let (Some(pane_text), Some(pane_observed_at)) = (pane_text.as_deref(), pane_observed_at)
+        if tmux_refresh_request.is_some()
+            && tmux_enabled
+            && (source_mode == "auto" || source_mode == "tmux")
         {
+            let (saved_text, saved_at) = load_pane_capture(home, &console.window);
+            if let (Some(saved_text), Some(saved_at)) = (saved_text, saved_at) {
+                let last_checked = console_pane_checked_at(last, console.instance_id);
+                let pane_fresh = now - saved_at <= stale_after as f64;
+                if pane_fresh && (saved_at > last_checked || console_owns_account) {
+                    pane_text = Some(saved_text);
+                    pane_observed_at = Some(saved_at);
+                }
+            }
+        }
+        if let (Some(text), Some(observed_at)) = (pane_text.as_deref(), pane_observed_at) {
             snapshot = if cli_id == "codex" && snapshot.get("instances").is_some() {
                 apply_codex_live_pane(
                     snapshot,
-                    pane_text,
-                    pane_observed_at,
+                    text,
+                    observed_at,
                     source_mode,
                     stale_after,
                     last,
@@ -738,8 +850,8 @@ fn collect_cli(
                 merge_cli_pane(
                     snapshot,
                     cli_id,
-                    pane_text,
-                    pane_observed_at,
+                    text,
+                    observed_at,
                     source_mode,
                     stale_after,
                     last,
@@ -747,32 +859,6 @@ fn collect_cli(
                 )
             };
         }
-    } else if let (Some(pane_text), Some(pane_observed_at)) =
-        (pane_text.as_deref(), pane_observed_at)
-    {
-        snapshot = if cli_id == "codex" && snapshot.get("instances").is_some() {
-            apply_codex_live_pane(
-                snapshot,
-                pane_text,
-                pane_observed_at,
-                source_mode,
-                stale_after,
-                last,
-                now,
-                console_home.as_deref(),
-            )
-        } else {
-            merge_cli_pane(
-                snapshot,
-                cli_id,
-                pane_text,
-                pane_observed_at,
-                source_mode,
-                stale_after,
-                last,
-                now,
-            )
-        };
     }
     snapshot = carry_window_resets(
         snapshot,
@@ -1123,7 +1209,7 @@ pub fn poll_once(
     home: Option<&Path>,
     previous: Option<&Value>,
     now: Option<f64>,
-    tmux_refresh_request: Option<&dyn Fn(&str, &str) -> bool>,
+    tmux_refresh_request: Option<&dyn Fn(&str, &str, &str) -> bool>,
     headless_refresh_worker: Option<&HeadlessRefreshWorker>,
     hooks: &PollHooks,
 ) -> Value {
@@ -1149,7 +1235,7 @@ pub fn poll_once(
             .as_str()
             .unwrap_or("agentic-cli-status");
         let available = hooks.tmux_available.unwrap_or_else(tmux_available);
-        let desired_codex_home = selected_codex_home(home);
+        let codex_consoles = codex_console_plan(home);
         if let Some(tmux) = &hooks.tmux {
             ensure_console(
                 session,
@@ -1157,7 +1243,7 @@ pub fn poll_once(
                 home,
                 tmux.as_ref(),
                 available,
-                Some(desired_codex_home.as_path()),
+                &codex_consoles,
             );
         } else {
             ensure_console(
@@ -1166,7 +1252,7 @@ pub fn poll_once(
                 home,
                 &RealTmux,
                 available,
-                Some(desired_codex_home.as_path()),
+                &codex_consoles,
             );
         }
     }
@@ -1359,7 +1445,8 @@ impl HeadlessRefreshWorker {
     }
 }
 
-type TmuxJob = (String, String);
+/// Console refresh job: `(session, cli_id, window)`.
+type TmuxJob = (String, String, String);
 
 /// Run slow tmux slash-command captures outside the five-second poll tick.
 pub struct TmuxRefreshWorker {
@@ -1403,21 +1490,26 @@ impl TmuxRefreshWorker {
                     }
                     thread::sleep(Duration::from_millis(20));
                 };
-                let Some((session, cli_id)) = job else {
+                let Some((session, cli_id, window)) = job else {
                     return;
                 };
-                if let Some(text) = do_refresh_and_capture(&session, &cli_id, &hooks) {
-                    save_pane_capture(&home, &cli_id, &text);
+                if let Some(text) = do_refresh_and_capture(&session, &cli_id, &window, &hooks) {
+                    save_pane_capture(&home, &window, &text);
                 }
-                pending.lock().unwrap().remove(&(session, cli_id));
+                pending.lock().unwrap().remove(&(session, window));
             })
             .expect("spawn tmux worker");
         *self.thread.lock().unwrap() = Some(handle);
         logging::info("background tmux refresh worker started");
     }
 
-    pub fn request(&self, session: &str, cli_id: &str) -> bool {
-        let key = (session.to_string(), cli_id.to_string());
+    /// Queue a `/status` capture for one console window.
+    ///
+    /// Jobs are keyed by window, not by CLI, so each ACC Codex account's
+    /// console is refreshed on its own instead of one login crowding out the
+    /// other.
+    pub fn request(&self, session: &str, cli_id: &str, window: &str) -> bool {
+        let key = (session.to_string(), window.to_string());
         {
             let started = self.started.lock().unwrap();
             let mut pending = self.pending.lock().unwrap();
@@ -1426,8 +1518,12 @@ impl TmuxRefreshWorker {
             }
             pending.insert(key.clone());
         }
-        self.queue.lock().unwrap().push_back(Some(key));
-        logging::debug(format!("queued background tmux refresh for {cli_id}"));
+        self.queue.lock().unwrap().push_back(Some((
+            session.to_string(),
+            cli_id.to_string(),
+            window.to_string(),
+        )));
+        logging::debug(format!("queued background tmux refresh for {window}"));
         true
     }
 
@@ -1470,7 +1566,7 @@ pub fn run_daemon(home: Option<&Path>, hooks: PollHooks) {
                 Some(&home_buf),
                 previous.as_ref(),
                 None,
-                Some(&|session, cli_id| tmux_worker.request(session, cli_id)),
+                Some(&|session, cli_id, window| tmux_worker.request(session, cli_id, window)),
                 Some(&headless_worker),
                 &hooks,
             )
@@ -1646,6 +1742,100 @@ mod tests {
         });
         let filled = carry_window_resets(snapshot.clone(), &[&fallback]);
         assert_eq!(filled["windows"][0]["resets_at"], json!(1));
+    }
+
+    /// tmux fake that answers a different `CODEX_HOME` per console window.
+    struct PerWindowTmux {
+        homes: std::collections::HashMap<String, String>,
+    }
+
+    impl crate::tmux::TmuxRunner for PerWindowTmux {
+        fn run(&self, args: &[String]) -> (i32, String, String) {
+            match args.first().map(String::as_str) {
+                // The pane "pid" is the window name so each console can be
+                // told apart without a real process.
+                Some("list-panes") => {
+                    let target = args.get(2).cloned().unwrap_or_default();
+                    let window = target.split(':').next_back().unwrap_or("").to_string();
+                    (0, format!("{window}\n"), String::new())
+                }
+                _ => (0, String::new(), String::new()),
+            }
+        }
+
+        fn process_codex_home(&self, pid: &str) -> Option<String> {
+            self.homes.get(pid).cloned()
+        }
+    }
+
+    fn write_instance_registry(home: &Path, homes: &[(i64, PathBuf)], selected: i64) {
+        let dir = crate::collectors::codex::tracker_state_dir(home);
+        fs::create_dir_all(&dir).unwrap();
+        let rows: Vec<Value> = homes
+            .iter()
+            .map(|(id, path)| json!({"id": id, "home": path.display().to_string()}))
+            .collect();
+        fs::write(
+            dir.join(crate::collectors::codex::CODEX_INSTANCES_FILE),
+            json!({"version": 1, "selected": selected, "instances": rows}).to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn both_codex_logins_report_their_own_5h_limit_after_a_reboot() {
+        // After a reboot no rollout is newer than boot, so the only source of
+        // a 5h limit is each account's own console capture. Both must land.
+        let sandbox = Sandbox::new();
+        configure(true);
+        let first = sandbox.home.join(".codex");
+        let second = sandbox.home.join(".codex-account-2");
+        write_instance_registry(&sandbox.home, &[(1, first.clone()), (2, second.clone())], 1);
+        save_pane_capture(
+            &sandbox.home,
+            "codex",
+            concat!(
+                "\u{2502}  5h limit:      [\u{2588}\u{2588}\u{2591}\u{2591}] 40% left (resets 17:05) \u{2502}\n",
+                "\u{2502}  Weekly limit:  [\u{2588}\u{2591}\u{2591}\u{2591}] 90% left               \u{2502}\n",
+            ),
+        );
+        save_pane_capture(
+            &sandbox.home,
+            "codex-2",
+            concat!(
+                "\u{2502}  5h limit:      [\u{2588}\u{2591}\u{2591}\u{2591}] 75% left (resets 18:20) \u{2502}\n",
+                "\u{2502}  Weekly limit:  [\u{2588}\u{2591}\u{2591}\u{2591}] 95% left               \u{2502}\n",
+            ),
+        );
+        let hooks = PollHooks {
+            tmux: Some(Arc::new(PerWindowTmux {
+                homes: std::collections::HashMap::from([
+                    ("codex".to_string(), first.display().to_string()),
+                    ("codex-2".to_string(), second.display().to_string()),
+                ]),
+            })),
+            tmux_available: Some(true),
+            ..PollHooks::default()
+        };
+        let never_refresh = |_: &str, _: &str, _: &str| false;
+        let status = poll_once(
+            Some(&sandbox.home),
+            None,
+            Some(NOW),
+            Some(&never_refresh),
+            None,
+            &hooks,
+        );
+        let instances = status["clis"]["codex"]["instances"].as_array().unwrap();
+        assert_eq!(instances.len(), 2);
+        // 100 - "left" percentage, per account, from that account's console.
+        assert_eq!(instances[0]["windows"][0]["used_percent"], json!(60.0));
+        assert_eq!(instances[1]["windows"][0]["used_percent"], json!(25.0));
+        assert_eq!(
+            instances[0]["windows"][0]["used_percent"],
+            status["clis"]["codex"]["windows"][0]["used_percent"],
+            "the selected account is mirrored at the top level"
+        );
     }
 
     #[test]
