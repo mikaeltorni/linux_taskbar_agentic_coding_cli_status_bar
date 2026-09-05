@@ -461,6 +461,16 @@ fn credit_state(limits: &serde_json::Map<String, Value>, observed_at: f64) -> Op
         return None;
     }
     let get = |key: &str| credits.and_then(|map| map.get(key)).cloned();
+    // A team subscription without a credit facility emits this premium-family
+    // reason when its included allowance runs out. Use its ordinary usage
+    // windows, just like a personal subscription; it is not a billing block.
+    let reached = if reached == Some("workspace_member_credits_depleted")
+        && get("has_credits") == Some(Value::Bool(false))
+    {
+        None
+    } else {
+        reached
+    };
     Some(json!({
         "has_credits": get("has_credits").unwrap_or(Value::Null),
         "unlimited": get("unlimited").unwrap_or(Value::Null),
@@ -753,10 +763,9 @@ mod tests {
     }
 
     #[test]
-    fn publishes_the_credit_block_that_refused_the_turn() {
-        // Real shape from a team login: the window family and the credit
-        // family arrive as two events, and only the second says why Codex
-        // actually refused.
+    fn team_without_credit_facility_keeps_personal_usage_display() {
+        // A team login emits a premium depletion event after the included
+        // window runs out, even though it has no credit facility.
         let sandbox = Sandbox::new();
         let events = vec![
             json!({
@@ -792,13 +801,23 @@ mod tests {
         let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
         // plan_type now survives even though it arrived on a windowless event.
         assert_eq!(result["plan"], json!("team"));
-        assert_eq!(
-            result["credits"]["reached_type"],
-            json!("workspace_member_credits_depleted")
-        );
-        assert_eq!(result["credits"]["blocked"], json!(true));
+        assert_eq!(result["credits"]["reached_type"], Value::Null);
+        assert_eq!(result["credits"]["blocked"], json!(false));
+        assert_eq!(result["windows"][1]["used_percent"], json!(16.0));
+        assert_eq!(result["windows"][0]["resets_at"], json!(1783085000_i64));
         assert_eq!(result["credits"]["has_credits"], json!(false));
         assert_eq!(result["windows"][0]["used_percent"], json!(100.0));
+    }
+
+    #[test]
+    fn actual_credit_facility_still_reports_depletion() {
+        let limits = json!({
+            "credits": {"has_credits": true, "balance": "0"},
+            "rate_limit_reached_type": "workspace_member_credits_depleted"
+        });
+        let state = credit_state(limits.as_object().unwrap(), FIXTURE_NOW).unwrap();
+        assert_eq!(state["blocked"], true);
+        assert_eq!(state["reached_type"], "workspace_member_credits_depleted");
     }
 
     #[test]

@@ -273,3 +273,9 @@ You are solely responsible for determining whether this software is suitable, sa
 The authors and copyright holders make no guarantees regarding security, reliability, availability, correctness, compliance, non-infringement, or fitness for any particular purpose.
 
 This notice is intended to clarify the nature of the project and does not impose additional restrictions beyond the MIT License.
+
+Team Codex accounts without a credit facility use the same usage percentages
+and reset times as personal accounts. Their premium-family
+`workspace_member_credits_depleted` event does not add a dollar marker or a
+"team credits out" message; accounts reporting an actual credit facility retain
+credit-depletion reporting.
