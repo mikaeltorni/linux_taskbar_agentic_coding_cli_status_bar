@@ -78,8 +78,11 @@ pub fn default_config() -> Value {
                 "stale_after_seconds": 1800,
                 "fetch_min_interval_seconds": OPENCODE_GO_FETCH_MIN_INTERVAL_SECONDS,
             },
+            // Opt-in: OpenRouter needs a management API key and a chosen
+            // model slug, so the OR segment stays off (and hidden) until the
+            // user enables it through the installer or config.
             "openrouter": {
-                "enabled": true,
+                "enabled": false,
                 "source": "headless",
                 "stale_after_seconds": 1800,
                 "fetch_min_interval_seconds": OPENROUTER_FETCH_MIN_INTERVAL_SECONDS,
@@ -415,7 +418,7 @@ mod tests {
         let _sandbox = Sandbox::new();
         let cfg = load_config(None);
         assert_eq!(cfg["poll_interval_seconds"], json!(5));
-        let default_on = ["codex", "claude_code", "grok", "openrouter"];
+        let default_on = ["codex", "claude_code", "grok"];
         for cli in CLI_IDS {
             let enabled = cfg["clis"][cli]["enabled"].as_bool().unwrap();
             assert_eq!(enabled, default_on.contains(cli), "{cli}");
@@ -434,6 +437,27 @@ mod tests {
         assert_eq!(
             load_config(None)["clis"]["opencode_go"]["enabled"],
             json!(false)
+        );
+    }
+
+    #[test]
+    fn openrouter_is_disabled_by_default() {
+        let _sandbox = Sandbox::new();
+        assert_eq!(
+            load_config(None)["clis"]["openrouter"]["enabled"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn openrouter_opt_in_is_honored() {
+        let _sandbox = Sandbox::new();
+        let path = config_path(None);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"clis": {"openrouter": {"enabled": true}}}"#).unwrap();
+        assert_eq!(
+            load_config(None)["clis"]["openrouter"]["enabled"],
+            json!(true)
         );
     }
 
