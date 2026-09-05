@@ -2,7 +2,8 @@
 
 This repository owns the `agentic-cli-status@local` GNOME Shell extension, the
 `agentic-cli-status` Rust poller (headless rate-limit collectors for Codex,
-Claude Code, Grok CLI, OpenCode Go, and OpenRouter plus the tmux debug console), and their installer
+Claude Code, Grok CLI, and the opt-in OpenCode Go and OpenRouter, plus the tmux
+debug console), and their installer
 integration. Keep agentic CLI rate-limit monitoring in this repo; the CLIs
 themselves are installed by `linux_codex_claude_code_setup`, and the in-TUI
 status-bar rendering (statusline segments) stays in `claude_code_status_bar`.

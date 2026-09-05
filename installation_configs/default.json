@@ -39,7 +39,7 @@
     "openrouter_monitor": {
       "config_value": "",
       "favorite": 0,
-      "on": 1,
+      "on": 0,
       "startup": 0,
       "sticky": 0,
       "uninstall": 0,
