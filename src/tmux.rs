@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use regex::Regex;
 
@@ -27,6 +27,15 @@ const WINDOW_ENV: &[&str] = &[
     "ATTS_SUPPRESS_ANNOUNCEMENTS=1",
     "CODEX_AGENT_SKIP_TRACKER=1",
 ];
+
+/// ACC environment variable naming the Codex account a launch belongs to.
+const ACC_CODEX_INSTANCE_ENV: &str = "ACC_CODEX_INSTANCE";
+
+/// Seconds a freshly started console pane is left alone before it is judged.
+///
+/// A pane younger than this is still walking its launcher exec chain, so its
+/// environment is not yet the login the window will run.
+const CONSOLE_SETTLE_SECONDS: f64 = 45.0;
 
 const BINARY_FALLBACK_DIRS: &[&str] = &[".local/bin", ".grok/bin", ".codex/bin", ".opencode/bin"];
 
@@ -56,6 +65,18 @@ fn mark_codex_console_refresh(window: &str) {
         .insert(window.to_string());
 }
 
+/// One window the console session should end up with.
+struct DesiredWindow {
+    /// tmux window name.
+    window: String,
+    /// CLI the window runs.
+    cli_id: String,
+    /// `CODEX_HOME` for Codex windows tied to an ACC account.
+    codex_home: Option<PathBuf>,
+    /// ACC registry instance id for Codex windows.
+    instance_id: Option<i64>,
+}
+
 /// One ACC Codex account's debug console window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexConsole {
@@ -63,6 +84,8 @@ pub struct CodexConsole {
     pub window: String,
     /// `CODEX_HOME` the window's `codex` process runs with.
     pub home: PathBuf,
+    /// ACC registry instance id, exported so the launcher keeps this account.
+    pub instance_id: Option<i64>,
 }
 
 /// Return the console window name that belongs to an ACC Codex instance.
@@ -111,6 +134,11 @@ pub trait TmuxRunner: Send + Sync {
     /// variable on the child, not on `tmux show-environment`.
     fn process_codex_home(&self, pid: &str) -> Option<String> {
         read_proc_environ_var(pid, "CODEX_HOME")
+    }
+
+    /// Seconds since a pane process started, or None when the pid is gone.
+    fn process_age_seconds(&self, pid: &str) -> Option<f64> {
+        read_proc_age_seconds(pid)
     }
 }
 
@@ -167,7 +195,13 @@ pub fn resolve_cli_binary(cli_id: &str, home: &Path) -> Option<PathBuf> {
     None
 }
 
-fn window_env_args(cli_id: &str, codex_home: Option<&Path>) -> Vec<String> {
+/// Build the `-e VAR=value` arguments a console window is created with.
+///
+/// The `codex` launcher hands the run to ACC, which re-exports `CODEX_HOME`
+/// for the *selected* account.  Passing `ACC_CODEX_INSTANCE` pins the account
+/// the launcher resolves, so a console keeps the login it was created for
+/// instead of drifting to the selection and being torn down every tick.
+fn window_env_args(cli_id: &str, codex_home: Option<&Path>, instance_id: Option<i64>) -> Vec<String> {
     let mut args = Vec::new();
     for var in WINDOW_ENV {
         args.push("-e".into());
@@ -177,6 +211,10 @@ fn window_env_args(cli_id: &str, codex_home: Option<&Path>) -> Vec<String> {
         if let Some(home) = codex_home {
             args.push("-e".into());
             args.push(format!("CODEX_HOME={}", home.display()));
+        }
+        if let Some(id) = instance_id {
+            args.push("-e".into());
+            args.push(format!("{ACC_CODEX_INSTANCE_ENV}={id}"));
         }
     }
     args
@@ -196,6 +234,27 @@ fn read_proc_environ_var(pid: &str, key: &str) -> Option<String> {
         .find_map(|entry| entry.strip_prefix(&prefix).map(str::to_string))
 }
 
+/// Return how long a process has been running, from `/proc/<pid>`.
+///
+/// The kernel stamps the directory with the process start time, so its mtime
+/// dates the pane without parsing clock ticks.
+///
+/// Args:
+///     pid: Process id as printed by tmux.
+///
+/// Returns:
+///     Age in seconds, or None when the pid is gone or unreadable.
+fn read_proc_age_seconds(pid: &str) -> Option<f64> {
+    if !pid.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let started = fs::metadata(format!("/proc/{pid}")).ok()?.modified().ok()?;
+    SystemTime::now()
+        .duration_since(started)
+        .ok()
+        .map(|age| age.as_secs_f64())
+}
+
 /// Return the `CODEX_HOME` the tmux debug console is currently logged into.
 ///
 /// Read straight from the console process environment, so the reading is the
@@ -210,6 +269,12 @@ fn read_proc_environ_var(pid: &str, key: &str) -> Option<String> {
 ///     The console pane's `CODEX_HOME`, or None when the window or the
 ///     variable is missing.
 pub fn console_codex_home(tmux: &dyn TmuxRunner, session: &str, window: &str) -> Option<String> {
+    let pid = console_pane_pid(tmux, session, window)?;
+    tmux.process_codex_home(&pid)
+}
+
+/// Return the pid of a console window's first pane, or None when it is gone.
+fn console_pane_pid(tmux: &dyn TmuxRunner, session: &str, window: &str) -> Option<String> {
     let result = tmux.run(&[
         "list-panes".into(),
         "-t".into(),
@@ -224,7 +289,7 @@ pub fn console_codex_home(tmux: &dyn TmuxRunner, session: &str, window: &str) ->
     if pid.is_empty() {
         return None;
     }
-    tmux.process_codex_home(pid)
+    Some(pid.to_string())
 }
 
 fn homes_match(left: &str, right: &Path) -> bool {
@@ -242,11 +307,27 @@ fn recreate_codex_window_if_stale(
     if !existing.contains(window) {
         return;
     }
-    let current = console_codex_home(tmux, session, window);
+    let Some(pid) = console_pane_pid(tmux, session, window) else {
+        return;
+    };
+    let current = tmux.process_codex_home(&pid);
     if current
         .as_deref()
         .is_some_and(|home| homes_match(home, desired_home))
     {
+        return;
+    }
+    // The launcher execs through wrapper processes before the CLI settles on
+    // its final environment, so a young pane can still be reading the pre-exec
+    // value.  Rebuilding it then would restart that wait every tick and the
+    // account would never live long enough to answer `/status`.
+    if tmux
+        .process_age_seconds(&pid)
+        .is_some_and(|age| age < CONSOLE_SETTLE_SECONDS)
+    {
+        logging::debug(format!(
+            "Codex debug console {window} is still starting; leaving it to settle"
+        ));
         return;
     }
     logging::info(format!(
@@ -353,42 +434,65 @@ pub fn ensure_console(
     let wants_codex = cli_ids.iter().any(|id| id == "codex");
     // Every window the session should end up with: one per non-Codex CLI plus
     // one per registered Codex account.
-    let mut desired: Vec<(String, String, Option<PathBuf>)> = Vec::new();
+    let mut desired: Vec<DesiredWindow> = Vec::new();
     for cli_id in cli_ids {
         if cli_id == "codex" {
             continue;
         }
-        desired.push((cli_id.clone(), cli_id.clone(), None));
+        desired.push(DesiredWindow {
+            window: cli_id.clone(),
+            cli_id: cli_id.clone(),
+            codex_home: None,
+            instance_id: None,
+        });
     }
     if wants_codex {
         if codex_consoles.is_empty() {
             // No ACC registry: the single historical window on the CLI's own
             // default `CODEX_HOME`.
-            desired.push((codex_console_window(1), "codex".to_string(), None));
+            desired.push(DesiredWindow {
+                window: codex_console_window(1),
+                cli_id: "codex".to_string(),
+                codex_home: None,
+                instance_id: None,
+            });
         }
         for console in codex_consoles {
-            desired.push((
-                console.window.clone(),
-                "codex".to_string(),
-                Some(console.home.clone()),
-            ));
+            desired.push(DesiredWindow {
+                window: console.window.clone(),
+                cli_id: "codex".to_string(),
+                codex_home: Some(console.home.clone()),
+                instance_id: console.instance_id,
+            });
         }
     }
     if wants_codex {
         let codex_windows: HashSet<String> = desired
             .iter()
-            .filter(|(_, cli_id, _)| cli_id == "codex")
-            .map(|(window, _, _)| window.clone())
+            .filter(|entry| entry.cli_id == "codex")
+            .map(|entry| entry.window.clone())
             .collect();
-        for (window, _, codex_home) in &desired {
-            if let Some(codex_home) = codex_home {
-                recreate_codex_window_if_stale(session, &mut existing, tmux, window, codex_home);
+        for entry in &desired {
+            if let Some(codex_home) = &entry.codex_home {
+                recreate_codex_window_if_stale(
+                    session,
+                    &mut existing,
+                    tmux,
+                    &entry.window,
+                    codex_home,
+                );
             }
         }
         drop_unregistered_codex_windows(session, &mut existing, tmux, &codex_windows);
     }
     let mut created_any = have_session;
-    for (window, cli_id, codex_home) in &desired {
+    for DesiredWindow {
+        window,
+        cli_id,
+        codex_home,
+        instance_id,
+    } in &desired
+    {
         if cli_binary_name(cli_id).is_none() {
             logging::debug(format!("cli {cli_id} has no tmux console; skipping window"));
             continue;
@@ -400,7 +504,7 @@ pub fn ensure_console(
             note_missing_cli(cli_id);
             continue;
         };
-        let mut env_args = window_env_args(cli_id, codex_home.as_deref());
+        let mut env_args = window_env_args(cli_id, codex_home.as_deref(), *instance_id);
         if !have_session {
             let mut args = vec!["new-session".into(), "-d".into()];
             args.append(&mut env_args);
@@ -786,6 +890,7 @@ mod tests {
             &[CodexConsole {
                 window: "codex".into(),
                 home: extra.clone(),
+                instance_id: Some(1),
             }],
         ));
         let calls = tmux.calls.lock().unwrap().clone();
@@ -810,6 +915,8 @@ mod tests {
         calls: Mutex<Vec<Vec<String>>>,
         windows: Vec<String>,
         homes: std::collections::HashMap<String, String>,
+        /// Age every pane reports; None keeps the panes old enough to judge.
+        pane_age_seconds: Option<f64>,
     }
 
     impl TmuxRunner for MultiWindowTmux {
@@ -833,6 +940,10 @@ mod tests {
 
         fn process_codex_home(&self, pid: &str) -> Option<String> {
             self.homes.get(pid).cloned()
+        }
+
+        fn process_age_seconds(&self, _pid: &str) -> Option<f64> {
+            self.pane_age_seconds
         }
     }
 
@@ -876,6 +987,7 @@ mod tests {
         let first = sandbox.home.join(".codex");
         let second = sandbox.home.join(".codex-account-2");
         let tmux = MultiWindowTmux {
+            pane_age_seconds: None,
             calls: Mutex::new(Vec::new()),
             windows: vec!["codex".into()],
             homes: std::collections::HashMap::from([(
@@ -893,10 +1005,12 @@ mod tests {
                 CodexConsole {
                     window: "codex".into(),
                     home: first.clone(),
+                    instance_id: Some(1),
                 },
                 CodexConsole {
                     window: "codex-2".into(),
                     home: second.clone(),
+                    instance_id: Some(2),
                 },
             ],
         ));
@@ -918,6 +1032,85 @@ mod tests {
                 .any(|c| c.first().map(String::as_str) == Some("kill-window")),
             "a console already on its own account is left running"
         );
+        // The launcher re-exports CODEX_HOME for the selected account, so the
+        // window has to name the account it belongs to or it comes back logged
+        // into the other one and is torn down on the next tick.
+        assert!(joined.contains("ACC_CODEX_INSTANCE=2"), "{joined}");
+        restore_path(original_path);
+    }
+
+    #[test]
+    fn a_starting_console_is_left_to_settle_instead_of_recreated() {
+        // A pane that is still walking its launcher exec chain reports the
+        // pre-exec CODEX_HOME. Killing it then restarts that wait every tick,
+        // so the account never lives long enough to answer /status.
+        let sandbox = Sandbox::new();
+        let original_path = install_fake_codex(&sandbox.home);
+        let second = sandbox.home.join(".codex-account-2");
+        let tmux = MultiWindowTmux {
+            pane_age_seconds: Some(3.0),
+            calls: Mutex::new(Vec::new()),
+            windows: vec!["codex-2".into()],
+            homes: std::collections::HashMap::from([(
+                "codex-2".to_string(),
+                sandbox.home.join(".codex").display().to_string(),
+            )]),
+        };
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[CodexConsole {
+                window: "codex-2".into(),
+                home: second,
+                instance_id: Some(2),
+            }],
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        assert!(
+            !calls
+                .iter()
+                .any(|c| c.first().map(String::as_str) == Some("kill-window")),
+            "a console younger than the settle window is left alone"
+        );
+        restore_path(original_path);
+    }
+
+    #[test]
+    fn a_settled_console_on_the_wrong_account_is_recreated() {
+        let sandbox = Sandbox::new();
+        let original_path = install_fake_codex(&sandbox.home);
+        let second = sandbox.home.join(".codex-account-2");
+        let tmux = MultiWindowTmux {
+            pane_age_seconds: Some(CONSOLE_SETTLE_SECONDS + 1.0),
+            calls: Mutex::new(Vec::new()),
+            windows: vec!["codex-2".into()],
+            homes: std::collections::HashMap::from([(
+                "codex-2".to_string(),
+                sandbox.home.join(".codex").display().to_string(),
+            )]),
+        };
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[CodexConsole {
+                window: "codex-2".into(),
+                home: second,
+                instance_id: Some(2),
+            }],
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        let killed: Vec<&Vec<String>> = calls
+            .iter()
+            .filter(|c| c.first().map(String::as_str) == Some("kill-window"))
+            .collect();
+        assert_eq!(killed.len(), 1, "the stale login is rebuilt once settled");
+        assert_eq!(killed[0][2], "acs:codex-2");
         restore_path(original_path);
     }
 
@@ -927,6 +1120,7 @@ mod tests {
         let original_path = install_fake_codex(&sandbox.home);
         let first = sandbox.home.join(".codex");
         let tmux = MultiWindowTmux {
+            pane_age_seconds: None,
             calls: Mutex::new(Vec::new()),
             windows: vec!["codex".into(), "codex-3".into()],
             homes: std::collections::HashMap::from([
@@ -946,6 +1140,7 @@ mod tests {
             &[CodexConsole {
                 window: "codex".into(),
                 home: first,
+                instance_id: Some(1),
             }],
         ));
         let calls = tmux.calls.lock().unwrap().clone();
@@ -988,6 +1183,7 @@ mod tests {
             &[CodexConsole {
                 window: "codex".into(),
                 home: extra.clone(),
+                instance_id: Some(1),
             }],
         ));
         let calls = tmux.calls.lock().unwrap().clone();
@@ -1039,6 +1235,7 @@ mod tests {
             &[CodexConsole {
                 window: "codex".into(),
                 home: extra.clone(),
+                instance_id: Some(1),
             }],
         ));
         let calls = tmux.calls.lock().unwrap().clone();

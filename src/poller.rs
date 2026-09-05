@@ -421,12 +421,14 @@ fn codex_console_plan(home: &Path) -> Vec<CodexConsole> {
         return vec![CodexConsole {
             window: codex_console_window(1),
             home: selected_codex_home(home),
+            instance_id: None,
         }];
     }
     rows.into_iter()
         .map(|row| CodexConsole {
             window: codex_console_window(row.id),
             home: row.home,
+            instance_id: Some(row.id),
         })
         .collect()
 }
