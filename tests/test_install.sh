@@ -180,11 +180,13 @@ for cli in codex claude_code grok opencode_go openrouter; do
 done
 # A default install must enable every default-on CLI, including Claude Code;
 # the extension hides any CLI whose status entry has enabled=false.
-for cli in codex claude_code grok openrouter; do
+for cli in codex claude_code grok; do
   assert_eq "$(cfg_get "clis.$cli.enabled")" "true" "default install must enable $cli"
 done
 assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
   "OpenCode Go is opt-in and must stay off after a default install"
+assert_eq "$(cfg_get clis.openrouter.enabled)" "false" \
+  "OpenRouter is opt-in and must stay off after a default install"
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
 assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 5' \
   "Default polling rate should be 5 seconds"
@@ -272,6 +274,12 @@ assert_eq "$(cfg_get clis.openrouter.source)" "headless" "openrouter source is h
 assert_eq "$(cfg_get clis.openrouter.model_slug)" "stealth/ox-alpha" \
   "openrouter default model slug"
 assert_eq "$(cfg_get clis.openrouter.daily_limit)" "1000" "openrouter default daily limit"
+# An opt-in that the user made must survive later default installs; only an
+# explicit --uninstall may take the OR segment back off the bar.
+run_installer >"$TMP_DIR/install-or-keep.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: default install after openrouter opt-in exited non-zero"; }
+assert_eq "$(cfg_get clis.openrouter.enabled)" "true" \
+  "a default install must keep an opted-in openrouter enabled"
 run_installer --uninstall openrouter_monitor >"$TMP_DIR/uninstall-or.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --uninstall openrouter_monitor exited non-zero"; }
 assert_eq "$(cfg_get clis.openrouter.enabled)" "false" "openrouter should be disabled"
@@ -282,11 +290,13 @@ assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
 # default install must bring them back, or they would stay hidden from the
 # taskbar (the extension drops any cli with enabled=false).
 run_installer >"$TMP_DIR/reinstall.out" 2>&1 || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall exited non-zero"; }
-for cli in codex claude_code grok openrouter; do
+for cli in codex claude_code grok; do
   assert_eq "$(cfg_get "clis.$cli.enabled")" "true" "default reinstall must re-enable $cli"
 done
 assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
   "A default install must NOT re-enable the opt-in OpenCode Go monitor"
+assert_eq "$(cfg_get clis.openrouter.enabled)" "false" \
+  "A default install must NOT re-enable the opt-in OpenRouter monitor"
 
 # --- claude_code_monitor remains selectable explicitly ----------------------
 run_installer --select claude_code_monitor >"$TMP_DIR/install-cc.out" 2>&1 || {

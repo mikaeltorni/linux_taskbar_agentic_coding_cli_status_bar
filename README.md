@@ -1,8 +1,9 @@
 # Linux Taskbar Agentic Coding CLI Status Bar
 
 GNOME taskbar indicator that displays the current rate-limit / usage status of
-the major agentic coding CLIs — **Codex**, **Claude Code**, **Grok CLI**,
-**OpenRouter**, and **OpenCode Go** (opt-in, off by default) — polled in the
+the major agentic coding CLIs — **Codex**, **Claude Code**, and **Grok CLI**,
+plus **OpenRouter** and **OpenCode Go** (both opt-in, off by default, and their
+segments stay hidden until enabled) — polled in the
 background **without consuming plan limits**. Cline is
 deliberately not monitored: it has no `/usage`-style rate-limit surface yet.
 
@@ -134,7 +135,7 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 | `claude_code_monitor` | on | Claude Code monitoring; same options |
 | `grok_monitor` | on | Grok CLI monitoring; same options |
 | `opencode_go_monitor` | **off (opt-in)** | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
-| `openrouter_monitor` | on | OpenRouter free-model daily usage (OR segment); management API key via installer |
+| `openrouter_monitor` | **off (opt-in)** | OpenRouter free-model daily usage; enabling it adds the OR segment and walks through the management API key + monitored model slug. While off, no OR segment is shown and no analytics query is made |
 | `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |
 | `tmux_console` | on | The background tmux debug console / refresher |
 | `startup_service` | on | Poller starts at login (`systemd --user`) and keeps running |
