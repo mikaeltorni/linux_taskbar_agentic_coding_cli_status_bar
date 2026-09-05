@@ -131,6 +131,7 @@ fn agentic_results() -> Option<Value> {
         "segmentMarkup",
         "codexBarMarkup",
         "codexInstanceTitle",
+        "cliEnabledFromConfig",
     ];
     let mut snippets: Vec<String> = constants
         .iter()
@@ -370,6 +371,40 @@ fn model_status_extension_contract() {
     let components = fs::read_to_string(root.join("installer").join("components.sh")).unwrap();
     assert!(components.contains("model_status_bar|"));
     assert!(components.contains("|off|acs_install_model_status_bar"));
+}
+
+#[test]
+fn opt_in_clis_stay_off_the_bar_until_enabled() {
+    let Some(js) = agentic_results() else {
+        return;
+    };
+    // Cold start (no config file yet) must mirror the poller defaults: the
+    // opt-in OpenRouter and OpenCode Go segments are not drawn at all.
+    assert_eq!(js["cold_start_defaults"]["openrouter"], false);
+    assert_eq!(js["cold_start_defaults"]["opencode_go"], false);
+    assert_eq!(js["cold_start_defaults"]["codex"], true);
+    assert_eq!(js["cold_start_defaults"]["claude_code"], true);
+    assert_eq!(js["cold_start_defaults"]["grok"], true);
+    // An explicit opt-in brings the segment back, and an opt-out removes a
+    // default-on one.
+    assert_eq!(js["cold_start_opt_in"]["openrouter"], true);
+    assert_eq!(js["cold_start_opt_in"]["opencode_go"], true);
+    assert_eq!(js["cold_start_opt_out"]["grok"], false);
+    // A non-boolean value is not an opt-in.
+    assert_eq!(js["cold_start_garbage"]["openrouter"], false);
+
+    let source = fs::read_to_string(
+        repo_root()
+            .join("agentic-cli-status@local")
+            .join("extension.js"),
+    )
+    .unwrap();
+    let code = code_only(&source);
+    // The waiting-for-poller branch consults the config instead of painting a
+    // placeholder for every known CLI.
+    assert!(code.contains("cliEnabledFromConfig(readPollerConfig(), DEFAULT_CLI_ENABLED)"));
+    assert!(code.contains("openrouter: false"));
+    assert!(code.contains("opencode_go: false"));
 }
 
 #[test]
