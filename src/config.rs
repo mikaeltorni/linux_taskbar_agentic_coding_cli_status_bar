@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
+use crate::collectors::codex_reset_forecast::{CONSENSUS_HORIZONS, FORECAST_SITES};
 use crate::logging;
 
 pub const CONFIG_DIR_NAME: &str = "agentic-cli-status";
@@ -36,6 +37,15 @@ pub const MIN_OPENROUTER_DAILY_LIMIT: i64 = 1;
 pub const MAX_OPENROUTER_DAILY_LIMIT: i64 = 100_000;
 pub const OPENROUTER_MODEL_SLUG_DEFAULT: &str = "stealth/ox-alpha";
 
+/// Codex reset-forecast cadence. The configured value is still raised per site
+/// to that site's own politeness floor in the collector's registry.
+pub const CODEX_RESET_FORECAST_FETCH_INTERVAL_DEFAULT: i64 = 30;
+pub const MIN_CODEX_RESET_FORECAST_FETCH_INTERVAL_SECONDS: i64 = 30;
+/// Forecast sources refresh roughly hourly, so a reading stays useful far
+/// longer than a CLI's live rate-limit window.
+pub const CODEX_RESET_FORECAST_STALE_AFTER_SECONDS: i64 = 10_800;
+pub const CODEX_RESET_FORECAST_HORIZON_DEFAULT: &str = "24h";
+
 const VALID_SOURCES: &[&str] = &["auto", "headless", "tmux"];
 
 /// Slash command each CLI's TUI uses to display rate limits/usage.
@@ -45,6 +55,16 @@ pub fn slash_command(cli_id: &str) -> Option<&'static str> {
         "opencode_go" => Some("/ogc-usage"),
         _ => None,
     }
+}
+
+/// Default per-site toggles, derived from the collector's site registry so the
+/// catalog of forecast sources lives in exactly one place.
+fn default_forecast_sites() -> Value {
+    let mut sites = Map::new();
+    for site in FORECAST_SITES {
+        sites.insert(site.id.to_string(), json!({"enabled": true}));
+    }
+    Value::Object(sites)
 }
 
 /// Return the default configuration object.
@@ -89,6 +109,16 @@ pub fn default_config() -> Value {
                 "model_slug": OPENROUTER_MODEL_SLUG_DEFAULT,
                 "daily_limit": OPENROUTER_DAILY_LIMIT_DEFAULT,
             },
+        },
+        // Third-party predictions of the next discretionary Codex weekly-limit
+        // reset, rendered left of the Codex segments. Opt-in until the
+        // installer component turns it on.
+        "codex_reset_forecast": {
+            "enabled": false,
+            "stale_after_seconds": CODEX_RESET_FORECAST_STALE_AFTER_SECONDS,
+            "fetch_min_interval_seconds": CODEX_RESET_FORECAST_FETCH_INTERVAL_DEFAULT,
+            "horizon": CODEX_RESET_FORECAST_HORIZON_DEFAULT,
+            "sites": default_forecast_sites(),
         },
     })
 }
@@ -355,7 +385,90 @@ pub fn load_config(path: Option<&Path>) -> Value {
             openrouter.insert("model_slug".into(), json!(trimmed));
         }
     }
+    validate_codex_reset_forecast(&mut config);
     config
+}
+
+/// Clamp the `codex_reset_forecast` section back into supported ranges.
+///
+/// Kept separate from the per-CLI loop because the forecast is not a CLI: it
+/// has no source/window shape and aggregates third-party sites instead.
+fn validate_codex_reset_forecast(config: &mut Value) {
+    if !config
+        .get("codex_reset_forecast")
+        .map(Value::is_object)
+        .unwrap_or(false)
+    {
+        config["codex_reset_forecast"] = default_config()["codex_reset_forecast"].clone();
+    }
+    let forecast = &mut config["codex_reset_forecast"];
+
+    let enabled = forecast.get("enabled").and_then(Value::as_bool).unwrap_or(
+        default_config()["codex_reset_forecast"]["enabled"]
+            .as_bool()
+            .unwrap_or(false),
+    );
+    forecast["enabled"] = json!(enabled);
+
+    let interval = forecast
+        .get("fetch_min_interval_seconds")
+        .cloned()
+        .unwrap_or(Value::Null);
+    if as_i64(&interval)
+        .map(|v| {
+            !(MIN_CODEX_RESET_FORECAST_FETCH_INTERVAL_SECONDS..=MAX_POLL_INTERVAL_SECONDS)
+                .contains(&v)
+        })
+        .unwrap_or(true)
+    {
+        logging::warn(format!(
+            "codex_reset_forecast fetch_min_interval_seconds {interval:?} out of range [{MIN_CODEX_RESET_FORECAST_FETCH_INTERVAL_SECONDS}, {MAX_POLL_INTERVAL_SECONDS}]; using default {CODEX_RESET_FORECAST_FETCH_INTERVAL_DEFAULT}"
+        ));
+        forecast["fetch_min_interval_seconds"] = json!(CODEX_RESET_FORECAST_FETCH_INTERVAL_DEFAULT);
+    }
+
+    let stale = forecast
+        .get("stale_after_seconds")
+        .cloned()
+        .unwrap_or(Value::Null);
+    if as_i64(&stale)
+        .map(|v| v < MIN_STALE_AFTER_SECONDS)
+        .unwrap_or(true)
+    {
+        forecast["stale_after_seconds"] = json!(CODEX_RESET_FORECAST_STALE_AFTER_SECONDS);
+    }
+
+    let horizon = forecast
+        .get("horizon")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !CONSENSUS_HORIZONS.contains(&horizon) {
+        logging::warn(format!(
+            "codex_reset_forecast horizon {horizon:?} is not one of {CONSENSUS_HORIZONS:?}; using {CODEX_RESET_FORECAST_HORIZON_DEFAULT}"
+        ));
+        forecast["horizon"] = json!(CODEX_RESET_FORECAST_HORIZON_DEFAULT);
+    }
+
+    if !forecast.get("sites").map(Value::is_object).unwrap_or(false) {
+        forecast["sites"] = default_forecast_sites();
+    }
+    // Unknown site ids are dropped so a stale config cannot resurrect a source
+    // that was removed from the registry.
+    let known: Vec<String> = FORECAST_SITES.iter().map(|s| s.id.to_string()).collect();
+    if let Some(sites) = forecast["sites"].as_object_mut() {
+        sites.retain(|id, _| known.contains(id));
+        for id in &known {
+            let entry = sites.entry(id.clone()).or_insert_with(|| json!({}));
+            if !entry.is_object() {
+                *entry = json!({});
+            }
+            let site_enabled = entry
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            entry["enabled"] = json!(site_enabled);
+        }
+    }
 }
 
 /// Atomically write `config` as pretty JSON to the config file.
@@ -429,6 +542,85 @@ mod tests {
             };
             assert_eq!(cfg["clis"][cli]["source"], json!(expected_source));
         }
+    }
+
+    /// Write a config file into the sandbox and load it back.
+    fn load_with(forecast: Value) -> Value {
+        let path = config_path(None);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            serde_json::to_string(&json!({"codex_reset_forecast": forecast})).unwrap(),
+        )
+        .unwrap();
+        load_config(None)["codex_reset_forecast"].clone()
+    }
+
+    #[test]
+    fn codex_reset_forecast_defaults_cover_every_registry_site() {
+        let _sandbox = Sandbox::new();
+        let forecast = load_config(None)["codex_reset_forecast"].clone();
+        assert_eq!(forecast["enabled"], json!(false));
+        assert_eq!(forecast["horizon"], json!("24h"));
+        assert_eq!(forecast["fetch_min_interval_seconds"], json!(30));
+        let sites = forecast["sites"].as_object().unwrap();
+        assert_eq!(sites.len(), FORECAST_SITES.len());
+        for site in FORECAST_SITES {
+            assert_eq!(sites[site.id]["enabled"], json!(true), "{}", site.id);
+        }
+    }
+
+    #[test]
+    fn codex_reset_forecast_clamps_a_too_fast_fetch_interval() {
+        let _sandbox = Sandbox::new();
+        let forecast = load_with(json!({"fetch_min_interval_seconds": 1}));
+        assert_eq!(forecast["fetch_min_interval_seconds"], json!(30));
+    }
+
+    #[test]
+    fn codex_reset_forecast_keeps_a_slower_fetch_interval() {
+        let _sandbox = Sandbox::new();
+        let forecast = load_with(json!({"fetch_min_interval_seconds": 600}));
+        assert_eq!(forecast["fetch_min_interval_seconds"], json!(600));
+    }
+
+    #[test]
+    fn codex_reset_forecast_rejects_an_unknown_horizon() {
+        let _sandbox = Sandbox::new();
+        assert_eq!(
+            load_with(json!({"horizon": "72h"}))["horizon"],
+            json!("24h")
+        );
+        assert_eq!(
+            load_with(json!({"horizon": "48h"}))["horizon"],
+            json!("48h")
+        );
+    }
+
+    #[test]
+    fn codex_reset_forecast_drops_unknown_sites_and_fills_missing_ones() {
+        let _sandbox = Sandbox::new();
+        let forecast = load_with(json!({
+            "sites": {"polymarket": {"enabled": false}, "some_removed_site": {"enabled": true}}
+        }));
+        let sites = forecast["sites"].as_object().unwrap();
+        assert_eq!(sites.len(), FORECAST_SITES.len());
+        assert!(!sites.contains_key("some_removed_site"));
+        // An explicit opt-out survives; unlisted sites default to on.
+        assert_eq!(sites["polymarket"]["enabled"], json!(false));
+        assert_eq!(sites["codex_reset"]["enabled"], json!(true));
+    }
+
+    #[test]
+    fn codex_reset_forecast_survives_a_malformed_section() {
+        let _sandbox = Sandbox::new();
+        let forecast = load_with(json!("not an object"));
+        assert_eq!(forecast["enabled"], json!(false));
+        assert_eq!(forecast["horizon"], json!("24h"));
+        assert_eq!(
+            forecast["sites"].as_object().unwrap().len(),
+            FORECAST_SITES.len()
+        );
     }
 
     #[test]
