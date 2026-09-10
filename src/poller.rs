@@ -11,10 +11,13 @@ use serde_json::{json, Value};
 
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
-    collect_claude, collect_codex_accounts, collect_grok, collect_opencode_go, collect_openrouter,
-    load_codex_account_registry, parse_pane, selected_codex_home,
+    collect_claude, collect_codex_accounts, collect_codex_reset_forecast, collect_grok,
+    collect_opencode_go, collect_openrouter, load_codex_account_registry, parse_pane,
+    selected_codex_home,
 };
-use crate::config::{load_config, slash_command, state_dir, CLI_IDS};
+use crate::config::{
+    load_config, slash_command, state_dir, CLI_IDS, CODEX_RESET_FORECAST_STALE_AFTER_SECONDS,
+};
 use crate::http::HttpOpener;
 use crate::logging;
 use crate::snapshot::carry_last_reading;
@@ -28,6 +31,19 @@ pub const STATUS_FILE_NAME: &str = "status.json";
 pub const PANE_DIR_NAME: &str = "panes";
 pub const TMUX_REFRESH_MIN_INTERVAL_SECONDS: f64 = 60.0;
 pub const REMOTE_HEADLESS_CLI_IDS: &[&str] = &["claude_code", "opencode_go", "openrouter"];
+
+/// Job id used to run the Codex reset forecast through the same background
+/// worker as the remote CLI collectors. It is not a CLI, so it is kept out of
+/// `REMOTE_HEADLESS_CLI_IDS` and only widens the worker pool.
+pub const CODEX_RESET_FORECAST_JOB_ID: &str = "codex_reset_forecast";
+
+/// Every id the background worker pool must be able to service concurrently.
+pub const REMOTE_HEADLESS_JOB_IDS: &[&str] = &[
+    "claude_code",
+    "opencode_go",
+    "openrouter",
+    CODEX_RESET_FORECAST_JOB_ID,
+];
 
 /// Optional test/production hooks for collectors and tmux.
 #[derive(Clone, Default)]
@@ -388,8 +404,25 @@ fn collect_headless(
             cli_config.get("daily_limit").and_then(Value::as_i64),
             hooks.openrouter_fetch.clone(),
         ),
+        CODEX_RESET_FORECAST_JOB_ID => collect_codex_reset_forecast(
+            last,
+            Some(now),
+            config_seconds(cli_config, "fetch_min_interval_seconds"),
+            cli_config.get("horizon").and_then(Value::as_str),
+            cli_config.get("sites"),
+            hooks.http.as_deref(),
+        ),
         _ => json!({"windows": []}),
     }
+}
+
+/// Read a seconds-valued config key that may be stored as an int or a float.
+fn config_seconds(config: &Value, key: &str) -> Option<f64> {
+    config.get(key).and_then(|value| {
+        value
+            .as_f64()
+            .or_else(|| value.as_i64().map(|seconds| seconds as f64))
+    })
 }
 
 fn do_refresh_and_capture(
@@ -1316,8 +1349,88 @@ pub fn poll_once(
         }
         status["clis"][cli_id] = snapshot;
     }
+    status["codex_reset_forecast"] =
+        poll_codex_reset_forecast(&config, previous, home, now, headless_refresh_worker, hooks);
     write_status(&status, home);
     status
+}
+
+/// Refresh the Codex reset forecast for this tick.
+///
+/// The fetch itself runs on the shared background worker, so a slow or hanging
+/// third-party site can never stall the poll loop; the tick publishes whatever
+/// reading is already in hand. That is what makes the bar percentage move at
+/// the bar's tick rate while the sites are only contacted on their own cadence.
+fn poll_codex_reset_forecast(
+    config: &Value,
+    previous: Option<&Value>,
+    home: &Path,
+    now: f64,
+    headless_refresh_worker: Option<&HeadlessRefreshWorker>,
+    hooks: &PollHooks,
+) -> Value {
+    let forecast_config = &config["codex_reset_forecast"];
+    if !forecast_config
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return json!({"enabled": false});
+    }
+    let last = previous.and_then(|p| p.get("codex_reset_forecast"));
+    let last = last.filter(|value| value.get("sites").is_some());
+
+    let mut snapshot = match headless_refresh_worker {
+        Some(worker) => {
+            let carried = worker
+                .take_result(CODEX_RESET_FORECAST_JOB_ID)
+                .or_else(|| last.cloned());
+            worker.request(
+                CODEX_RESET_FORECAST_JOB_ID,
+                home,
+                carried.clone(),
+                forecast_config.clone(),
+                now,
+                hooks,
+            );
+            // Before the very first background fetch lands there is nothing to
+            // publish yet; report that rather than inventing a number.
+            carried.unwrap_or_else(|| json!({"sites": [], "consensus_percent": Value::Null}))
+        }
+        // Single-shot callers (`status --once`, tests) collect inline.
+        None => collect_headless(
+            CODEX_RESET_FORECAST_JOB_ID,
+            home,
+            last,
+            forecast_config,
+            now,
+            hooks,
+        ),
+    };
+
+    snapshot["enabled"] = json!(true);
+    let stale_after = config_seconds(forecast_config, "stale_after_seconds")
+        .unwrap_or(CODEX_RESET_FORECAST_STALE_AFTER_SECONDS as f64);
+    let observed_at = snapshot
+        .get("observed_at")
+        .and_then(Value::as_f64)
+        .or_else(|| snapshot.get("checked_at").and_then(Value::as_f64));
+    let has_consensus = snapshot
+        .get("consensus_percent")
+        .map(|value| value.is_number())
+        .unwrap_or(false);
+    snapshot["stale"] =
+        json!(!has_consensus || observed_at.map(|at| now - at > stale_after).unwrap_or(true));
+
+    if let Some(error) = snapshot.get("error").and_then(Value::as_str) {
+        let previous_error = last
+            .and_then(|value| value.get("error"))
+            .and_then(Value::as_str);
+        if previous_error != Some(error) {
+            logging::warn(format!("codex reset forecast: {error}"));
+        }
+    }
+    snapshot
 }
 
 type HeadlessJob = (String, PathBuf, Option<Value>, Value, f64, PollHooks);
@@ -1356,7 +1469,7 @@ impl HeadlessRefreshWorker {
         *started = true;
         drop(started);
         let mut threads = self.threads.lock().unwrap();
-        for index in 0..REMOTE_HEADLESS_CLI_IDS.len() {
+        for index in 0..REMOTE_HEADLESS_JOB_IDS.len() {
             let queue = self.queue.clone();
             let pending = self.pending.clone();
             let results = self.results.clone();
@@ -1429,7 +1542,7 @@ impl HeadlessRefreshWorker {
         }
         *started = false;
         drop(started);
-        for _ in 0..REMOTE_HEADLESS_CLI_IDS.len() {
+        for _ in 0..REMOTE_HEADLESS_JOB_IDS.len() {
             self.queue.lock().unwrap().push_back(None);
         }
         let mut threads = self.threads.lock().unwrap();
