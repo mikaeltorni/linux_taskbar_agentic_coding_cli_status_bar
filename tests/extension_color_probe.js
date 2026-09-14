@@ -1,4 +1,4 @@
-const DEFAULTS = {codex: true, claude_code: true, grok: true, opencode_go: false, openrouter: false};
+const DEFAULTS = {codex: true, claude_code: false, grok: true, opencode_go: false, openrouter: false};
 const GLib = imports.gi.GLib;
 const NOW = 1783158600;
 const results = {
@@ -137,7 +137,7 @@ const results = {
   instance_tag_only: instanceTagColor(1, 1),
   cold_start_defaults: cliEnabledFromConfig(null, DEFAULTS),
   cold_start_opt_in: cliEnabledFromConfig(
-    {clis: {openrouter: {enabled: true}, opencode_go: {enabled: true}}}, DEFAULTS),
+    {clis: {claude_code: {enabled: true}, openrouter: {enabled: true}, opencode_go: {enabled: true}}}, DEFAULTS),
   cold_start_opt_out: cliEnabledFromConfig(
     {clis: {grok: {enabled: false}}}, DEFAULTS),
   cold_start_garbage: cliEnabledFromConfig({clis: {openrouter: {enabled: 'yes'}}}, DEFAULTS),

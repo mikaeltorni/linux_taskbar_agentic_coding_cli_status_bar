@@ -132,7 +132,7 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 | Component | Default | What it controls |
 |---|---|---|
 | `codex_monitor` | on | Codex monitoring; reconfigure source mode + staleness |
-| `claude_code_monitor` | on | Claude Code monitoring; same options |
+| `claude_code_monitor` | **off (opt-in)** | Claude Code monitoring; same options |
 | `grok_monitor` | on | Grok CLI monitoring; same options |
 | `opencode_go_monitor` | **off (opt-in)** | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
 | `openrouter_monitor` | **off (opt-in)** | OpenRouter free-model daily usage; enabling it adds the OR segment and walks through the management API key + monitored model slug. While off, no OR segment is shown and no analytics query is made |
@@ -147,6 +147,14 @@ action or `bash install.sh --configure-component <id>`):
 - **source** — `auto` (headless first, tmux pane fallback when stale),
   `headless` (never touch tmux), or `tmux` (pane capture only).
 - **stale_after_seconds** — age after which headless data counts as stale.
+
+**Claude Code is opt-in.** A default `bash install.sh` run leaves its `CC`
+segment hidden. Enable it on demand with:
+
+```bash
+bash install.sh --select claude_code_monitor     # enable + configure it
+bash install.sh --uninstall claude_code_monitor  # turn it back off
+```
 
 **OpenCode Go is opt-in.** A default `bash install.sh` run leaves it disabled:
 no `opencode.ai` scraping, no plugin registration, and no OpenCode segment in

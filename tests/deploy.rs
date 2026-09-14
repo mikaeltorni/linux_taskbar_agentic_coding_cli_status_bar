@@ -221,6 +221,38 @@ fn model_status_component_is_optional() {
 }
 
 #[test]
+fn claude_code_monitor_is_opt_in_without_removing_install_hooks() {
+    let components = read("installer/components.sh");
+    let re = Regex::new(r#""(claude_code_monitor\|[^"]+)""#).unwrap();
+    let entry = re
+        .captures(&components)
+        .unwrap_or_else(|| panic!("claude_code_monitor entry missing"))
+        .get(1)
+        .unwrap()
+        .as_str();
+    let fields: Vec<_> = entry.split('|').collect();
+    assert_eq!(fields[0], "claude_code_monitor");
+    assert_eq!(fields[2], "off");
+
+    let setup = read("lib/status_setup.sh");
+    for function in [
+        "acs_install_claude_code",
+        "acs_detect_claude_code",
+        "acs_uninstall_claude_code",
+        "acs_configure_claude_code",
+        "acs_claude_code_status",
+    ] {
+        assert!(
+            setup.contains(&format!("{function}()")),
+            "missing {function}"
+        );
+    }
+
+    let config: Value = serde_json::from_str(&read("installation_configs/default.json")).unwrap();
+    assert_eq!(config["components"]["claude_code_monitor"]["on"], 0);
+}
+
+#[test]
 fn model_status_extension_contract() {
     let js = read("acc-model-status@local/extension.js");
     let code = code_only(&js);

@@ -44,11 +44,12 @@ const CLI_TAGS = [
 ];
 
 // Poller-side default enablement, mirroring `default_config()` in src/config.rs.
-// OpenCode Go and OpenRouter are opt-in: their segments must stay off the bar
-// until the user enables them, including before the first status.json write.
+// Claude Code, OpenCode Go, and OpenRouter are opt-in: their segments must
+// stay off the bar until the user enables them, including before the first
+// status.json write.
 const DEFAULT_CLI_ENABLED = {
   codex: true,
-  claude_code: true,
+  claude_code: false,
   grok: true,
   opencode_go: false,
   openrouter: false,
