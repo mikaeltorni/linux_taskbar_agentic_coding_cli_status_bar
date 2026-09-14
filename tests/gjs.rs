@@ -379,16 +379,18 @@ fn opt_in_clis_stay_off_the_bar_until_enabled() {
         return;
     };
     // Cold start (no config file yet) must mirror the poller defaults: the
-    // opt-in OpenRouter and OpenCode Go segments are not drawn at all.
+    // opt-in Claude Code, OpenRouter, and OpenCode Go segments are not drawn at
+    // all.
     assert_eq!(js["cold_start_defaults"]["openrouter"], false);
     assert_eq!(js["cold_start_defaults"]["opencode_go"], false);
     assert_eq!(js["cold_start_defaults"]["codex"], true);
-    assert_eq!(js["cold_start_defaults"]["claude_code"], true);
+    assert_eq!(js["cold_start_defaults"]["claude_code"], false);
     assert_eq!(js["cold_start_defaults"]["grok"], true);
     // An explicit opt-in brings the segment back, and an opt-out removes a
     // default-on one.
     assert_eq!(js["cold_start_opt_in"]["openrouter"], true);
     assert_eq!(js["cold_start_opt_in"]["opencode_go"], true);
+    assert_eq!(js["cold_start_opt_in"]["claude_code"], true);
     assert_eq!(js["cold_start_opt_out"]["grok"], false);
     // A non-boolean value is not an opt-in.
     assert_eq!(js["cold_start_garbage"]["openrouter"], false);

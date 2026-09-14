@@ -1781,7 +1781,7 @@ mod tests {
             status["clis"]["grok"]["windows"][0]["used_percent"],
             json!(88.0)
         );
-        assert_eq!(status["clis"]["claude_code"]["enabled"], json!(true));
+        assert_eq!(status["clis"]["claude_code"]["enabled"], json!(false));
         let on_disk: Value =
             serde_json::from_str(&fs::read_to_string(status_path(Some(&sandbox.home))).unwrap())
                 .unwrap();

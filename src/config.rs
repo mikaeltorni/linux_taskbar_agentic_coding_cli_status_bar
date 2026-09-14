@@ -81,8 +81,10 @@ pub fn default_config() -> Value {
                 "source": "auto",
                 "stale_after_seconds": 1800,
             },
+            // Opt-in: Claude Code usage monitoring is enabled by the installer
+            // component only when the user explicitly selects it.
             "claude_code": {
-                "enabled": true,
+                "enabled": false,
                 "source": "auto",
                 "stale_after_seconds": 1800,
                 "endpoint_min_interval_seconds": CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS,
@@ -531,7 +533,7 @@ mod tests {
         let _sandbox = Sandbox::new();
         let cfg = load_config(None);
         assert_eq!(cfg["poll_interval_seconds"], json!(5));
-        let default_on = ["codex", "claude_code", "grok"];
+        let default_on = ["codex", "grok"];
         for cli in CLI_IDS {
             let enabled = cfg["clis"][cli]["enabled"].as_bool().unwrap();
             assert_eq!(enabled, default_on.contains(cli), "{cli}");

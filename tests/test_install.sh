@@ -178,11 +178,13 @@ assert_file_exists "$CONFIG_FILE" "Should seed the default config"
 for cli in codex claude_code grok opencode_go openrouter; do
   assert_file_contains "$CONFIG_FILE" "\"$cli\"" "Config should have a $cli entry"
 done
-# A default install must enable every default-on CLI, including Claude Code;
-# the extension hides any CLI whose status entry has enabled=false.
-for cli in codex claude_code grok; do
+# A default install must enable every default-on CLI; Claude Code is opt-in via
+# --select claude_code_monitor and must remain hidden until selected.
+for cli in codex grok; do
   assert_eq "$(cfg_get "clis.$cli.enabled")" "true" "default install must enable $cli"
 done
+assert_eq "$(cfg_get clis.claude_code.enabled)" "false" \
+  "default install must keep claude_code disabled"
 assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
   "OpenCode Go is opt-in and must stay off after a default install"
 assert_eq "$(cfg_get clis.openrouter.enabled)" "false" \
@@ -242,7 +244,7 @@ run_installer --uninstall grok_monitor >"$TMP_DIR/uninstall.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --uninstall grok_monitor exited non-zero"; }
 assert_eq "$(cfg_get clis.grok.enabled)" "false" "grok should be disabled"
 assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
-assert_eq "$(cfg_get clis.claude_code.enabled)" "true" "claude_code should stay enabled"
+assert_eq "$(cfg_get clis.claude_code.enabled)" "false" "claude_code should stay disabled"
 
 # --- OpenCode Go component registers the plugin and can be disabled alone ---
 run_installer --select opencode_go_monitor >"$TMP_DIR/install-og.out" 2>&1 || {
@@ -264,7 +266,7 @@ run_installer --uninstall opencode_go_monitor >"$TMP_DIR/uninstall-og.out" 2>&1 
 assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" "opencode_go should be disabled"
 assert_eq "$(cfg_get clis.grok.enabled)" "false" "grok should stay disabled"
 assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
-assert_eq "$(cfg_get clis.claude_code.enabled)" "true" "claude_code should stay enabled"
+assert_eq "$(cfg_get clis.claude_code.enabled)" "false" "claude_code should stay disabled"
 
 # --- OpenRouter component enables openrouter and can be disabled alone ------
 run_installer --select openrouter_monitor >"$TMP_DIR/install-or.out" 2>&1 || {
@@ -288,11 +290,14 @@ assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
 # --- A default install re-enables previously-uninstalled default-on CLIs ---
 # grok (and the other default-on CLIs) were just uninstalled above; a plain
 # default install must bring them back, or they would stay hidden from the
-# taskbar (the extension drops any cli with enabled=false).
+# taskbar (the extension drops any cli with enabled=false). claude_code stays
+# off unless explicitly selected.
 run_installer >"$TMP_DIR/reinstall.out" 2>&1 || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall exited non-zero"; }
-for cli in codex claude_code grok; do
+for cli in codex grok; do
   assert_eq "$(cfg_get "clis.$cli.enabled")" "true" "default reinstall must re-enable $cli"
 done
+assert_eq "$(cfg_get clis.claude_code.enabled)" "false" \
+  "default reinstall must keep claude_code disabled"
 assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
   "A default install must NOT re-enable the opt-in OpenCode Go monitor"
 assert_eq "$(cfg_get clis.openrouter.enabled)" "false" \
@@ -325,6 +330,8 @@ PATH="$BIN_DIR:$PATH" SUDO_USER=mk DISPLAY=:99 HOME="$LIST_HOME" \
 for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor openrouter_monitor polling_rate tmux_console startup_service; do
   assert_file_contains "$TMP_DIR/list.out" "$ID" "--list-components should list $ID"
 done
+assert_eq "$(awk -F '\t' '$1 == "claude_code_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \
+  "--list-components should mark claude_code_monitor opt-in"
 assert_not_contains "$TMP_DIR/list.out" "cline" "--list-components must not offer cline"
 if [ -e "$LIST_HOME/.local/share/agentic-cli-status" ] || [ -e "$LIST_HOME/.local/bin/agentic-cli-status" ]; then
   FAIL=$((FAIL + 1)); echo "FAIL: --list-components should not deploy the poller"
