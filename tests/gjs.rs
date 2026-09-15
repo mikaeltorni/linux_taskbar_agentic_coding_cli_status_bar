@@ -130,6 +130,8 @@ fn agentic_results() -> Option<Value> {
         "creditDetailText",
         "segmentMarkup",
         "codexBarMarkup",
+        "codexResetForecastMarkup",
+        "codexBarWithForecastMarkup",
         "cursorBarMarkup",
         "codexInstanceTitle",
         "cliEnabledFromConfig",
@@ -226,6 +228,15 @@ fn gradient_and_segments() {
     assert!(first.contains("CX1"));
     assert!(first.contains("CX2"));
     assert!(first.contains(" | "));
+    let forecast = js["codex_with_forecast"].as_str().unwrap();
+    assert!(forecast.contains(">64%</span>"), "{forecast}");
+    assert!(forecast.find("64%").unwrap() < forecast.find("CX1").unwrap());
+    assert!(forecast.contains("> | </span>"), "{forecast}");
+    let stale_forecast = js["codex_with_stale_forecast"].as_str().unwrap();
+    assert!(stale_forecast.contains("64%"), "{stale_forecast}");
+    assert!(stale_forecast.contains(">?</span>"), "{stale_forecast}");
+    assert_eq!(js["codex_without_forecast"], js["codex_without_consensus"]);
+    assert!(!js["codex_without_forecast"].as_str().unwrap().contains('%'));
     assert_eq!(js["instance_tag_first"], "#7ec8ff");
     assert_eq!(js["instance_tag_last"], "#a856e8");
     assert_eq!(js["instance_tag_only"], "#7ec8ff");
