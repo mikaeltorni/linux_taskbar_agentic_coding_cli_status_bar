@@ -166,6 +166,23 @@ const results = {
     'CX',
     {selected: 1, windows: [{label: 'week', used_percent: 43}]},
     NOW),
+  forecast_menu_rows: codexResetForecastMenuRows({
+    enabled: true,
+    horizon: '24h',
+    consensus_percent: 26,
+    sites: [
+      {name: 'codex-reset.com', predictions: [
+        {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
+      {name: 'Polymarket', predictions: [
+        {label: 'by September 16', percent: 35.5}]},
+      {name: 'Unavailable tracker', predictions: [], error: 'HTTP 503'},
+    ],
+  }),
+  disabled_forecast_menu_rows: codexResetForecastMenuRows({
+    enabled: false,
+    horizon: '24h',
+    consensus_percent: 26,
+  }),
   second_codex_title: codexInstanceTitle({id: 2, label: 'trial', selected: true}),
   primary_codex_title: codexInstanceTitle({id: 1, label: ''}),
   instance_tag_first: instanceTagColor(1, 3),

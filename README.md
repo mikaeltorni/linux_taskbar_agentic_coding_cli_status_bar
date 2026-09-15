@@ -145,7 +145,9 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 
 The Codex reset forecast is part of the default Codex monitoring experience:
 a clean install enables its public-site consensus automatically, and disabling
-the Codex monitor also suppresses forecast fetching and display.
+the Codex monitor also suppresses forecast fetching and display. The popup
+starts with the consensus horizon followed by one named row per forecast site,
+including every horizon that site publishes.
 
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):

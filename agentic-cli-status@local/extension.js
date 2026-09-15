@@ -569,6 +569,50 @@ function codexBarWithForecastMarkup(
   return `${resetForecast}<span foreground="${NEUTRAL_COLOR}"> | </span>${codex}`;
 }
 
+/** Format a forecast probability for the details menu. */
+function formatForecastPercent(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    return '';
+  const rounded = Math.round(Math.min(100, Math.max(0, value)) * 10) / 10;
+  return `${rounded}%`;
+}
+
+/**
+ * Build the reset-forecast rows shown above every CLI details section.
+ *
+ * Each source gets one named row containing every horizon it publishes. A
+ * failed source remains visible as unavailable so the menu does not silently
+ * make a multi-source consensus look healthier than it is.
+ *
+ * @param {?object} forecast - The `codex_reset_forecast` status entry.
+ * @returns {string[]} Heading followed by one row per source.
+ */
+function codexResetForecastMenuRows(forecast) {
+  if (forecast?.enabled !== true)
+    return [];
+  const horizon = String(forecast.horizon ?? '24h');
+  const consensus = formatForecastPercent(forecast.consensus_percent);
+  const heading = consensus
+    ? `Codex reset forecast — ${horizon} consensus: ${consensus}`
+    : `Codex reset forecast — ${horizon} consensus unavailable`;
+  const rows = [heading];
+  for (const site of forecast.sites ?? []) {
+    const name = String(site?.name ?? site?.id ?? 'Unknown site').trim() ||
+      'Unknown site';
+    const predictions = (site?.predictions ?? []).flatMap(prediction => {
+      const percent = formatForecastPercent(prediction?.percent);
+      if (!percent)
+        return [];
+      const label = String(prediction?.label ?? horizon).trim() || horizon;
+      return [`${label}: ${percent}`];
+    });
+    rows.push(predictions.length
+      ? `${name} — ${predictions.join(' · ')}`
+      : `${name} — unavailable`);
+  }
+  return rows;
+}
+
 /**
  * Details-menu heading for one Codex account instance.
  *
@@ -649,6 +693,9 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         'Waiting for the agentic-cli-status poller…', { reactive: false }));
       return;
     }
+    const codexSnapshot = status.clis?.codex;
+    if (codexSnapshot && codexSnapshot.enabled !== false)
+      this._appendForecastSection(status.codex_reset_forecast);
     const names = {
       codex: 'Codex',
       claude_code: 'Claude Code',
@@ -686,6 +733,21 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       if (!this.menu.isEmpty())
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
       this._appendMenuSection(names[cliId], snapshot);
+    }
+  }
+
+  /**
+   * Append the reset consensus and every named source at the top of the menu.
+   *
+   * @param {?object} forecast - The `codex_reset_forecast` status entry.
+   * @returns {void}
+   */
+  _appendForecastSection(forecast) {
+    const rows = codexResetForecastMenuRows(forecast);
+    for (let index = 0; index < rows.length; index++) {
+      const prefix = index === 0 ? '' : '   ';
+      this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
+        `${prefix}${rows[index]}`, { reactive: false }));
     }
   }
 

@@ -132,6 +132,8 @@ fn agentic_results() -> Option<Value> {
         "codexBarMarkup",
         "codexResetForecastMarkup",
         "codexBarWithForecastMarkup",
+        "formatForecastPercent",
+        "codexResetForecastMenuRows",
         "cursorBarMarkup",
         "codexInstanceTitle",
         "cliEnabledFromConfig",
@@ -237,6 +239,16 @@ fn gradient_and_segments() {
     assert!(stale_forecast.contains(">?</span>"), "{stale_forecast}");
     assert_eq!(js["codex_without_forecast"], js["codex_without_consensus"]);
     assert!(!js["codex_without_forecast"].as_str().unwrap().contains('%'));
+    assert_eq!(
+        js["forecast_menu_rows"],
+        serde_json::json!([
+            "Codex reset forecast — 24h consensus: 26%",
+            "codex-reset.com — 24h: 24% · 48h: 42%",
+            "Polymarket — by September 16: 35.5%",
+            "Unavailable tracker — unavailable",
+        ])
+    );
+    assert_eq!(js["disabled_forecast_menu_rows"], serde_json::json!([]));
     assert_eq!(js["instance_tag_first"], "#7ec8ff");
     assert_eq!(js["instance_tag_last"], "#a856e8");
     assert_eq!(js["instance_tag_only"], "#7ec8ff");
@@ -260,6 +272,13 @@ fn gradient_and_segments() {
             .join("extension.js"),
     )
     .unwrap();
+    let render_start = source.find("    render(status) {").unwrap();
+    let render_source = &source[render_start..];
+    let forecast_menu_index = render_source
+        .find("this._appendForecastSection(status.codex_reset_forecast)")
+        .unwrap();
+    let cli_menu_index = render_source.find("const names = {").unwrap();
+    assert!(forecast_menu_index < cli_menu_index);
     let og_index = source.find("['opencode_go', 'OG']").unwrap();
     let or_index = source.find("['openrouter', 'OR']").unwrap();
     let crs_index = source.find("['cursor', 'CRS']").unwrap();
