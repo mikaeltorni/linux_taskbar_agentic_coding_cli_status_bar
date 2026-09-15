@@ -1387,10 +1387,15 @@ fn poll_codex_reset_forecast(
     hooks: &PollHooks,
 ) -> Value {
     let forecast_config = &config["codex_reset_forecast"];
-    if !forecast_config
+    let codex_enabled = config["clis"]["codex"]
         .get("enabled")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .unwrap_or(false);
+    if !codex_enabled
+        || !forecast_config
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     {
         return json!({"enabled": false});
     }
@@ -1891,6 +1896,30 @@ mod tests {
             &PollHooks::default(),
         );
         assert_eq!(status["clis"]["codex"], json!({"enabled": false}));
+    }
+
+    #[test]
+    fn codex_reset_forecast_is_skipped_when_codex_is_disabled() {
+        let sandbox = Sandbox::new();
+        let mut cfg = load_config(None);
+        cfg["tmux"]["enabled"] = json!(false);
+        cfg["clis"]["codex"]["enabled"] = json!(false);
+        cfg["codex_reset_forecast"]["enabled"] = json!(true);
+        save_config(&cfg, None).unwrap();
+
+        struct UnexpectedHttp;
+        impl crate::http::HttpOpener for UnexpectedHttp {
+            fn open(&self, request: &crate::http::HttpRequest) -> Result<HttpResponse, HttpError> {
+                panic!("forecast HTTP must be skipped: {}", request.url);
+            }
+        }
+        let hooks = PollHooks {
+            http: Some(Arc::new(UnexpectedHttp)),
+            ..PollHooks::default()
+        };
+        let status = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &hooks);
+
+        assert_eq!(status["codex_reset_forecast"], json!({"enabled": false}));
     }
 
     #[test]

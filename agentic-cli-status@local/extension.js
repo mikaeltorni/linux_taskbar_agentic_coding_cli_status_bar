@@ -526,6 +526,50 @@ function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000
 }
 
 /**
+ * Format the consensus probability of a discretionary Codex limit reset.
+ *
+ * @param {?object} forecast - The `codex_reset_forecast` status entry.
+ * @returns {string} Pango markup for the percentage, or an empty string when
+ *   forecasting is disabled or no consensus is available.
+ */
+function codexResetForecastMarkup(forecast) {
+  const probability = forecast?.consensus_percent;
+  if (forecast?.enabled !== true || typeof probability !== 'number' ||
+      !Number.isFinite(probability))
+    return '';
+  const percent = Math.round(Math.min(100, Math.max(0, probability)));
+  const staleMark = forecast.stale
+    ? `<span foreground="${NEUTRAL_COLOR}">?</span>`
+    : '';
+  return `<span foreground="${percentColor(percent)}">${percent}%</span>${staleMark}`;
+}
+
+/**
+ * Put the reset forecast immediately left of all enabled Codex instances.
+ *
+ * The caller only invokes this helper for an enabled Codex snapshot, so the
+ * forecast can never occupy the bar by itself when Codex monitoring is off.
+ *
+ * @param {?object} forecast - The `codex_reset_forecast` status entry.
+ * @param {string} tag - Compact Codex tag.
+ * @param {object} snapshot - Codex CLI status entry.
+ * @param {number} [nowEpoch] - Current epoch seconds; injectable for tests.
+ * @returns {string} Combined forecast and Codex Pango markup.
+ */
+function codexBarWithForecastMarkup(
+  forecast,
+  tag,
+  snapshot,
+  nowEpoch = GLib.get_real_time() / 1000000,
+) {
+  const codex = codexBarMarkup(tag, snapshot, nowEpoch);
+  const resetForecast = codexResetForecastMarkup(forecast);
+  if (!resetForecast)
+    return codex;
+  return `${resetForecast}<span foreground="${NEUTRAL_COLOR}"> | </span>${codex}`;
+}
+
+/**
  * Details-menu heading for one Codex account instance.
  *
  * @param {object} instance - One entry from snapshot.instances.
@@ -622,7 +666,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       }
       label.visible = true;
       const markup = cliId === 'codex'
-        ? codexBarMarkup(tag, snapshot)
+        ? codexBarWithForecastMarkup(status.codex_reset_forecast, tag, snapshot)
         : cliId === 'cursor'
           ? cursorBarMarkup(tag, snapshot)
           : segmentMarkup(tag, snapshot);

@@ -146,6 +146,26 @@ const results = {
         {label: 'month', used_percent: 12, resets_at: NOW + 2588400}]},
     ]
   }, NOW),
+  codex_with_forecast: codexBarWithForecastMarkup(
+    {enabled: true, consensus_percent: 64.4},
+    'CX',
+    {selected: 1, windows: [{label: 'week', used_percent: 43}]},
+    NOW),
+  codex_with_stale_forecast: codexBarWithForecastMarkup(
+    {enabled: true, consensus_percent: 64.4, stale: true},
+    'CX',
+    {selected: 1, windows: [{label: 'week', used_percent: 43}]},
+    NOW),
+  codex_without_forecast: codexBarWithForecastMarkup(
+    {enabled: false, consensus_percent: 64.4},
+    'CX',
+    {selected: 1, windows: [{label: 'week', used_percent: 43}]},
+    NOW),
+  codex_without_consensus: codexBarWithForecastMarkup(
+    {enabled: true, consensus_percent: null},
+    'CX',
+    {selected: 1, windows: [{label: 'week', used_percent: 43}]},
+    NOW),
   second_codex_title: codexInstanceTitle({id: 2, label: 'trial', selected: true}),
   primary_codex_title: codexInstanceTitle({id: 1, label: ''}),
   instance_tag_first: instanceTagColor(1, 3),
