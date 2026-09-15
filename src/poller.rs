@@ -1760,8 +1760,8 @@ mod tests {
     use crate::http::{HttpError, HttpResponse};
     use crate::test_support::{
         codex_token_count_event, grok_billing_record, write_codex_rollout,
-        write_cursor_credentials, write_grok_log, Sandbox, CURSOR_SPENDING_HTML_FIXTURE,
-        CURSOR_SPENDING_RESET_EPOCH, NOW,
+        write_cursor_credentials, write_grok_log, Sandbox, CURSOR_SAND_USAGE_FIXTURE,
+        CURSOR_SPENDING_RESET_EPOCH, CURSOR_USAGE_SUMMARY_FIXTURE, NOW,
     };
 
     fn configure(tmux_enabled: bool) {
@@ -1819,23 +1819,25 @@ mod tests {
         let mut cfg = load_config(None);
         cfg["clis"]["cursor"]["enabled"] = json!(true);
         save_config(&cfg, None).unwrap();
-        struct SpendingOpener {
-            html: String,
-        }
+        struct SpendingOpener;
         impl crate::http::HttpOpener for SpendingOpener {
             fn open(&self, request: &crate::http::HttpRequest) -> Result<HttpResponse, HttpError> {
-                assert!(request.url.contains("cursor.com/dashboard/spending"));
+                let body = if request.url.contains("/api/usage-summary") {
+                    CURSOR_USAGE_SUMMARY_FIXTURE.as_bytes().to_vec()
+                } else if request.url.contains("/api/dashboard/get-sand-usage-status") {
+                    CURSOR_SAND_USAGE_FIXTURE.as_bytes().to_vec()
+                } else {
+                    panic!("unexpected cursor URL {}", request.url);
+                };
                 Ok(HttpResponse {
                     status: 200,
-                    body: self.html.as_bytes().to_vec(),
+                    body,
                     headers: std::collections::HashMap::new(),
                 })
             }
         }
         let hooks = PollHooks {
-            http: Some(Arc::new(SpendingOpener {
-                html: CURSOR_SPENDING_HTML_FIXTURE.into(),
-            })),
+            http: Some(Arc::new(SpendingOpener)),
             ..PollHooks::default()
         };
         let status = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &hooks);
