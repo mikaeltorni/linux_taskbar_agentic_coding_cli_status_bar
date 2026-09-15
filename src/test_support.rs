@@ -25,6 +25,35 @@ pub const OPENCODE_GO_HTML_FIXTURE: &str = concat!(
     "</body></html>"
 );
 
+/// Representative `cursor.com/dashboard/spending` document (included Pro
+/// pools + reset, plus an on-demand section that parsers must ignore).
+pub const CURSOR_SPENDING_RESET_EPOCH: i64 = 1_791_763_200;
+
+pub const CURSOR_SPENDING_HTML_FIXTURE: &str = concat!(
+    "<!DOCTYPE html><html><body>",
+    "<h1>Spending</h1><p>Plan Pro</p>",
+    "<section id=\"included-usage\">",
+    "<h2>Included Usage</h2>",
+    "<article><h3>Cursor Models</h3><p>23.1% used</p>",
+    "<p>$15.38 remaining of $20.00</p><p>Monthly</p></article>",
+    "<article><h3>Other Models</h3><p>45% used</p>",
+    "<p>$5.50 remaining of $10.00</p><p>Monthly</p></article>",
+    "<article><h3>Grok Bot</h3><p>12% used</p>",
+    "<p>Weekly included usage</p></article>",
+    "<p>Usage limit reset Oct 12, 2026</p>",
+    "</section>",
+    "<section id=\"on-demand-usage\">",
+    "<h2>On-demand usage</h2>",
+    "<p>99.9% used</p><p>$999.00 spent</p>",
+    "<p>On-demand monthly limit $2000</p>",
+    "<p>Spend limit $50</p>",
+    "</section>",
+    "<script type=\"application/json\" id=\"spending-data\">",
+    r#"{"plan":"Pro","includedUsage":{"cursorModels":{"usedPercent":23.1,"remainingCents":1538,"limitCents":2000},"otherModels":{"usedPercent":45.0,"remainingCents":550,"limitCents":1000},"grokBot":{"usedPercent":12.0,"cadence":"weekly","resetInSec":259200}},"usageLimitReset":"2026-10-12T00:00:00Z","onDemandUsage":{"usedPercent":99.9,"spentCents":99900,"monthlyLimitCents":200000},"spendLimit":{"amountCents":5000}}"#,
+    "</script>",
+    "</body></html>"
+);
+
 pub fn openrouter_analytics_fixture() -> Vec<Value> {
     vec![
         json!({
@@ -79,6 +108,14 @@ impl Sandbox {
             std::env::var_os("OPENROUTER_MANAGEMENT_API_KEY"),
         );
         unsafe { std::env::remove_var("OPENROUTER_MANAGEMENT_API_KEY") };
+        for key in [
+            "CRS_AUTH_COOKIE",
+            "CRS_FETCH_INTERVAL_SECONDS",
+            "CRS_SPENDING_URL",
+        ] {
+            originals.insert(key.to_string(), std::env::var_os(key));
+            unsafe { std::env::remove_var(key) };
+        }
         for key in [
             "CODEX_AGENT_TRACKER_STATE_DIR",
             "AGENT_COMMAND_CENTER_STATE_DIR",
@@ -242,6 +279,26 @@ pub fn write_grok_pane(home: &Path, text: &str) -> PathBuf {
 
 pub fn write_opencode_go_credentials(home: &Path) -> PathBuf {
     write_opencode_go_credentials_at(home, "wrk_test123", "Fe26.2**testcookie")
+}
+
+/// Write a Cursor spending-page session cookie for collector tests.
+pub fn write_cursor_credentials(home: &Path) -> PathBuf {
+    write_cursor_credentials_at(home, "test-workos-session-token")
+}
+
+pub fn write_cursor_credentials_at(home: &Path, auth_cookie: &str) -> PathBuf {
+    let config_dir = home.join(".config").join("agentic-cli-status");
+    fs::create_dir_all(&config_dir).unwrap();
+    let target = config_dir.join("cursor-spending.json");
+    fs::write(
+        &target,
+        serde_json::to_string_pretty(&json!({
+            "authCookie": auth_cookie,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    target
 }
 
 pub fn write_opencode_go_credentials_at(

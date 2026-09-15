@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
-    collect_claude, collect_codex_accounts, collect_codex_reset_forecast, collect_grok,
-    collect_opencode_go, collect_openrouter, load_codex_account_registry, parse_pane,
+    collect_claude, collect_codex_accounts, collect_codex_reset_forecast, collect_cursor,
+    collect_grok, collect_opencode_go, collect_openrouter, load_codex_account_registry, parse_pane,
     selected_codex_home,
 };
 use crate::config::{
@@ -30,7 +30,8 @@ use crate::tmux::{
 pub const STATUS_FILE_NAME: &str = "status.json";
 pub const PANE_DIR_NAME: &str = "panes";
 pub const TMUX_REFRESH_MIN_INTERVAL_SECONDS: f64 = 60.0;
-pub const REMOTE_HEADLESS_CLI_IDS: &[&str] = &["claude_code", "opencode_go", "openrouter"];
+pub const REMOTE_HEADLESS_CLI_IDS: &[&str] =
+    &["claude_code", "opencode_go", "openrouter", "cursor"];
 
 /// Job id used to run the Codex reset forecast through the same background
 /// worker as the remote CLI collectors. It is not a CLI, so it is kept out of
@@ -42,6 +43,7 @@ pub const REMOTE_HEADLESS_JOB_IDS: &[&str] = &[
     "claude_code",
     "opencode_go",
     "openrouter",
+    "cursor",
     CODEX_RESET_FORECAST_JOB_ID,
 ];
 
@@ -403,6 +405,21 @@ fn collect_headless(
             cli_config.get("model_slug").and_then(Value::as_str),
             cli_config.get("daily_limit").and_then(Value::as_i64),
             hooks.openrouter_fetch.clone(),
+        ),
+        "cursor" => collect_cursor(
+            home,
+            last,
+            Some(now),
+            cli_config
+                .get("fetch_min_interval_seconds")
+                .and_then(Value::as_f64)
+                .or_else(|| {
+                    cli_config
+                        .get("fetch_min_interval_seconds")
+                        .and_then(Value::as_i64)
+                        .map(|v| v as f64)
+                }),
+            hooks.http.as_deref(),
         ),
         CODEX_RESET_FORECAST_JOB_ID => collect_codex_reset_forecast(
             last,
@@ -1740,9 +1757,11 @@ fn install_stop_handler(stop: Arc<Mutex<bool>>) {
 mod tests {
     use super::*;
     use crate::config::save_config;
+    use crate::http::{HttpError, HttpResponse};
     use crate::test_support::{
-        codex_token_count_event, grok_billing_record, write_codex_rollout, write_grok_log, Sandbox,
-        NOW,
+        codex_token_count_event, grok_billing_record, write_codex_rollout,
+        write_cursor_credentials, write_grok_log, Sandbox, CURSOR_SPENDING_HTML_FIXTURE,
+        CURSOR_SPENDING_RESET_EPOCH, NOW,
     };
 
     fn configure(tmux_enabled: bool) {
@@ -1782,6 +1801,7 @@ mod tests {
             json!(88.0)
         );
         assert_eq!(status["clis"]["claude_code"]["enabled"], json!(false));
+        assert_eq!(status["clis"]["cursor"]["enabled"], json!(false));
         let on_disk: Value =
             serde_json::from_str(&fs::read_to_string(status_path(Some(&sandbox.home))).unwrap())
                 .unwrap();
@@ -1789,6 +1809,49 @@ mod tests {
             on_disk["clis"]["codex"]["windows"][0]["used_percent"],
             json!(57.0)
         );
+    }
+
+    #[test]
+    fn poll_once_writes_cursor_included_pools_from_spending_page() {
+        let sandbox = Sandbox::new();
+        configure(false);
+        write_cursor_credentials(&sandbox.home);
+        let mut cfg = load_config(None);
+        cfg["clis"]["cursor"]["enabled"] = json!(true);
+        save_config(&cfg, None).unwrap();
+        struct SpendingOpener {
+            html: String,
+        }
+        impl crate::http::HttpOpener for SpendingOpener {
+            fn open(&self, request: &crate::http::HttpRequest) -> Result<HttpResponse, HttpError> {
+                assert!(request.url.contains("cursor.com/dashboard/spending"));
+                Ok(HttpResponse {
+                    status: 200,
+                    body: self.html.as_bytes().to_vec(),
+                    headers: std::collections::HashMap::new(),
+                })
+            }
+        }
+        let hooks = PollHooks {
+            http: Some(Arc::new(SpendingOpener {
+                html: CURSOR_SPENDING_HTML_FIXTURE.into(),
+            })),
+            ..PollHooks::default()
+        };
+        let status = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &hooks);
+        let cursor = &status["clis"]["cursor"];
+        assert_eq!(cursor["enabled"], json!(true));
+        assert_eq!(cursor["windows"][0]["label"], json!("cursor_models"));
+        assert_eq!(cursor["windows"][0]["used_percent"], json!(23.1));
+        assert_eq!(cursor["windows"][1]["used_percent"], json!(45.0));
+        assert_eq!(cursor["windows"][2]["used_percent"], json!(12.0));
+        assert_eq!(
+            cursor["usage_limit_reset"],
+            json!(CURSOR_SPENDING_RESET_EPOCH)
+        );
+        let blob = cursor.to_string().to_ascii_lowercase();
+        assert!(!blob.contains("99.9"), "{blob}");
+        assert!(!blob.contains("ondemand"), "{blob}");
     }
 
     #[test]

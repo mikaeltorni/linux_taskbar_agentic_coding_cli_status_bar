@@ -1,5 +1,5 @@
 //! Agentic CLI status: rate-limit polling for Codex, Claude Code, Grok,
-//! OpenCode Go, and OpenRouter.
+//! OpenCode Go, OpenRouter, and the Cursor spending page.
 //!
 //! Modules:
 //! - `logging` — centralized environment-aware logging
