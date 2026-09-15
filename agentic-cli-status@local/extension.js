@@ -578,16 +578,16 @@ function formatForecastPercent(value) {
 }
 
 /**
- * Build the reset-forecast rows shown above every CLI details section.
+ * Build the reset-forecast entries shown above every CLI details section.
  *
  * Each source gets one named row containing every horizon it publishes. A
  * failed source remains visible as unavailable so the menu does not silently
  * make a multi-source consensus look healthier than it is.
  *
  * @param {?object} forecast - The `codex_reset_forecast` status entry.
- * @returns {string[]} Heading followed by one row per source.
+ * @returns {object[]} Heading followed by one linked entry per source.
  */
-function codexResetForecastMenuRows(forecast) {
+function codexResetForecastMenuEntries(forecast) {
   if (forecast?.enabled !== true)
     return [];
   const horizon = String(forecast.horizon ?? '24h');
@@ -595,7 +595,12 @@ function codexResetForecastMenuRows(forecast) {
   const heading = consensus
     ? `Codex reset forecast — ${horizon} consensus: ${consensus}`
     : `Codex reset forecast — ${horizon} consensus unavailable`;
-  const rows = [heading];
+  const entries = [{
+    kind: 'heading',
+    name: 'Codex reset forecast',
+    text: heading,
+    url: null,
+  }];
   for (const site of forecast.sites ?? []) {
     const name = String(site?.name ?? site?.id ?? 'Unknown site').trim() ||
       'Unknown site';
@@ -606,11 +611,52 @@ function codexResetForecastMenuRows(forecast) {
       const label = String(prediction?.label ?? horizon).trim() || horizon;
       return [`${label}: ${percent}`];
     });
-    rows.push(predictions.length
-      ? `${name} — ${predictions.join(' · ')}`
-      : `${name} — unavailable`);
+    entries.push({
+      kind: 'site',
+      name,
+      text: predictions.length
+        ? `${name} — ${predictions.join(' · ')}`
+        : `${name} — unavailable`,
+      url: site?.url ?? null,
+    });
   }
-  return rows;
+  return entries;
+}
+
+/**
+ * Open a vetted forecast site in the desktop's default browser.
+ *
+ * Only HTTPS links are accepted because status.json is a local data boundary
+ * and must not be able to launch arbitrary URI handlers.
+ *
+ * @param {*} url - Candidate site URL from status.json.
+ * @param {string} name - Site name used in diagnostics.
+ * @returns {boolean} Whether an asynchronous browser launch was requested.
+ */
+function openExternalUrl(url, name) {
+  if (typeof url !== 'string' || !url.startsWith('https://')) {
+    log('warn', `refusing non-HTTPS forecast link for ${name}`);
+    return false;
+  }
+  try {
+    Gio.AppInfo.launch_default_for_uri_async(
+      url,
+      null,
+      null,
+      (_source, result) => {
+        try {
+          Gio.AppInfo.launch_default_for_uri_finish(result);
+          log('info', `opened forecast site ${name}`);
+        } catch (error) {
+          log('warn', `could not open forecast site ${name}: ${error}`);
+        }
+      },
+    );
+    return true;
+  } catch (error) {
+    log('warn', `could not request forecast site ${name}: ${error}`);
+    return false;
+  }
 }
 
 /**
@@ -743,11 +789,37 @@ class AgenticCliStatusButton extends PanelMenu.Button {
    * @returns {void}
    */
   _appendForecastSection(forecast) {
-    const rows = codexResetForecastMenuRows(forecast);
-    for (let index = 0; index < rows.length; index++) {
-      const prefix = index === 0 ? '' : '   ';
-      this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-        `${prefix}${rows[index]}`, { reactive: false }));
+    const entries = codexResetForecastMenuEntries(forecast);
+    for (const entry of entries) {
+      if (entry.kind === 'heading') {
+        this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
+          entry.text, { reactive: false }));
+        continue;
+      }
+      const item = new PopupMenu.PopupBaseMenuItem({
+        reactive: false,
+        can_focus: false,
+      });
+      const hasUrl = typeof entry.url === 'string' &&
+        entry.url.startsWith('https://');
+      const button = new St.Button({
+        label: '↗',
+        style_class: 'acs-forecast-link-button',
+        reactive: hasUrl,
+        can_focus: hasUrl,
+        track_hover: hasUrl,
+        accessible_name: `Open ${entry.name} in browser`,
+      });
+      button.connect('clicked', () => {
+        this.menu.close();
+        openExternalUrl(entry.url, entry.name);
+      });
+      item.add_child(button);
+      item.add_child(new St.Label({
+        text: entry.text,
+        y_align: Clutter.ActorAlign.CENTER,
+      }));
+      this.menu.addMenuItem(item);
     }
   }
 
