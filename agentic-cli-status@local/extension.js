@@ -11,7 +11,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 // extension.js — agentic-cli-status@local
 //
 // Top-bar indicator showing the rate-limit usage of the major agentic coding
-// CLIs (Codex, Claude Code, Grok CLI, OpenCode Go, OpenRouter). The extension renders
+// CLIs (Codex, Claude Code, Grok CLI, OpenCode Go, OpenRouter) plus the
+// Cursor spending-page scrape (CRS). The extension renders
 // ONLY: all data
 // collection happens in the agentic-cli-status poller service, which writes
 // ~/.local/state/agentic-cli-status/status.json. The extension watches that
@@ -41,18 +42,20 @@ const CLI_TAGS = [
   ['grok', 'GK'],
   ['opencode_go', 'OG'],
   ['openrouter', 'OR'],
+  ['cursor', 'CRS'],
 ];
 
 // Poller-side default enablement, mirroring `default_config()` in src/config.rs.
-// Claude Code, OpenCode Go, and OpenRouter are opt-in: their segments must
-// stay off the bar until the user enables them, including before the first
-// status.json write.
+// Claude Code, OpenCode Go, OpenRouter, and Cursor are opt-in: their
+// segments must stay off the bar until the user enables them, including
+// before the first status.json write.
 const DEFAULT_CLI_ENABLED = {
   codex: true,
   claude_code: false,
   grok: true,
   opencode_go: false,
   openrouter: false,
+  cursor: false,
 };
 
 // Percent-LEFT gradient stops. Every rendered percentage gets its own
@@ -417,6 +420,76 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000,
 }
 
 /**
+ * Whether a spending-page field is on-demand / spend-limit / pay-as-you-go.
+ *
+ * Those never belong on the CRS segment or its details menu.
+ *
+ * @param {string} text - Field label or value.
+ * @returns {boolean} True when the text names an excluded surface.
+ */
+function isOnDemandField(text) {
+  const n = String(text ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return n.includes('ondemand') || n.includes('spendlimit') ||
+    n.includes('payasyougo');
+}
+
+/**
+ * Human-readable included-usage pool name for the Cursor details menu.
+ *
+ * @param {?string} label - Snapshot window label.
+ * @returns {string} Display name.
+ */
+function cursorWindowLabel(label) {
+  switch (label) {
+    case 'cursor_models':
+      return 'Cursor Models';
+    case 'other_models':
+      return 'Other Models';
+    case 'grok_bot':
+      return 'Grok Bot';
+    default:
+      return String(label ?? '');
+  }
+}
+
+/**
+ * Compact CRS markup: three included remainders plus the usage-limit reset.
+ *
+ * On-demand fields are never drawn. Exhausted monthly pools show a calendar
+ * date in place of 0; Grok Bot (weekly) shows a weekday clock.
+ *
+ * @param {string} tag - Short tag, always ``CRS``.
+ * @param {object} snapshot - Cursor CLI entry from status.json.
+ * @param {number} [nowEpoch] - Current epoch seconds; injectable for tests.
+ * @returns {string} Segment markup.
+ */
+function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000) {
+  const windows = snapshot?.windows ?? [];
+  if (!windows.length || snapshot.error)
+    return segmentMarkup(tag, snapshot, nowEpoch);
+  const tagLeft = percentLeft(windows[0], nowEpoch);
+  const tagColor = percentColor(tagLeft);
+  const parts = windows.map(w => {
+    const left = percentLeft(w, nowEpoch);
+    if (left === 0) {
+      const clock = w.label === 'grok_bot'
+        ? resetClock(w.resets_at)
+        : resetDate(w.resets_at);
+      return `<span foreground="${EMPTY_COLOR}">${clock}</span>`;
+    }
+    return `<span foreground="${percentColor(left)}">${left}</span>`;
+  }).join(`<span foreground="${NEUTRAL_COLOR}">·</span>`);
+  const staleMark = snapshot.stale
+    ? `<span foreground="${tagColor}">?</span>`
+    : '';
+  const resetEpoch = snapshot.usage_limit_reset || windows[0]?.resets_at;
+  const resetMark = resetEpoch
+    ? `<span foreground="${NEUTRAL_COLOR}"> ${resetDate(resetEpoch)}</span>`
+    : '';
+  return `<span foreground="${tagColor}">${tag} </span>${parts}${resetMark}${staleMark}`;
+}
+
+/**
  * Join independent Codex account segments with a gray pipe.
  *
  * Agent Command Center registers extra ChatGPT logins as isolated
@@ -540,6 +613,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       grok: 'Grok CLI',
       opencode_go: 'OpenCode Go',
       openrouter: 'OpenRouter',
+      cursor: 'Cursor',
     };
     for (const [cliId, tag] of CLI_TAGS) {
       const snapshot = status.clis?.[cliId];
@@ -549,10 +623,12 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         continue;
       }
       label.visible = true;
-      label.clutter_text.set_markup(
-        cliId === 'codex'
-          ? codexBarMarkup(tag, snapshot)
-          : segmentMarkup(tag, snapshot));
+      const markup = cliId === 'codex'
+        ? codexBarMarkup(tag, snapshot)
+        : cliId === 'cursor'
+          ? cursorBarMarkup(tag, snapshot)
+          : segmentMarkup(tag, snapshot);
+      label.clutter_text.set_markup(markup);
       label.style_class = snapshot.stale
         ? 'acs-segment acs-stale'
         : 'acs-segment';
@@ -605,14 +681,33 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       const left = percentLeft(window, nowEpoch);
       // A window that has already rolled over reads as full; its old reset
       // time is history, so don't dangle it as if still upcoming.
+      const monthLike = window.label === 'month' ||
+        window.label === 'cursor_models' || window.label === 'other_models';
       const reset = resetPassed(window, nowEpoch)
-        ? '' : resetsText(window.resets_at, window.label);
+        ? '' : resetsText(window.resets_at, monthLike ? 'month' : window.label);
+      const title = name === 'Cursor'
+        ? cursorWindowLabel(window.label)
+        : String(window.label ?? '');
       const item = new PopupMenu.PopupMenuItem('', { reactive: false });
       item.label.clutter_text.set_markup(
-        `   ${GLib.markup_escape_text(String(window.label ?? ''), -1)}: ` +
+        `   ${GLib.markup_escape_text(title, -1)}: ` +
         `<span foreground="${percentColor(left)}">${left}% left</span>` +
         GLib.markup_escape_text(reset, -1));
       this.menu.addMenuItem(item);
+    }
+    if (name === 'Cursor' && snapshot.usage_limit_reset) {
+      const resetItem = new PopupMenu.PopupMenuItem(
+        `   usage limit reset${resetsText(snapshot.usage_limit_reset, 'month')}`,
+        { reactive: false });
+      this.menu.addMenuItem(resetItem);
+    }
+    for (const field of snapshot.included_fields ?? []) {
+      const label = String(field?.label ?? '');
+      const text = String(field?.text ?? '');
+      if (!label || !text || isOnDemandField(label) || isOnDemandField(text))
+        continue;
+      this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
+        `   ${label}: ${text}`, { reactive: false }));
     }
   }
 });
