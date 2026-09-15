@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# crs — project-name shorthand for the Cursor spending-page monitor.
+#
+# Cursor is not a coding CLI. `crs setup` enables the CRS taskbar segment
+# from environment variables (no TTY):
+#   CRS_AUTH_COOKIE=… [CRS_FETCH_INTERVAL_SECONDS=30] crs setup
+# The cookie is the WorkosCursorSessionToken value from
+# https://cursor.com/dashboard/spending (DevTools → Application → Cookies).
+# CRS_FETCH_INTERVAL_SECONDS controls how often the spending page is scraped
+# (default 30). On-demand usage is never collected.
+
+set -euo pipefail
+
+BIN="${HOME}/.local/bin/agentic-cli-status"
+if [[ ! -x "$BIN" ]]; then
+  BIN="$(command -v agentic-cli-status 2>/dev/null || true)"
+fi
+if [[ -z "$BIN" || ! -x "$BIN" ]]; then
+  echo "crs: agentic-cli-status is not installed" >&2
+  exit 1
+fi
+
+case "${1:-}" in
+  setup)
+    exec "$BIN" crs setup
+    ;;
+  *)
+    echo "usage: CRS_AUTH_COOKIE=… [CRS_FETCH_INTERVAL_SECONDS=30] crs setup" >&2
+    exit 2
+    ;;
+esac

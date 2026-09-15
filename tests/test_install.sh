@@ -175,7 +175,7 @@ assert_file_contains "$EXT_DIR/extension.js" "poll_interval_seconds" \
 
 CONFIG_FILE="$TARGET_HOME/.config/agentic-cli-status/config.json"
 assert_file_exists "$CONFIG_FILE" "Should seed the default config"
-for cli in codex claude_code grok opencode_go openrouter; do
+for cli in codex claude_code grok opencode_go openrouter cursor; do
   assert_file_contains "$CONFIG_FILE" "\"$cli\"" "Config should have a $cli entry"
 done
 # A default install must enable every default-on CLI; Claude Code is opt-in via
@@ -189,6 +189,12 @@ assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
   "OpenCode Go is opt-in and must stay off after a default install"
 assert_eq "$(cfg_get clis.openrouter.enabled)" "false" \
   "OpenRouter is opt-in and must stay off after a default install"
+assert_eq "$(cfg_get clis.cursor.enabled)" "false" \
+  "Cursor spending is opt-in and must stay off after a default install"
+assert_file_exists "$TARGET_HOME/.local/bin/crs" \
+  "Core deploy should install the crs setup shorthand"
+assert_eq "$(cfg_get clis.cursor.fetch_min_interval_seconds)" "30" \
+  "Default Cursor website scrape interval should be 30 seconds"
 assert_not_contains "$CONFIG_FILE" '"cline"' "Cline must not be monitored"
 assert_file_contains "$CONFIG_FILE" '"poll_interval_seconds": 5' \
   "Default polling rate should be 5 seconds"
@@ -287,6 +293,51 @@ run_installer --uninstall openrouter_monitor >"$TMP_DIR/uninstall-or.out" 2>&1 |
 assert_eq "$(cfg_get clis.openrouter.enabled)" "false" "openrouter should be disabled"
 assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" "opencode_go should stay disabled"
 assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
+
+# --- Cursor spending: env-var/crs setup without a TTY ----------------------
+assert_eq "$(cfg_get clis.cursor.enabled)" "false" \
+  "cursor should stay off until crs setup or --select cursor_monitor"
+CRS_AUTH_COOKIE="workos-test-cookie" CRS_FETCH_INTERVAL_SECONDS=45 \
+  HOME="$TARGET_HOME" \
+  XDG_CONFIG_HOME="$TARGET_HOME/.config" \
+  XDG_STATE_HOME="$TARGET_HOME/.local/state" \
+  PATH="$TARGET_HOME/.local/bin:$PATH" \
+  crs setup >"$TMP_DIR/crs-setup.out" 2>"$TMP_DIR/crs-setup.err" || {
+    FAIL=$((FAIL + 1)); echo "FAIL: crs setup exited non-zero";
+    echo "----- crs setup stdout -----"; cat "$TMP_DIR/crs-setup.out";
+    echo "----- crs setup stderr -----"; cat "$TMP_DIR/crs-setup.err"; }
+assert_eq "$(cfg_get clis.cursor.enabled)" "true" \
+  "crs setup should enable Cursor monitoring without a TTY"
+assert_eq "$(cfg_get clis.cursor.source)" "headless" "cursor source is headless"
+assert_eq "$(cfg_get clis.cursor.fetch_min_interval_seconds)" "45" \
+  "crs setup should persist CRS_FETCH_INTERVAL_SECONDS"
+assert_file_exists "$TARGET_HOME/.config/agentic-cli-status/cursor-spending.json" \
+  "crs setup should write the spending cookie file"
+assert_file_contains "$TARGET_HOME/.config/agentic-cli-status/cursor-spending.json" \
+  "workos-test-cookie" "cookie file should store the session cookie"
+assert_not_contains "$TMP_DIR/crs-setup.out" "workos-test-cookie" \
+  "crs setup stdout must not print the cookie"
+assert_not_contains "$TMP_DIR/crs-setup.err" "workos-test-cookie" \
+  "crs setup stderr must not print the cookie"
+run_installer --uninstall cursor_monitor >"$TMP_DIR/uninstall-crs.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --uninstall cursor_monitor exited non-zero"; }
+assert_eq "$(cfg_get clis.cursor.enabled)" "false" "cursor should be disabled"
+CRS_AUTH_COOKIE="workos-test-cookie" \
+  HOME="$TARGET_HOME" \
+  XDG_CONFIG_HOME="$TARGET_HOME/.config" \
+  XDG_STATE_HOME="$TARGET_HOME/.local/state" \
+  PATH="$TARGET_HOME/.local/bin:$PATH" \
+  crs setup >"$TMP_DIR/crs-setup-default.out" 2>"$TMP_DIR/crs-setup-default.err" || {
+    FAIL=$((FAIL + 1)); echo "FAIL: crs setup (default interval) exited non-zero"; }
+assert_eq "$(cfg_get clis.cursor.fetch_min_interval_seconds)" "30" \
+  "crs setup without CRS_FETCH_INTERVAL_SECONDS should default to 30s"
+CRS_AUTH_COOKIE="workos-select-cookie" CRS_FETCH_INTERVAL_SECONDS=12 \
+  run_installer --select cursor_monitor >"$TMP_DIR/install-crs.out" 2>&1 || {
+    FAIL=$((FAIL + 1)); echo "FAIL: --select cursor_monitor exited non-zero"; }
+assert_eq "$(cfg_get clis.cursor.enabled)" "true" \
+  "--select cursor_monitor should enable cursor"
+assert_eq "$(cfg_get clis.cursor.fetch_min_interval_seconds)" "12" \
+  "installer should apply CRS_FETCH_INTERVAL_SECONDS without a TTY"
 # --- A default install re-enables previously-uninstalled default-on CLIs ---
 # grok (and the other default-on CLIs) were just uninstalled above; a plain
 # default install must bring them back, or they would stay hidden from the
@@ -302,6 +353,8 @@ assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
   "A default install must NOT re-enable the opt-in OpenCode Go monitor"
 assert_eq "$(cfg_get clis.openrouter.enabled)" "false" \
   "A default install must NOT re-enable the opt-in OpenRouter monitor"
+assert_eq "$(cfg_get clis.cursor.enabled)" "true" \
+  "an opted-in cursor monitor must survive a later default install"
 
 # --- claude_code_monitor remains selectable explicitly ----------------------
 run_installer --select claude_code_monitor >"$TMP_DIR/install-cc.out" 2>&1 || {
@@ -327,9 +380,11 @@ PATH="$BIN_DIR:$PATH" SUDO_USER=mk DISPLAY=:99 HOME="$LIST_HOME" \
   ISC_FUNCTIONS_DIR="$ISC_FUNCTIONS_DIR_RESOLVED" \
   bash "$REPO_ROOT/install.sh" --list-components >"$TMP_DIR/list.out" 2>/dev/null || {
     FAIL=$((FAIL + 1)); echo "FAIL: --list-components exited non-zero"; }
-for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor openrouter_monitor polling_rate tmux_console startup_service; do
+for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor openrouter_monitor cursor_monitor polling_rate tmux_console startup_service; do
   assert_file_contains "$TMP_DIR/list.out" "$ID" "--list-components should list $ID"
 done
+assert_eq "$(awk -F '\t' '$1 == "cursor_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \
+  "--list-components should mark cursor_monitor opt-in"
 assert_eq "$(awk -F '\t' '$1 == "claude_code_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \
   "--list-components should mark claude_code_monitor opt-in"
 assert_not_contains "$TMP_DIR/list.out" "cline" "--list-components must not offer cline"
