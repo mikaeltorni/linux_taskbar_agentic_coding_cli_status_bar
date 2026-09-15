@@ -27,7 +27,7 @@ pub use codex_reset_forecast::{
     collect_codex_reset_forecast, forecast_site, FORECAST_FETCH_MIN_INTERVAL_SECONDS,
     FORECAST_SITES,
 };
-pub use cursor::{collect_cursor, parse_spending_page};
+pub use cursor::{collect_cursor, parse_dashboard_payloads, parse_spending_page};
 pub use grok::collect_grok;
 pub use opencode_go::collect_opencode_go;
 pub use openrouter::collect_openrouter;

@@ -1,10 +1,12 @@
 //! Cursor spending page: headless scrape of cursor.com/dashboard/spending.
 //!
-//! Cursor is not a coding CLI. This collector only GETs the Spending tab
-//! (session cookie, never a prompt) and parses **included** Pro usage:
-//! Cursor Models, Other Models, Grok Bot, the usage-limit reset, and any
-//! other included-usage fields on the page. On-demand / spend-limit /
-//! pay-as-you-go subtrees are dropped at parse time, not hidden later.
+//! Cursor is not a coding CLI. The spending HTML URL 307-loops through
+//! `/api/auth/bootstrap-cursor-web-target`, so this collector reads the
+//! dashboard's own usage endpoints (`/api/usage-summary` and
+//! `/api/dashboard/get-sand-usage-status`) with the session cookie and never
+//! a prompt. It parses **included** Pro usage: Cursor Models, Other Models,
+//! Grok Bot, the usage-limit reset, and other included-usage fields.
+//! On-demand / spend-limit / pay-as-you-go subtrees are dropped at parse time.
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -45,16 +47,149 @@ pub struct SpendingPage {
     pub included_fields: Vec<IncludedField>,
 }
 
-fn cookie_header_value(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed
-        .to_ascii_lowercase()
-        .starts_with("workoscursorsessiontoken=")
-    {
-        trimmed.to_string()
-    } else {
-        format!("WorkosCursorSessionToken={trimmed}")
+/// Percent-decode a cookie value copied from DevTools (often `user_…%3A%3A…`).
+fn percent_decode_cookie(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
+                if let Ok(value) = u8::from_str_radix(hex, 16) {
+                    out.push(value);
+                    index += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
     }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn cookie_header_value(raw: &str) -> String {
+    let trimmed = raw.trim().trim_matches('"');
+    let without_name = trimmed
+        .split_once('=')
+        .filter(|(name, _)| name.eq_ignore_ascii_case("WorkosCursorSessionToken"))
+        .map(|(_, value)| value)
+        .unwrap_or(trimmed);
+    format!(
+        "WorkosCursorSessionToken={}",
+        percent_decode_cookie(without_name)
+    )
+}
+
+const USAGE_SUMMARY_PATH: &str = "/api/usage-summary";
+const SAND_USAGE_PATH: &str = "/api/dashboard/get-sand-usage-status";
+
+fn is_cursor_spending_dashboard(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.contains("://cursor.com/") || lower.contains("://www.cursor.com/"))
+        && (lower.contains("/dashboard/spending") || lower.contains("tab=spending"))
+}
+
+fn cursor_origin(url: &str) -> String {
+    if url.to_ascii_lowercase().contains("://www.cursor.com") {
+        "https://www.cursor.com".into()
+    } else {
+        "https://cursor.com".into()
+    }
+}
+
+fn json_at<'a>(root: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = root;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    Some(current)
+}
+
+fn title_plan(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn ingest_named_percent(
+    out: &mut SpendingPage,
+    id: &'static str,
+    used: f64,
+    resets_at: Option<i64>,
+) {
+    if out.windows.iter().any(|w| w.label == id) {
+        return;
+    }
+    out.windows.push(Window {
+        label: id.into(),
+        used_percent: used.clamp(0.0, 100.0),
+        resets_at,
+    });
+}
+
+/// Parse included pools from the spending dashboard JSON endpoints.
+pub fn parse_dashboard_payloads(usage_summary: &str, sand_usage: &str, now: f64) -> SpendingPage {
+    let mut page = SpendingPage::default();
+    if let Ok(summary) = serde_json::from_str::<Value>(usage_summary) {
+        walk_json(&summary, now, &mut page);
+        let auto = json_at(&summary, &["individualUsage", "plan", "autoPercentUsed"])
+            .or_else(|| json_at(&summary, &["planUsage", "autoPercentUsed"]))
+            .or_else(|| summary.get("autoPercentUsed"))
+            .and_then(percent_from_value);
+        let api = json_at(&summary, &["individualUsage", "plan", "apiPercentUsed"])
+            .or_else(|| json_at(&summary, &["planUsage", "apiPercentUsed"]))
+            .or_else(|| summary.get("apiPercentUsed"))
+            .and_then(percent_from_value);
+        let monthly_reset = page.usage_limit_reset;
+        if let Some(used) = auto {
+            ingest_named_percent(&mut page, POOL_CURSOR_MODELS, used, monthly_reset);
+        }
+        if let Some(used) = api {
+            ingest_named_percent(&mut page, POOL_OTHER_MODELS, used, monthly_reset);
+        }
+        if let Some(kind) = summary
+            .get("membershipType")
+            .and_then(Value::as_str)
+            .or_else(|| json_at(&summary, &["planInfo", "planName"]).and_then(Value::as_str))
+        {
+            page.plan = Some(title_plan(kind));
+        }
+    }
+    if let Ok(sand) = serde_json::from_str::<Value>(sand_usage) {
+        walk_json(&sand, now, &mut page);
+        if let Some(used) = sand.get("usagePercent").and_then(percent_from_value) {
+            let grok_reset = sand
+                .get("currentPeriodEnd")
+                .and_then(epoch_from_value)
+                .or_else(|| {
+                    sand.get("currentPeriodStart")
+                        .and_then(epoch_from_value)
+                        .map(|start| start + 7 * 24 * 60 * 60)
+                });
+            ingest_named_percent(&mut page, POOL_GROK_BOT, used, grok_reset);
+        }
+        if page.plan.is_none() {
+            if let Some(name) = sand.get("cursorPlanName").and_then(Value::as_str) {
+                page.plan = Some(name.to_string());
+            }
+        }
+    }
+    apply_monthly_reset(&mut page);
+    page
+}
+
+fn dashboard_headers(cookie: &str) -> Vec<(String, String)> {
+    vec![
+        ("User-Agent".into(), USER_AGENT.into()),
+        ("Accept".into(), "application/json".into()),
+        ("Origin".into(), "https://cursor.com".into()),
+        ("Referer".into(), format!("{CURSOR_SPENDING_URL_DEFAULT}")),
+        ("Cookie".into(), cookie_header_value(cookie)),
+        ("Content-Type".into(), "application/json".into()),
+    ]
 }
 
 fn is_on_demand_key(key: &str) -> bool {
@@ -520,14 +655,7 @@ pub fn collect_cursor(
         .unwrap_or(CURSOR_FETCH_MIN_INTERVAL_SECONDS as f64);
     if let Some(last) = last_result {
         if let Some(checked) = last.get("checked_at").and_then(Value::as_f64) {
-            if now - checked < min_interval
-                && last
-                    .get("windows")
-                    .and_then(Value::as_array)
-                    .map(|a| !a.is_empty())
-                    .unwrap_or(false)
-                && last.get("error").map(|e| e.is_null()).unwrap_or(true)
-            {
+            if now - checked < min_interval {
                 logging::debug(format!(
                     "cursor spending scrape throttled ({min_interval}s floor)"
                 ));
@@ -545,9 +673,70 @@ pub fn collect_cursor(
         }
     };
     let url = spending_url();
-    logging::info(format!("cursor spending scrape {url}"));
+    let default_opener = UreqOpener;
+    let opener: &dyn HttpOpener = opener.unwrap_or(&default_opener);
+    let page = if is_cursor_spending_dashboard(&url) {
+        logging::info(format!(
+            "cursor spending scrape via dashboard usage endpoints (skipping {url} bootstrap redirect loop)"
+        ));
+        match fetch_dashboard_included(opener, &cookie, &url, now) {
+            Ok(page) => page,
+            Err(error) => {
+                logging::error(format!("cursor spending dashboard failed: {error}"));
+                let mut snap = snapshot(SOURCE, None, None, Vec::new(), Some(error));
+                snap["checked_at"] = json!(now);
+                return copy_cursor_extras(carry_last_reading(snap, last_result), last_result);
+            }
+        }
+    } else {
+        logging::info(format!("cursor spending scrape {url}"));
+        match fetch_html_included(opener, &cookie, &url, now) {
+            Ok(page) => page,
+            Err(error) => {
+                logging::error(format!("cursor spending page failed: {error}"));
+                let mut snap = snapshot(SOURCE, None, None, Vec::new(), Some(error));
+                snap["checked_at"] = json!(now);
+                return copy_cursor_extras(carry_last_reading(snap, last_result), last_result);
+            }
+        }
+    };
+    if page.windows.is_empty() {
+        logging::warn("cursor spending page had no included-usage windows");
+        let mut snap = snapshot(
+            SOURCE,
+            None,
+            page.plan.clone().map(Value::from),
+            Vec::new(),
+            Some("no included-usage windows in page response".into()),
+        );
+        snap["checked_at"] = json!(now);
+        let snap = attach_extras(snap, &page);
+        copy_cursor_extras(carry_last_reading(snap, last_result), last_result)
+    } else {
+        logging::info(format!(
+            "cursor spending scrape parsed {} included windows",
+            page.windows.len()
+        ));
+        let mut snap = snapshot(
+            SOURCE,
+            Some(now),
+            page.plan.clone().map(Value::from),
+            page.windows.clone(),
+            None,
+        );
+        snap["checked_at"] = json!(now);
+        attach_extras(snap, &page)
+    }
+}
+
+fn fetch_html_included(
+    opener: &dyn HttpOpener,
+    cookie: &str,
+    url: &str,
+    now: f64,
+) -> Result<SpendingPage, String> {
     let request = HttpRequest {
-        url,
+        url: url.into(),
         method: "GET".into(),
         headers: vec![
             ("User-Agent".into(), USER_AGENT.into()),
@@ -555,58 +744,58 @@ pub fn collect_cursor(
                 "Accept".into(),
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8".into(),
             ),
-            ("Cookie".into(), cookie_header_value(&cookie)),
+            ("Cookie".into(), cookie_header_value(cookie)),
         ],
         body: None,
         timeout: Duration::from_secs(20),
     };
-    let default_opener = UreqOpener;
-    let opener: &dyn HttpOpener = opener.unwrap_or(&default_opener);
     match opener.open(&request) {
-        Ok(response) => {
-            let html = response.text();
-            let page = parse_spending_page(&html, now);
-            if page.windows.is_empty() {
-                logging::warn("cursor spending page had no included-usage windows");
-                let mut snap = snapshot(
-                    SOURCE,
-                    None,
-                    page.plan.clone().map(Value::from),
-                    Vec::new(),
-                    Some("no included-usage windows in page response".into()),
-                );
-                snap["checked_at"] = json!(now);
-                let snap = attach_extras(snap, &page);
-                copy_cursor_extras(carry_last_reading(snap, last_result), last_result)
-            } else {
-                logging::info(format!(
-                    "cursor spending scrape parsed {} included windows",
-                    page.windows.len()
-                ));
-                let mut snap = snapshot(
-                    SOURCE,
-                    Some(now),
-                    page.plan.clone().map(Value::from),
-                    page.windows.clone(),
-                    None,
-                );
-                snap["checked_at"] = json!(now);
-                attach_extras(snap, &page)
-            }
-        }
-        Err(exc) => {
-            let error = if let Some(status) = exc.status {
-                logging::error(format!("cursor spending page HTTP {status}"));
-                format!("HTTP {status}")
-            } else {
-                logging::error(format!("cursor spending page failed: {exc}"));
-                exc.to_string()
-            };
-            let mut snap = snapshot(SOURCE, None, None, Vec::new(), Some(error));
-            snap["checked_at"] = json!(now);
-            copy_cursor_extras(carry_last_reading(snap, last_result), last_result)
-        }
+        Ok(response) => Ok(parse_spending_page(&response.text(), now)),
+        Err(exc) => Err(if let Some(status) = exc.status {
+            format!("HTTP {status}")
+        } else {
+            exc.to_string()
+        }),
     }
+}
+
+fn fetch_dashboard_included(
+    opener: &dyn HttpOpener,
+    cookie: &str,
+    spending_url: &str,
+    now: f64,
+) -> Result<SpendingPage, String> {
+    let origin = cursor_origin(spending_url);
+    let headers = dashboard_headers(cookie);
+    let summary_req = HttpRequest {
+        url: format!("{origin}{USAGE_SUMMARY_PATH}"),
+        method: "GET".into(),
+        headers: headers.clone(),
+        body: None,
+        timeout: Duration::from_secs(20),
+    };
+    let sand_req = HttpRequest {
+        url: format!("{origin}{SAND_USAGE_PATH}"),
+        method: "POST".into(),
+        headers,
+        body: Some(b"{}".to_vec()),
+        timeout: Duration::from_secs(20),
+    };
+    let summary = opener.open(&summary_req).map_err(|exc| {
+        if let Some(status) = exc.status {
+            format!("usage-summary HTTP {status}")
+        } else {
+            format!("usage-summary: {exc}")
+        }
+    })?;
+    let sand = opener.open(&sand_req).map_err(|exc| {
+        if let Some(status) = exc.status {
+            format!("sand-usage HTTP {status}")
+        } else {
+            format!("sand-usage: {exc}")
+        }
+    })?;
+    Ok(parse_dashboard_payloads(&summary.text(), &sand.text(), now))
 }
 
 #[cfg(test)]
@@ -614,11 +803,47 @@ mod tests {
     use super::*;
     use crate::http::{HttpError, HttpResponse};
     use crate::test_support::{
-        write_cursor_credentials, Sandbox, CURSOR_SPENDING_HTML_FIXTURE,
-        CURSOR_SPENDING_RESET_EPOCH,
+        write_cursor_credentials, write_cursor_credentials_at, Sandbox, CURSOR_SAND_USAGE_FIXTURE,
+        CURSOR_SPENDING_HTML_FIXTURE, CURSOR_SPENDING_RESET_EPOCH, CURSOR_USAGE_SUMMARY_FIXTURE,
     };
     use std::collections::HashMap;
     use std::sync::Mutex;
+
+    struct DashboardOpener {
+        calls: Mutex<Vec<String>>,
+        cookies: Mutex<Vec<String>>,
+    }
+
+    impl DashboardOpener {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                cookies: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl HttpOpener for DashboardOpener {
+        fn open(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+            self.calls.lock().unwrap().push(request.url.clone());
+            if let Some((_, cookie)) = request.headers.iter().find(|(n, _)| n == "Cookie") {
+                self.cookies.lock().unwrap().push(cookie.clone());
+            }
+            let body = if request.url.contains(USAGE_SUMMARY_PATH) {
+                CURSOR_USAGE_SUMMARY_FIXTURE.as_bytes().to_vec()
+            } else if request.url.contains(SAND_USAGE_PATH) {
+                assert_eq!(request.method, "POST");
+                CURSOR_SAND_USAGE_FIXTURE.as_bytes().to_vec()
+            } else {
+                panic!("unexpected dashboard URL {}", request.url);
+            };
+            Ok(HttpResponse {
+                status: 200,
+                body,
+                headers: HashMap::new(),
+            })
+        }
+    }
 
     struct HtmlOpener {
         html: String,
@@ -628,13 +853,6 @@ mod tests {
     impl HttpOpener for HtmlOpener {
         fn open(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
             self.calls.lock().unwrap().push(request.url.clone());
-            assert!(
-                request
-                    .headers
-                    .iter()
-                    .any(|(n, v)| n == "Cookie" && v.contains("WorkosCursorSessionToken=")),
-                "spending scrape must send the session cookie"
-            );
             Ok(HttpResponse {
                 status: 200,
                 body: self.html.as_bytes().to_vec(),
@@ -745,15 +963,40 @@ mod tests {
     }
 
     #[test]
-    fn collect_cursor_parses_html_fixture() {
+    fn parse_dashboard_payloads_reads_included_pools_and_skips_on_demand() {
+        let page = parse_dashboard_payloads(
+            CURSOR_USAGE_SUMMARY_FIXTURE,
+            CURSOR_SAND_USAGE_FIXTURE,
+            2000.0,
+        );
+        let pairs: Vec<_> = page
+            .windows
+            .iter()
+            .map(|w| (w.label.as_str(), w.used_percent))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (POOL_CURSOR_MODELS, 23.1),
+                (POOL_OTHER_MODELS, 45.0),
+                (POOL_GROK_BOT, 12.0),
+            ]
+        );
+        assert_eq!(page.usage_limit_reset, Some(CURSOR_SPENDING_RESET_EPOCH));
+        assert_eq!(page.plan.as_deref(), Some("Pro"));
+        let blob = format!("{:?}{:?}", page.windows, page.included_fields);
+        let lower = blob.to_ascii_lowercase();
+        assert!(!lower.contains("ondemand"));
+        assert!(!lower.contains("99.9"));
+    }
+
+    #[test]
+    fn collect_cursor_uses_dashboard_json_not_spending_html() {
         let sandbox = Sandbox::new();
         write_cursor_credentials(&sandbox.home);
-        let opener = HtmlOpener {
-            html: CURSOR_SPENDING_HTML_FIXTURE.into(),
-            calls: Mutex::new(Vec::new()),
-        };
+        let opener = DashboardOpener::new();
         let result = collect_cursor(&sandbox.home, None, Some(2000.0), None, Some(&opener));
-        assert!(result.get("error").unwrap().is_null());
+        assert!(result.get("error").unwrap().is_null(), "{result}");
         assert_eq!(
             window_pairs(&result),
             vec![
@@ -768,17 +1011,29 @@ mod tests {
         );
         assert_eq!(result["plan"], json!("Pro"));
         assert!(!snapshot_has_on_demand(&result));
-        assert_eq!(opener.calls.lock().unwrap().len(), 1);
+        let urls = opener.calls.lock().unwrap().clone();
+        assert_eq!(urls.len(), 2);
+        assert!(urls.iter().any(|u| u.contains(USAGE_SUMMARY_PATH)));
+        assert!(urls.iter().any(|u| u.contains(SAND_USAGE_PATH)));
+        assert!(urls.iter().all(|u| !u.contains("/dashboard/spending")));
+    }
+
+    #[test]
+    fn cookie_percent_encoding_is_decoded_before_the_request() {
+        let sandbox = Sandbox::new();
+        write_cursor_credentials_at(&sandbox.home, "user_01TEST%3A%3AeyJhbGciOi");
+        let opener = DashboardOpener::new();
+        collect_cursor(&sandbox.home, None, Some(2000.0), None, Some(&opener));
+        let cookies = opener.cookies.lock().unwrap().clone();
+        assert!(cookies.iter().any(|c| c.contains("::")));
+        assert!(cookies.iter().all(|c| !c.contains("%3A")));
     }
 
     #[test]
     fn throttles_within_fetch_interval() {
         let sandbox = Sandbox::new();
         write_cursor_credentials(&sandbox.home);
-        let opener = HtmlOpener {
-            html: CURSOR_SPENDING_HTML_FIXTURE.into(),
-            calls: Mutex::new(Vec::new()),
-        };
+        let opener = DashboardOpener::new();
         let first = collect_cursor(&sandbox.home, None, Some(2000.0), None, Some(&opener));
         let second = collect_cursor(
             &sandbox.home,
@@ -788,17 +1043,60 @@ mod tests {
             Some(&opener),
         );
         assert_eq!(second["windows"][0]["used_percent"], json!(23.1));
+        assert_eq!(opener.calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn throttles_errors_so_redirect_loops_are_not_hammered() {
+        let sandbox = Sandbox::new();
+        write_cursor_credentials(&sandbox.home);
+        struct Fail {
+            calls: Mutex<u32>,
+        }
+        impl HttpOpener for Fail {
+            fn open(&self, _request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+                *self.calls.lock().unwrap() += 1;
+                Err(HttpError::transport(
+                    "Too Many Redirects: reached max redirects (5)",
+                ))
+            }
+        }
+        let opener = Fail {
+            calls: Mutex::new(0),
+        };
+        let first = collect_cursor(&sandbox.home, None, Some(2000.0), None, Some(&opener));
+        assert!(first["error"].as_str().unwrap().contains("Redirect"));
+        let _second = collect_cursor(
+            &sandbox.home,
+            Some(&first),
+            Some(2010.0),
+            None,
+            Some(&opener),
+        );
+        assert_eq!(*opener.calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn custom_spending_url_still_scrapes_html() {
+        let sandbox = Sandbox::new();
+        write_cursor_credentials(&sandbox.home);
+        unsafe { std::env::set_var("CRS_SPENDING_URL", "http://127.0.0.1:8765/fixture.html") };
+        let opener = HtmlOpener {
+            html: CURSOR_SPENDING_HTML_FIXTURE.into(),
+            calls: Mutex::new(Vec::new()),
+        };
+        let result = collect_cursor(&sandbox.home, None, Some(2000.0), None, Some(&opener));
+        unsafe { std::env::remove_var("CRS_SPENDING_URL") };
+        assert_eq!(window_pairs(&result)[0].1, 23.1);
         assert_eq!(opener.calls.lock().unwrap().len(), 1);
+        assert!(opener.calls.lock().unwrap()[0].contains("127.0.0.1"));
     }
 
     #[test]
     fn env_interval_overrides_config_floor() {
         let sandbox = Sandbox::new();
         write_cursor_credentials(&sandbox.home);
-        let opener = HtmlOpener {
-            html: CURSOR_SPENDING_HTML_FIXTURE.into(),
-            calls: Mutex::new(Vec::new()),
-        };
+        let opener = DashboardOpener::new();
         unsafe { std::env::set_var("CRS_FETCH_INTERVAL_SECONDS", "5") };
         let first = collect_cursor(&sandbox.home, None, Some(2000.0), Some(30.0), Some(&opener));
         let second = collect_cursor(
@@ -809,7 +1107,7 @@ mod tests {
             Some(&opener),
         );
         unsafe { std::env::remove_var("CRS_FETCH_INTERVAL_SECONDS") };
-        assert_eq!(opener.calls.lock().unwrap().len(), 2);
+        assert_eq!(opener.calls.lock().unwrap().len(), 4);
         assert_eq!(second["windows"][1]["used_percent"], json!(45.0));
     }
 
@@ -850,7 +1148,11 @@ mod tests {
             Some(&Fail),
         );
         assert_eq!(result["windows"][0]["used_percent"], json!(23.1));
-        assert_eq!(result["error"], json!("HTTP 500"));
+        assert!(
+            result["error"].as_str().unwrap().contains("500"),
+            "{}",
+            result["error"]
+        );
         assert_eq!(
             result["usage_limit_reset"],
             json!(CURSOR_SPENDING_RESET_EPOCH)

@@ -54,6 +54,43 @@ pub const CURSOR_SPENDING_HTML_FIXTURE: &str = concat!(
     "</body></html>"
 );
 
+/// Spending-dashboard `GET /api/usage-summary` payload (included pools plus
+/// an on-demand subtree that parsers must ignore).
+pub const CURSOR_USAGE_SUMMARY_FIXTURE: &str = r#"{
+  "billingCycleStart": "2026-09-14T10:41:13.000Z",
+  "billingCycleEnd": "2026-10-12T00:00:00Z",
+  "membershipType": "pro",
+  "individualUsage": {
+    "plan": {
+      "enabled": true,
+      "used": 462,
+      "limit": 2000,
+      "remaining": 1538,
+      "autoPercentUsed": 23.1,
+      "apiPercentUsed": 45.0,
+      "totalPercentUsed": 23.1
+    },
+    "onDemand": {
+      "enabled": true,
+      "used": 99900,
+      "limit": 200000,
+      "remaining": 100100,
+      "usedPercent": 99.9
+    }
+  }
+}"#;
+
+/// Spending-dashboard `POST /api/dashboard/get-sand-usage-status` payload.
+pub const CURSOR_SAND_USAGE_FIXTURE: &str = r#"{
+  "currentPeriodStart": "2026-10-05T00:00:00Z",
+  "usagePercent": 12.0,
+  "hasAvailableUsage": true,
+  "hasNonZeroIncludedLimit": true,
+  "grokPlanLabel": "Grok Bot Plan",
+  "cursorPlanName": "Pro",
+  "onDemandSettings": {"usedPercent": 99.9, "limit": 999}
+}"#;
+
 pub fn openrouter_analytics_fixture() -> Vec<Value> {
     vec![
         json!({
