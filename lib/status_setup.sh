@@ -63,6 +63,11 @@ install_agentic_status_core() {
   msg "Deploying agentic-cli-status poller to $dest"
   run_as_target mkdir -p "$(dirname "$dest")"
   run_as_target install -m 0755 "$ACS_BIN" "$dest"
+  if [ -f "$SCRIPT_DIR/scripts/crs" ]; then
+    run_as_target install -m 0755 "$SCRIPT_DIR/scripts/crs" \
+      "$TARGET_HOME/.local/bin/crs"
+    msg "Deploying crs setup shorthand to $TARGET_HOME/.local/bin/crs"
+  fi
   # Drop leftover Python package/venv so they cannot be mistaken for the poller.
   run_as_target rm -rf "$TARGET_HOME/.local/share/agentic-cli-status/agentic_cli_status"
   run_as_target rm -rf "$TARGET_HOME/.local/share/agentic-cli-status/venv"
@@ -620,6 +625,120 @@ acs_openrouter_status() {
   else
     printf '%s, %s\n' "$base" "$key_state"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Cursor spending-page monitoring (not a CLI)
+# ---------------------------------------------------------------------------
+
+# acs_cursor_config_path - Echo the Cursor spending cookie file.
+acs_cursor_config_path() {
+  printf '%s/.config/agentic-cli-status/cursor-spending.json\n' "$TARGET_HOME"
+}
+
+# acs_write_cursor_creds - Persist the WorkosCursorSessionToken cookie.
+acs_write_cursor_creds() {
+  local cookie="$1" config_path
+  config_path="$(acs_cursor_config_path)"
+  if [ -z "$cookie" ]; then
+    msg "Cursor auth cookie cannot be empty." >&2
+    return 1
+  fi
+  run_as_target mkdir -p "$(dirname "$config_path")"
+  acs_bin write-cursor-creds "$config_path" "$cookie"
+}
+
+# acs_cursor_creds_valid - Return 0 when a spending cookie is stored.
+acs_cursor_creds_valid() {
+  acs_bin cursor-creds-valid "$(acs_cursor_config_path)" 2>/dev/null
+}
+
+# acs_apply_cursor_interval - Persist CRS_FETCH_INTERVAL_SECONDS when set.
+acs_apply_cursor_interval() {
+  local value="${CRS_FETCH_INTERVAL_SECONDS:-}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 5 || value > 3600 )); then
+    msg "CRS_FETCH_INTERVAL_SECONDS must be a whole number from 5 to 3600." >&2
+    return 1
+  fi
+  acs_config_set "clis.cursor.fetch_min_interval_seconds" "$value"
+  msg "Cursor spending scrape interval: every ${value} seconds."
+}
+
+# acs_install_cursor - Enable CRS; honor CRS_AUTH_COOKIE / interval env vars.
+# Non-interactive and requires no TTY when those env vars are set (same
+# contract as `crs setup`).
+acs_install_cursor() {
+  _acs_enable_cli cursor
+  acs_config_set "clis.cursor.source" '"headless"'
+  acs_apply_cursor_interval || true
+  if [ -n "${CRS_AUTH_COOKIE:-}" ]; then
+    acs_write_cursor_creds "$CRS_AUTH_COOKIE" || true
+  elif acs_cursor_creds_valid; then
+    msg "Cursor spending cookie already present."
+  elif [ -t 0 ]; then
+    msg "Cursor spending scrape needs CRS_AUTH_COOKIE (WorkosCursorSessionToken)."
+    msg "Or run: CRS_AUTH_COOKIE=… [CRS_FETCH_INTERVAL_SECONDS=30] crs setup"
+  else
+    msg "Non-interactive Cursor setup: CRS_AUTH_COOKIE=… [CRS_FETCH_INTERVAL_SECONDS=30] crs setup"
+  fi
+  acs_restart_poller_service || true
+}
+
+acs_uninstall_cursor() { _acs_disable_cli cursor; }
+acs_detect_cursor()    { _acs_detect_cli cursor; }
+
+# acs_configure_cursor - Cookie + scrape interval. No TTY uses env vars.
+acs_configure_cursor() {
+  local current value cookie
+  acs_config_set "clis.cursor.source" '"headless"'
+  if [ -n "${CRS_AUTH_COOKIE:-}" ]; then
+    acs_write_cursor_creds "$CRS_AUTH_COOKIE" || return 1
+  elif [ -t 0 ]; then
+    msg "Paste WorkosCursorSessionToken from https://cursor.com/dashboard/spending"
+    msg "  DevTools → Application → Cookies → cursor.com → WorkosCursorSessionToken"
+    cookie=""
+    read -r -p "auth cookie: " cookie </dev/tty || return 1
+    acs_write_cursor_creds "$cookie" || return 1
+  else
+    msg "Cursor configure requires CRS_AUTH_COOKIE or an interactive terminal." >&2
+    return 1
+  fi
+  current="$(acs_config_get clis.cursor.fetch_min_interval_seconds 2>/dev/null || echo 30)"
+  if [ -n "${CRS_FETCH_INTERVAL_SECONDS:-}" ]; then
+    acs_apply_cursor_interval || return 1
+  elif [ -t 0 ]; then
+    while true; do
+      value=""
+      read -r -e -i "$current" \
+        -p "Spending-page scrape interval in SECONDS (5-3600, default 30): " \
+        value </dev/tty || return 1
+      if [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 5 && value <= 3600 )); then
+        acs_config_set "clis.cursor.fetch_min_interval_seconds" "$value"
+        break
+      fi
+      msg "Enter a whole number of seconds from 5 to 3600." >&2
+    done
+  fi
+  acs_restart_poller_service || true
+  msg "Cursor spending scrape reconfigured."
+}
+
+# acs_cursor_status - Enablement, scrape interval, cookie presence.
+acs_cursor_status() {
+  local base interval cred
+  base="$(_acs_cli_status cursor)"
+  interval="$(acs_config_get clis.cursor.fetch_min_interval_seconds 2>/dev/null || echo 30)"
+  if [ -n "${CRS_AUTH_COOKIE:-}" ]; then
+    cred="cookie from env"
+  elif acs_cursor_creds_valid; then
+    cred="cookie in file"
+  else
+    cred="cookie missing (crs setup)"
+  fi
+  printf '%s, scrape %ss, %s\n' "$base" "$interval" "$cred"
 }
 
 # ---------------------------------------------------------------------------

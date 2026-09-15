@@ -137,6 +137,7 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 | `grok_monitor` | on | Grok CLI monitoring; same options |
 | `opencode_go_monitor` | **off (opt-in)** | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
 | `openrouter_monitor` | **off (opt-in)** | OpenRouter free-model daily usage; enabling it adds the OR segment and walks through the management API key + monitored model slug. While off, no OR segment is shown and no analytics query is made |
+| `cursor_monitor` | **off (opt-in)** | Cursor spending-page scrape (not a CLI); enabling it adds the CRS segment. Single-command setup: `CRS_AUTH_COOKIE=… [CRS_FETCH_INTERVAL_SECONDS=30] crs setup` |
 | `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |
 | `tmux_console` | on | The background tmux debug console / refresher |
 | `startup_service` | on | Poller starts at login (`systemd --user`) and keeps running |
@@ -175,6 +176,24 @@ open DevTools (**F12**), go to **Application** → **Cookies** →
 `https://opencode.ai`, and copy the **Value** of the **`auth`** row (starts with
 `Fe26.2…`). It is not in the page HTML — searching Elements/Styles for `fe26`
 will not find it.
+
+**Cursor spending is opt-in.** Cursor is not a coding CLI; CRS scrapes
+[cursor.com/dashboard/spending](https://cursor.com/dashboard/spending) for
+included Pro pools (Cursor Models, Other Models, Grok Bot) plus the usage
+limit reset. On-demand usage is never collected. A default install leaves CRS
+hidden. Enable it with one command (no TTY):
+
+```bash
+CRS_AUTH_COOKIE='WorkosCursorSessionToken-value' \
+  CRS_FETCH_INTERVAL_SECONDS=30 \
+  crs setup
+```
+
+`CRS_FETCH_INTERVAL_SECONDS` (default 30, range 5–3600) is independent of the
+bar's 5-second poll tick. The cookie is the **WorkosCursorSessionToken** value
+from DevTools → Application → Cookies → `cursor.com` while logged in on the
+spending page. Equivalent installer path:
+`CRS_AUTH_COOKIE=… bash install.sh --select cursor_monitor`.
 
 `claude_code_monitor` additionally exposes **endpoint_min_interval_seconds**
 (60–3600, default 180) — how often the OAuth usage endpoint may be checked.

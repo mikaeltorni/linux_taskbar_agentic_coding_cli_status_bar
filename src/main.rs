@@ -24,7 +24,7 @@ use agentic_cli_status::poller::{poll_once, run_daemon, status_path, PollHooks};
 #[derive(Parser)]
 #[command(
     name = "agentic-cli-status",
-    about = "Headless rate-limit poller for Codex, Claude Code, Grok, OpenCode Go, and OpenRouter",
+    about = "Headless rate-limit poller for Codex, Claude Code, Grok, OpenCode Go, OpenRouter, and Cursor spending",
     version
 )]
 struct Cli {
@@ -63,6 +63,21 @@ enum Command {
     OpencodeCredsValid { path: PathBuf },
     /// Print the stored OpenCode Go workspace ID.
     OpencodeWorkspaceId { path: PathBuf },
+    /// Cursor spending-page monitor (not a coding CLI).
+    Crs {
+        #[command(subcommand)]
+        command: CrsCommand,
+    },
+    /// Write the Cursor spending-page session cookie.
+    WriteCursorCreds { path: PathBuf, cookie: String },
+    /// Exit 0 when Cursor spending credentials in PATH are valid.
+    CursorCredsValid { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum CrsCommand {
+    /// Enable CRS from CRS_AUTH_COOKIE / CRS_FETCH_INTERVAL_SECONDS (no TTY).
+    Setup,
 }
 
 fn main() -> ExitCode {
@@ -83,6 +98,13 @@ fn main() -> ExitCode {
             } => installer_ops::write_opencode_creds(&path, &workspace, &cookie),
             Command::OpencodeCredsValid { path } => installer_ops::opencode_creds_valid(&path),
             Command::OpencodeWorkspaceId { path } => installer_ops::opencode_workspace_id(&path),
+            Command::Crs { command } => match command {
+                CrsCommand::Setup => installer_ops::crs_setup(None),
+            },
+            Command::WriteCursorCreds { path, cookie } => {
+                installer_ops::write_cursor_creds(&path, &cookie)
+            }
+            Command::CursorCredsValid { path } => installer_ops::cursor_creds_valid(&path),
         }
     } else if cli.show {
         let target = status_path(None);
