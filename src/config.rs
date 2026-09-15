@@ -134,10 +134,10 @@ pub fn default_config() -> Value {
             },
         },
         // Third-party predictions of the next discretionary Codex weekly-limit
-        // reset, rendered left of the Codex segments. Opt-in until the
-        // installer component turns it on.
+        // reset, rendered left of the Codex segments. This follows the
+        // default-on Codex monitor and is skipped whenever Codex is disabled.
         "codex_reset_forecast": {
-            "enabled": false,
+            "enabled": true,
             "stale_after_seconds": CODEX_RESET_FORECAST_STALE_AFTER_SECONDS,
             "fetch_min_interval_seconds": CODEX_RESET_FORECAST_FETCH_INTERVAL_DEFAULT,
             "horizon": CODEX_RESET_FORECAST_HORIZON_DEFAULT,
@@ -602,7 +602,7 @@ mod tests {
     fn codex_reset_forecast_defaults_cover_every_registry_site() {
         let _sandbox = Sandbox::new();
         let forecast = load_config(None)["codex_reset_forecast"].clone();
-        assert_eq!(forecast["enabled"], json!(false));
+        assert_eq!(forecast["enabled"], json!(true));
         assert_eq!(forecast["horizon"], json!("24h"));
         assert_eq!(forecast["fetch_min_interval_seconds"], json!(30));
         let sites = forecast["sites"].as_object().unwrap();
@@ -657,7 +657,7 @@ mod tests {
     fn codex_reset_forecast_survives_a_malformed_section() {
         let _sandbox = Sandbox::new();
         let forecast = load_with(json!("not an object"));
-        assert_eq!(forecast["enabled"], json!(false));
+        assert_eq!(forecast["enabled"], json!(true));
         assert_eq!(forecast["horizon"], json!("24h"));
         assert_eq!(
             forecast["sites"].as_object().unwrap().len(),

@@ -191,6 +191,8 @@ assert_eq "$(cfg_get clis.openrouter.enabled)" "false" \
   "OpenRouter is opt-in and must stay off after a default install"
 assert_eq "$(cfg_get clis.cursor.enabled)" "false" \
   "Cursor spending is opt-in and must stay off after a default install"
+assert_eq "$(cfg_get codex_reset_forecast.enabled)" "true" \
+  "Codex reset forecasting must be enabled by a default install"
 assert_file_exists "$TARGET_HOME/.local/bin/crs" \
   "Core deploy should install the crs setup shorthand"
 assert_eq "$(cfg_get clis.cursor.fetch_min_interval_seconds)" "30" \

@@ -1772,6 +1772,7 @@ mod tests {
     fn configure(tmux_enabled: bool) {
         let mut cfg = load_config(None);
         cfg["tmux"]["enabled"] = json!(tmux_enabled);
+        cfg["codex_reset_forecast"]["enabled"] = json!(false);
         save_config(&cfg, None).unwrap();
     }
 
@@ -1823,6 +1824,7 @@ mod tests {
         write_cursor_credentials(&sandbox.home);
         let mut cfg = load_config(None);
         cfg["clis"]["cursor"]["enabled"] = json!(true);
+        cfg["codex_reset_forecast"]["enabled"] = json!(false);
         save_config(&cfg, None).unwrap();
         struct SpendingOpener;
         impl crate::http::HttpOpener for SpendingOpener {
