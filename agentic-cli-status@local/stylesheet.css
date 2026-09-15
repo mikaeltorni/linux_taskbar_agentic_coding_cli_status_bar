@@ -22,3 +22,14 @@
 .acs-off {
   color: #9a9996;
 }
+
+.acs-forecast-link-button {
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 4px;
+}
+
+.acs-forecast-link-button:hover,
+.acs-forecast-link-button:focus {
+  background-color: rgba(255, 255, 255, 0.12);
+}

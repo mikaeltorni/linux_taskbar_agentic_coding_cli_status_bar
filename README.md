@@ -147,7 +147,8 @@ The Codex reset forecast is part of the default Codex monitoring experience:
 a clean install enables its public-site consensus automatically, and disabling
 the Codex monitor also suppresses forecast fetching and display. The popup
 starts with the consensus horizon followed by one named row per forecast site,
-including every horizon that site publishes.
+including every horizon that site publishes. The arrow button left of each
+site opens its public page in the desktop's default browser.
 
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):

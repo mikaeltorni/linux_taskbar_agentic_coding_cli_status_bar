@@ -1,6 +1,24 @@
 const DEFAULTS = {codex: true, claude_code: false, grok: true, opencode_go: false, openrouter: false, cursor: false};
 const GLib = imports.gi.GLib;
 const NOW = 1783158600;
+const launchCalls = [];
+const logCalls = [];
+const Gio = {AppInfo: {
+  launch_default_for_uri_async(uri, context, cancellable, callback) {
+    launchCalls.push(['launch', uri, context, cancellable]);
+    callback(null, {uri});
+  },
+  launch_default_for_uri_finish(result) {
+    launchCalls.push(['finish', result.uri]);
+  },
+}};
+function log(level, message) {
+  logCalls.push([level, message]);
+}
+const validForecastLaunch = openExternalUrl(
+  'https://polymarket.com/', 'Polymarket');
+const rejectedForecastLaunch = openExternalUrl(
+  'javascript:alert(1)', 'Unsafe');
 const results = {
   color_100: percentColor(100),
   color_1: percentColor(1),
@@ -166,23 +184,27 @@ const results = {
     'CX',
     {selected: 1, windows: [{label: 'week', used_percent: 43}]},
     NOW),
-  forecast_menu_rows: codexResetForecastMenuRows({
+  forecast_menu_entries: codexResetForecastMenuEntries({
     enabled: true,
     horizon: '24h',
     consensus_percent: 26,
     sites: [
-      {name: 'codex-reset.com', predictions: [
+      {name: 'codex-reset.com', url: 'https://codex-reset.com/', predictions: [
         {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
-      {name: 'Polymarket', predictions: [
+      {name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
         {label: 'by September 16', percent: 35.5}]},
-      {name: 'Unavailable tracker', predictions: [], error: 'HTTP 503'},
+      {name: 'Unavailable tracker', url: 'https://example.com/', predictions: [], error: 'HTTP 503'},
     ],
   }),
-  disabled_forecast_menu_rows: codexResetForecastMenuRows({
+  disabled_forecast_menu_entries: codexResetForecastMenuEntries({
     enabled: false,
     horizon: '24h',
     consensus_percent: 26,
   }),
+  valid_forecast_launch: validForecastLaunch,
+  rejected_forecast_launch: rejectedForecastLaunch,
+  forecast_launch_calls: launchCalls,
+  forecast_launch_logs: logCalls,
   second_codex_title: codexInstanceTitle({id: 2, label: 'trial', selected: true}),
   primary_codex_title: codexInstanceTitle({id: 1, label: ''}),
   instance_tag_first: instanceTagColor(1, 3),

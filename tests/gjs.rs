@@ -133,7 +133,8 @@ fn agentic_results() -> Option<Value> {
         "codexResetForecastMarkup",
         "codexBarWithForecastMarkup",
         "formatForecastPercent",
-        "codexResetForecastMenuRows",
+        "codexResetForecastMenuEntries",
+        "openExternalUrl",
         "cursorBarMarkup",
         "codexInstanceTitle",
         "cliEnabledFromConfig",
@@ -240,15 +241,49 @@ fn gradient_and_segments() {
     assert_eq!(js["codex_without_forecast"], js["codex_without_consensus"]);
     assert!(!js["codex_without_forecast"].as_str().unwrap().contains('%'));
     assert_eq!(
-        js["forecast_menu_rows"],
+        js["forecast_menu_entries"],
         serde_json::json!([
-            "Codex reset forecast — 24h consensus: 26%",
-            "codex-reset.com — 24h: 24% · 48h: 42%",
-            "Polymarket — by September 16: 35.5%",
-            "Unavailable tracker — unavailable",
+            {
+                "kind": "heading",
+                "name": "Codex reset forecast",
+                "text": "Codex reset forecast — 24h consensus: 26%",
+                "url": null,
+            },
+            {
+                "kind": "site",
+                "name": "codex-reset.com",
+                "text": "codex-reset.com — 24h: 24% · 48h: 42%",
+                "url": "https://codex-reset.com/",
+            },
+            {
+                "kind": "site",
+                "name": "Polymarket",
+                "text": "Polymarket — by September 16: 35.5%",
+                "url": "https://polymarket.com/",
+            },
+            {
+                "kind": "site",
+                "name": "Unavailable tracker",
+                "text": "Unavailable tracker — unavailable",
+                "url": "https://example.com/",
+            },
         ])
     );
-    assert_eq!(js["disabled_forecast_menu_rows"], serde_json::json!([]));
+    assert_eq!(js["disabled_forecast_menu_entries"], serde_json::json!([]));
+    assert_eq!(js["valid_forecast_launch"], true);
+    assert_eq!(js["rejected_forecast_launch"], false);
+    assert_eq!(
+        js["forecast_launch_calls"],
+        serde_json::json!([
+            ["launch", "https://polymarket.com/", null, null],
+            ["finish", "https://polymarket.com/"],
+        ])
+    );
+    assert!(js["forecast_launch_logs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry[0] == "warn" && entry[1].as_str().unwrap().contains("Unsafe")));
     assert_eq!(js["instance_tag_first"], "#7ec8ff");
     assert_eq!(js["instance_tag_last"], "#a856e8");
     assert_eq!(js["instance_tag_only"], "#7ec8ff");
@@ -279,6 +314,16 @@ fn gradient_and_segments() {
         .unwrap();
     let cli_menu_index = render_source.find("const names = {").unwrap();
     assert!(forecast_menu_index < cli_menu_index);
+    assert!(source.contains("new St.Button({"));
+    assert!(source.contains("accessible_name: `Open ${entry.name} in browser`"));
+    assert!(source.contains("Gio.AppInfo.launch_default_for_uri_async"));
+    let stylesheet = fs::read_to_string(
+        repo_root()
+            .join("agentic-cli-status@local")
+            .join("stylesheet.css"),
+    )
+    .unwrap();
+    assert!(stylesheet.contains(".acs-forecast-link-button"));
     let og_index = source.find("['opencode_go', 'OG']").unwrap();
     let or_index = source.find("['openrouter', 'OR']").unwrap();
     let crs_index = source.find("['cursor', 'CRS']").unwrap();
