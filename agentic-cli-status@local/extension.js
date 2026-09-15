@@ -800,6 +800,9 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         reactive: false,
         can_focus: false,
       });
+      const row = new St.BoxLayout({
+        y_align: Clutter.ActorAlign.CENTER,
+      });
       const hasUrl = typeof entry.url === 'string' &&
         entry.url.startsWith('https://');
       const button = new St.Button({
@@ -814,11 +817,12 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         this.menu.close();
         openExternalUrl(entry.url, entry.name);
       });
-      item.add_child(button);
-      item.add_child(new St.Label({
+      row.add_child(button);
+      row.add_child(new St.Label({
         text: entry.text,
         y_align: Clutter.ActorAlign.CENTER,
       }));
+      item.add_child(row);
       this.menu.addMenuItem(item);
     }
   }
