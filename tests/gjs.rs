@@ -317,6 +317,9 @@ fn gradient_and_segments() {
     assert!(source.contains("new St.Button({"));
     assert!(source.contains("accessible_name: `Open ${entry.name} in browser`"));
     assert!(source.contains("Gio.AppInfo.launch_default_for_uri_async"));
+    assert!(source.contains("const row = new St.BoxLayout({"));
+    assert!(source.contains("row.add_child(button)"));
+    assert!(source.contains("item.add_child(row)"));
     let stylesheet = fs::read_to_string(
         repo_root()
             .join("agentic-cli-status@local")
