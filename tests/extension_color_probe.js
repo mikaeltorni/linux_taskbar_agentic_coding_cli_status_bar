@@ -118,6 +118,13 @@ const results = {
       {label: 'cursor_models remaining', text: '$15.38 of $20.00'},
       {label: 'onDemandUsage', text: '$999.00'}],
   }, NOW),
+  cursor_submenu_extras: cursorExtraDetailTexts({
+    usage_limit_reset: 1791763200,
+    included_fields: [
+      {label: 'cursor_models remaining', text: '$15.38 of $20.00'},
+      {label: 'usage limit reset', text: 'resets 14 Oct'},
+      {label: 'onDemandUsage', text: '$999.00'}],
+  }),
   cursor_on_demand_absent: cursorBarMarkup('CRS', {windows: [
     {label: 'cursor_models', used_percent: 23.1, resets_at: 1791763200},
     {label: 'other_models', used_percent: 45.0, resets_at: 1791763200},

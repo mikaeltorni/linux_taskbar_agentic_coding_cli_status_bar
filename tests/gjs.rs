@@ -131,6 +131,8 @@ fn agentic_results() -> Option<Value> {
         "segmentMarkup",
         "codexBarMarkup",
         "cursorBarMarkup",
+        "cursorExtraDetailTexts",
+        "isOnDemandField",
         "codexInstanceTitle",
         "cliEnabledFromConfig",
     ];
@@ -279,6 +281,25 @@ fn gradient_and_segments() {
     assert!(hidden.contains("CRS"), "{hidden}");
     assert!(!hidden_lower.contains("ondemand"), "{hidden}");
     assert!(!hidden_lower.contains("99.9"), "{hidden}");
+    let extras = js["cursor_submenu_extras"].as_array().unwrap();
+    let extra_blob = extras
+        .iter()
+        .map(|v| v.as_str().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    assert!(
+        extra_blob.contains("cursor_models remaining"),
+        "included extras should still list remaining: {extras:?}"
+    );
+    assert!(
+        !extra_blob.contains("usage limit reset")
+            && !extra_blob.contains("14 oct")
+            && !extra_blob.contains("12 oct"),
+        "CRS submenu must not include usage-limit reset: {extras:?}"
+    );
+    assert!(!extra_blob.contains("ondemand"), "{extras:?}");
+    assert!(!source.contains("usage limit reset${"));
 }
 
 #[test]

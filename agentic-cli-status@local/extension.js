@@ -439,6 +439,29 @@ function isOnDemandField(text) {
  * @param {?string} label - Snapshot window label.
  * @returns {string} Display name.
  */
+/**
+ * Extra CRS details-menu lines besides per-window remainders.
+ *
+ * Included-usage fields are listed; the snapshot-level usage-limit reset
+ * date is never included (not ``usage limit reset — resets 14 Oct``).
+ *
+ * @param {object} snapshot - Cursor CLI entry from status.json.
+ * @returns {string[]} Menu line texts without a leading indent.
+ */
+function cursorExtraDetailTexts(snapshot) {
+  const lines = [];
+  for (const field of snapshot?.included_fields ?? []) {
+    const label = String(field?.label ?? '');
+    const text = String(field?.text ?? '');
+    if (!label || !text || isOnDemandField(label) || isOnDemandField(text))
+      continue;
+    if (/usage limit reset/i.test(label) || /usage limit reset/i.test(text))
+      continue;
+    lines.push(`${label}: ${text}`);
+  }
+  return lines;
+}
+
 function cursorWindowLabel(label) {
   switch (label) {
     case 'cursor_models':
@@ -693,19 +716,11 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         GLib.markup_escape_text(reset, -1));
       this.menu.addMenuItem(item);
     }
-    if (name === 'Cursor' && snapshot.usage_limit_reset) {
-      const resetItem = new PopupMenu.PopupMenuItem(
-        `   usage limit reset${resetsText(snapshot.usage_limit_reset, 'month')}`,
-        { reactive: false });
-      this.menu.addMenuItem(resetItem);
-    }
-    for (const field of snapshot.included_fields ?? []) {
-      const label = String(field?.label ?? '');
-      const text = String(field?.text ?? '');
-      if (!label || !text || isOnDemandField(label) || isOnDemandField(text))
-        continue;
-      this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-        `   ${label}: ${text}`, { reactive: false }));
+    if (name === 'Cursor') {
+      for (const line of cursorExtraDetailTexts(snapshot)) {
+        this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
+          `   ${line}`, { reactive: false }));
+      }
     }
   }
 });
