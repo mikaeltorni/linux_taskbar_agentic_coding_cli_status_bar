@@ -130,6 +130,7 @@ fn agentic_results() -> Option<Value> {
         "creditDetailText",
         "segmentMarkup",
         "codexBarMarkup",
+        "cursorBarMarkup",
         "codexInstanceTitle",
         "cliEnabledFromConfig",
     ];
@@ -250,7 +251,29 @@ fn gradient_and_segments() {
     .unwrap();
     let og_index = source.find("['opencode_go', 'OG']").unwrap();
     let or_index = source.find("['openrouter', 'OR']").unwrap();
+    let crs_index = source.find("['cursor', 'CRS']").unwrap();
     assert!(og_index < or_index);
+    assert!(or_index < crs_index);
+    let crs = js["cursor_segment"].as_str().unwrap();
+    assert!(crs.contains(">CRS <") || crs.contains("CRS "), "{crs}");
+    assert!(crs.contains("CRS"), "{crs}");
+    assert!(crs.contains(">77<"), "cursor models remainder missing: {crs}");
+    assert!(crs.contains(">55<"), "other models remainder missing: {crs}");
+    assert!(crs.contains(">88<"), "grok bot remainder missing: {crs}");
+    assert!(
+        crs.contains("12 Oct") || crs.contains("Oct"),
+        "usage limit reset missing: {crs}"
+    );
+    let crs_lower = crs.to_ascii_lowercase();
+    assert!(!crs_lower.contains("ondemand"), "{crs}");
+    assert!(!crs_lower.contains("on-demand"), "{crs}");
+    assert!(!crs.contains("$999"), "{crs}");
+    assert!(!crs.contains("99.9"), "{crs}");
+    let hidden = js["cursor_on_demand_absent"].as_str().unwrap();
+    let hidden_lower = hidden.to_ascii_lowercase();
+    assert!(hidden.contains("CRS"), "{hidden}");
+    assert!(!hidden_lower.contains("ondemand"), "{hidden}");
+    assert!(!hidden_lower.contains("99.9"), "{hidden}");
 }
 
 #[test]
@@ -383,6 +406,7 @@ fn opt_in_clis_stay_off_the_bar_until_enabled() {
     // all.
     assert_eq!(js["cold_start_defaults"]["openrouter"], false);
     assert_eq!(js["cold_start_defaults"]["opencode_go"], false);
+    assert_eq!(js["cold_start_defaults"]["cursor"], false);
     assert_eq!(js["cold_start_defaults"]["codex"], true);
     assert_eq!(js["cold_start_defaults"]["claude_code"], false);
     assert_eq!(js["cold_start_defaults"]["grok"], true);
@@ -390,6 +414,7 @@ fn opt_in_clis_stay_off_the_bar_until_enabled() {
     // default-on one.
     assert_eq!(js["cold_start_opt_in"]["openrouter"], true);
     assert_eq!(js["cold_start_opt_in"]["opencode_go"], true);
+    assert_eq!(js["cold_start_opt_in"]["cursor"], true);
     assert_eq!(js["cold_start_opt_in"]["claude_code"], true);
     assert_eq!(js["cold_start_opt_out"]["grok"], false);
     // A non-boolean value is not an opt-in.
@@ -407,6 +432,7 @@ fn opt_in_clis_stay_off_the_bar_until_enabled() {
     assert!(code.contains("cliEnabledFromConfig(readPollerConfig(), DEFAULT_CLI_ENABLED)"));
     assert!(code.contains("openrouter: false"));
     assert!(code.contains("opencode_go: false"));
+    assert!(code.contains("cursor: false"));
 }
 
 #[test]

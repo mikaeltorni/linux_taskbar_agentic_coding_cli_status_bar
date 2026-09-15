@@ -1,4 +1,4 @@
-const DEFAULTS = {codex: true, claude_code: false, grok: true, opencode_go: false, openrouter: false};
+const DEFAULTS = {codex: true, claude_code: false, grok: true, opencode_go: false, openrouter: false, cursor: false};
 const GLib = imports.gi.GLib;
 const NOW = 1783158600;
 const results = {
@@ -109,6 +109,23 @@ const results = {
   openrouter_segment: segmentMarkup('OR', {windows: [
     {label: 'day', used_percent: 42, resets_at: NOW + 52000}]
   }, NOW),
+  cursor_segment: cursorBarMarkup('CRS', {windows: [
+    {label: 'cursor_models', used_percent: 23.1, resets_at: 1791763200},
+    {label: 'other_models', used_percent: 45.0, resets_at: 1791763200},
+    {label: 'grok_bot', used_percent: 12.0, resets_at: NOW + 259200}],
+    usage_limit_reset: 1791763200,
+    included_fields: [
+      {label: 'cursor_models remaining', text: '$15.38 of $20.00'},
+      {label: 'onDemandUsage', text: '$999.00'}],
+  }, NOW),
+  cursor_on_demand_absent: cursorBarMarkup('CRS', {windows: [
+    {label: 'cursor_models', used_percent: 23.1, resets_at: 1791763200},
+    {label: 'other_models', used_percent: 45.0, resets_at: 1791763200},
+    {label: 'grok_bot', used_percent: 12.0, resets_at: NOW + 259200}],
+    usage_limit_reset: 1791763200,
+    included_fields: [{label: 'on-demand usage', text: '99.9%'}],
+    onDemandUsage: {usedPercent: 99.9},
+  }, NOW),
   two_codex_accounts: codexBarMarkup('CX', {
     selected: 2,
     instances: [
@@ -137,7 +154,7 @@ const results = {
   instance_tag_only: instanceTagColor(1, 1),
   cold_start_defaults: cliEnabledFromConfig(null, DEFAULTS),
   cold_start_opt_in: cliEnabledFromConfig(
-    {clis: {claude_code: {enabled: true}, openrouter: {enabled: true}, opencode_go: {enabled: true}}}, DEFAULTS),
+    {clis: {claude_code: {enabled: true}, openrouter: {enabled: true}, opencode_go: {enabled: true}, cursor: {enabled: true}}}, DEFAULTS),
   cold_start_opt_out: cliEnabledFromConfig(
     {clis: {grok: {enabled: false}}}, DEFAULTS),
   cold_start_garbage: cliEnabledFromConfig({clis: {openrouter: {enabled: 'yes'}}}, DEFAULTS),
