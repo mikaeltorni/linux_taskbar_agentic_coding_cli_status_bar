@@ -453,10 +453,12 @@ function cursorWindowLabel(label) {
 }
 
 /**
- * Compact CRS markup: three included remainders plus the usage-limit reset.
+ * Compact CRS markup: the CRS tag and three included remainders.
  *
- * On-demand fields are never drawn. Exhausted monthly pools show a calendar
- * date in place of 0; Grok Bot (weekly) shows a weekday clock.
+ * On-demand fields are never drawn. The snapshot-level usage-limit reset
+ * date is not appended on the compact segment. Exhausted monthly pools
+ * still show that window's own calendar date in place of 0; Grok Bot
+ * (weekly) shows a weekday clock.
  *
  * @param {string} tag - Short tag, always ``CRS``.
  * @param {object} snapshot - Cursor CLI entry from status.json.
@@ -482,11 +484,7 @@ function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 100000
   const staleMark = snapshot.stale
     ? `<span foreground="${tagColor}">?</span>`
     : '';
-  const resetEpoch = snapshot.usage_limit_reset || windows[0]?.resets_at;
-  const resetMark = resetEpoch
-    ? `<span foreground="${NEUTRAL_COLOR}"> ${resetDate(resetEpoch)}</span>`
-    : '';
-  return `<span foreground="${tagColor}">${tag} </span>${parts}${resetMark}${staleMark}`;
+  return `<span foreground="${tagColor}">${tag} </span>${parts}${staleMark}`;
 }
 
 /**

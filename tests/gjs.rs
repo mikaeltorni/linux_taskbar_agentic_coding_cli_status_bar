@@ -260,9 +260,14 @@ fn gradient_and_segments() {
     assert!(crs.contains(">77<"), "cursor models remainder missing: {crs}");
     assert!(crs.contains(">55<"), "other models remainder missing: {crs}");
     assert!(crs.contains(">88<"), "grok bot remainder missing: {crs}");
+    let crs_plain = regex::Regex::new(r"<[^>]+>")
+        .unwrap()
+        .replace_all(crs, "");
     assert!(
-        crs.contains("12 Oct") || crs.contains("Oct"),
-        "usage limit reset missing: {crs}"
+        !crs_plain.contains("Oct")
+            && !crs_plain.contains("14 Oct")
+            && !crs_plain.contains("12 Oct"),
+        "compact CRS must not append usage-limit reset date: {crs}"
     );
     let crs_lower = crs.to_ascii_lowercase();
     assert!(!crs_lower.contains("ondemand"), "{crs}");
