@@ -23,7 +23,7 @@ own the instant its countdown reaches zero. Reset clocks are rounded to the
 nearest minute to avoid endpoint timestamp jitter. Otherwise the CLI tag takes the
 color of its 5h window (Grok: its weekly window), dashes and separators stay
 neutral gray, and stale data is dimmed with a trailing `?` — e.g.
-`CX 43·57  CC 88·60·38  GK 12  OG 100·17·8  OR 58  CRS 77·55·88 12 Oct`.
+`CX 43·57  CC 88·60·38  GK 12  OG 100·17·8  OR 58  CRS 77·55·88`.
 When Agent Command Center has extra ChatGPT logins (`acc ca instance create`),
 the Codex segment lists every account as `CX1`, `CX2`, … with a gray pipe:
 `CX1 43·57 | CX2 12`. The `CXN` tags use a light-blue→purple identity
