@@ -2,8 +2,8 @@
 
 This repository owns the `agentic-cli-status@local` GNOME Shell extension, the
 `agentic-cli-status` Rust poller (headless rate-limit collectors for Codex,
-Claude Code, Grok CLI, and the opt-in OpenCode Go and OpenRouter, plus the tmux
-debug console), and their installer
+Claude Code, Grok CLI, the opt-in OpenCode Go and OpenRouter, and the opt-in
+Cursor spending-page scrape, plus the tmux debug console), and their installer
 integration. Keep agentic CLI rate-limit monitoring in this repo; the CLIs
 themselves are installed by `linux_codex_claude_code_setup`, and the in-TUI
 status-bar rendering (statusline segments) stays in `claude_code_status_bar`.
@@ -12,12 +12,15 @@ Monitoring must never consume plan limits: collectors only read data the CLIs
 already store locally (Codex session rollouts, Grok billing logs), their
 billing/metadata endpoint (Claude OAuth usage), a headless HTML scrape of
 the OpenCode Go workspace page (same source as the `opencode-go-usage` plugin),
-or the OpenRouter analytics API (management API key from installer setup;
-read-only, not chat/completions),
+the OpenRouter analytics API (management API key from installer setup;
+read-only, not chat/completions), or a headless scrape of
+`https://cursor.com/dashboard/spending` (session cookie; included Pro pools
+only — Cursor Models, Other Models, Grok Bot, usage-limit reset; on-demand
+usage is never collected),
 and the tmux console only ever types rate-limit slash commands (`/status`,
-`/usage`, `/ogc-usage`) — never a prompt. Cline
-is deliberately unmonitored (no usage surface yet); do not add it until it
-grows one.
+`/usage`, `/ogc-usage`) — never a prompt. Cursor is not a CLI and has no tmux
+window. Cline is deliberately unmonitored (no usage surface yet); do not add
+it until it grows one.
 
 ## Clean Installation Compatibility
 

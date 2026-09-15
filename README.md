@@ -2,9 +2,9 @@
 
 GNOME taskbar indicator that displays the current rate-limit / usage status of
 the major agentic coding CLIs — **Codex**, **Claude Code**, and **Grok CLI**,
-plus **OpenRouter** and **OpenCode Go** (both opt-in, off by default, and their
-segments stay hidden until enabled) — polled in the
-background **without consuming plan limits**. Cline is
+plus **OpenRouter**, **OpenCode Go**, and **Cursor** spending (all three
+opt-in, off by default, and their segments stay hidden until enabled) — polled
+in the background **without consuming plan limits**. Cline is
 deliberately not monitored: it has no `/usage`-style rate-limit surface yet.
 
 The top bar shows one compact colored segment per CLI with the percentage of
@@ -81,12 +81,13 @@ poller's own components remove. To go back to the default, set it explicitly:
 | Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/unified.jsonl` (historically `*.log`) — `creditUsagePercent` + weekly period + tier. Post-reset records omit `creditUsagePercent` (no usage yet) and are read as 0% used. The billing log is authoritative over the tmux `/usage` pane (its `Weekly limit left` border freezes between refreshes); a newer `balance exhausted` 402 error record with no later billing fetch reports 0% left | `/usage` |
 | OpenCode Go | Headless scrape of the workspace `/go` page on `opencode.ai` (same embedded `rollingUsage`/`weeklyUsage`/`monthlyUsage` JSON as the [`opencode-go-usage`](https://npmx.dev/package/opencode-go-usage) plugin). Credentials from `OPENCODE_GO_WORKSPACE_ID`/`OPENCODE_GO_AUTH_COOKIE` or `~/.config/opencode/opencode-go-usage.json`. Self-throttled to ≥300 s | `/ogc-usage` |
 | OpenRouter | Management API `POST /api/v1/analytics/query` (read-only; not chat/completions). Daily window for the configured free-model slug (default `stealth/ox-alpha`, limit 1000). Key from `OPENROUTER_MANAGEMENT_API_KEY` or `~/.config/agentic-cli-status/.env`. Self-throttled to ≥60 s | — |
+| Cursor | Headless scrape of `https://cursor.com/dashboard/spending` (not a CLI). Session cookie from `CRS_AUTH_COOKIE` or `~/.config/agentic-cli-status/cursor-spending.json`. Included Pro pools only: Cursor Models, Other Models, Grok Bot, usage-limit reset, and other included-usage fields on the page. On-demand / spend-limit / pay-as-you-go is never collected. Self-throttled independently of the bar tick (`CRS_FETCH_INTERVAL_SECONDS` or config, default 30 s) | — |
 
 None of these send a prompt or start a model turn, so **monitoring never
 consumes plan limits**: the Codex and Grok sources are files the CLIs already
 write, the Claude endpoint is the billing/metadata endpoint that powers
-`/usage` itself, and OpenCode Go only reads the same quota page the plugin
-scrapes.
+`/usage` itself, OpenCode Go only reads the same quota page the plugin
+scrapes, and Cursor only GETs the spending dashboard with a session cookie.
 
 ### tmux debug console
 
@@ -234,9 +235,9 @@ extension logs to the Shell journal
 src/                         Rust poller crate (installed to ~/.local/bin/agentic-cli-status)
   logging.rs                 Centralized environment-aware logging (repo .log/ vs journald)
   config.rs                  Config schema/defaults/validation (~/.config/agentic-cli-status/config.json)
-  http.rs                    HTTP opener used by Claude and OpenRouter collectors
+  http.rs                    HTTP opener used by Claude, OpenRouter, OpenCode Go, and Cursor collectors
   snapshot.rs                Shared status-window JSON shape
-  collectors/                Headless collectors (codex/claude_code/grok/opencode_go/openrouter) + tmux pane parser
+  collectors/                Headless collectors (codex/claude_code/grok/opencode_go/openrouter/cursor) + tmux pane parser
   tmux.rs                    Debug console: session/window management, slash-command refresh
   poller.rs                  Aggregating tick loop; writes status.json atomically
   installer_ops.rs           Installer config/credential helpers (config-get/set, OpenCode, OpenRouter)

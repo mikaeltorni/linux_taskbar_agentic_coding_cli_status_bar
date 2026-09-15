@@ -16,8 +16,16 @@ use crate::logging;
 pub const CONFIG_DIR_NAME: &str = "agentic-cli-status";
 pub const CONFIG_FILE_NAME: &str = "config.json";
 
-/// CLI ids in display order. Cline is intentionally absent.
-pub const CLI_IDS: &[&str] = &["codex", "claude_code", "grok", "opencode_go", "openrouter"];
+/// CLI ids in display order. Cline is intentionally absent. `cursor` is the
+/// spending-page scrape (not a coding CLI).
+pub const CLI_IDS: &[&str] = &[
+    "codex",
+    "claude_code",
+    "grok",
+    "opencode_go",
+    "openrouter",
+    "cursor",
+];
 
 pub const DEFAULT_POLL_INTERVAL_SECONDS: i64 = 5;
 pub const MIN_POLL_INTERVAL_SECONDS: i64 = 5;
@@ -37,6 +45,10 @@ pub const MIN_OPENROUTER_DAILY_LIMIT: i64 = 1;
 pub const MAX_OPENROUTER_DAILY_LIMIT: i64 = 100_000;
 pub const OPENROUTER_MODEL_SLUG_DEFAULT: &str = "stealth/ox-alpha";
 
+pub const CURSOR_FETCH_MIN_INTERVAL_SECONDS: i64 = 30;
+pub const MIN_CURSOR_FETCH_INTERVAL_SECONDS: i64 = 5;
+pub const CURSOR_SPENDING_URL_DEFAULT: &str = "https://cursor.com/dashboard/spending";
+
 /// Codex reset-forecast cadence. The configured value is still raised per site
 /// to that site's own politeness floor in the collector's registry.
 pub const CODEX_RESET_FORECAST_FETCH_INTERVAL_DEFAULT: i64 = 30;
@@ -53,6 +65,7 @@ pub fn slash_command(cli_id: &str) -> Option<&'static str> {
     match cli_id {
         "codex" | "claude_code" | "grok" => Some("/usage"),
         "opencode_go" => Some("/ogc-usage"),
+        "cursor" => None,
         _ => None,
     }
 }
@@ -110,6 +123,14 @@ pub fn default_config() -> Value {
                 "fetch_min_interval_seconds": OPENROUTER_FETCH_MIN_INTERVAL_SECONDS,
                 "model_slug": OPENROUTER_MODEL_SLUG_DEFAULT,
                 "daily_limit": OPENROUTER_DAILY_LIMIT_DEFAULT,
+            },
+            // Opt-in: Cursor is not a CLI. The CRS segment scrapes the
+            // spending page and stays off until credentials are set up.
+            "cursor": {
+                "enabled": false,
+                "source": "headless",
+                "stale_after_seconds": 1800,
+                "fetch_min_interval_seconds": CURSOR_FETCH_MIN_INTERVAL_SECONDS,
             },
         },
         // Third-party predictions of the next discretionary Codex weekly-limit
@@ -260,7 +281,7 @@ pub fn load_config(path: Option<&Path>) -> Value {
         let default_cli = defaults["clis"][cli_id].clone();
         {
             let cli = cli_object(&mut config, cli_id);
-            if *cli_id == "openrouter" {
+            if *cli_id == "openrouter" || *cli_id == "cursor" {
                 if cli.get("source").and_then(Value::as_str) != Some("headless") {
                     logging::warn(format!(
                         "cli {cli_id} only supports headless collection; forcing headless"
@@ -385,6 +406,25 @@ pub fn load_config(path: Option<&Path>) -> Value {
         } else {
             let trimmed = model_slug.trim().to_string();
             openrouter.insert("model_slug".into(), json!(trimmed));
+        }
+    }
+    {
+        let cursor = cli_object(&mut config, "cursor");
+        let fetch_interval = cursor
+            .get("fetch_min_interval_seconds")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if as_i64(&fetch_interval)
+            .map(|v| !(MIN_CURSOR_FETCH_INTERVAL_SECONDS..=MAX_POLL_INTERVAL_SECONDS).contains(&v))
+            .unwrap_or(true)
+        {
+            logging::warn(format!(
+                "cursor fetch_min_interval_seconds {fetch_interval:?} out of range [{MIN_CURSOR_FETCH_INTERVAL_SECONDS}, {MAX_POLL_INTERVAL_SECONDS}]; using default {CURSOR_FETCH_MIN_INTERVAL_SECONDS}"
+            ));
+            cursor.insert(
+                "fetch_min_interval_seconds".into(),
+                json!(CURSOR_FETCH_MIN_INTERVAL_SECONDS),
+            );
         }
     }
     validate_codex_reset_forecast(&mut config);
@@ -537,7 +577,7 @@ mod tests {
         for cli in CLI_IDS {
             let enabled = cfg["clis"][cli]["enabled"].as_bool().unwrap();
             assert_eq!(enabled, default_on.contains(cli), "{cli}");
-            let expected_source = if *cli == "openrouter" {
+            let expected_source = if *cli == "openrouter" || *cli == "cursor" {
                 "headless"
             } else {
                 "auto"
@@ -640,6 +680,50 @@ mod tests {
         assert_eq!(
             load_config(None)["clis"]["openrouter"]["enabled"],
             json!(false)
+        );
+    }
+
+    #[test]
+    fn cursor_is_disabled_by_default_and_scrapes_on_its_own_interval() {
+        let _sandbox = Sandbox::new();
+        let cfg = load_config(None);
+        assert_eq!(cfg["clis"]["cursor"]["enabled"], json!(false));
+        assert_eq!(cfg["clis"]["cursor"]["source"], json!("headless"));
+        assert_eq!(
+            cfg["clis"]["cursor"]["fetch_min_interval_seconds"],
+            json!(CURSOR_FETCH_MIN_INTERVAL_SECONDS)
+        );
+    }
+
+    #[test]
+    fn cursor_fetch_interval_clamps_below_minimum() {
+        let _sandbox = Sandbox::new();
+        let path = config_path(None);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"clis": {"cursor": {"fetch_min_interval_seconds": 1}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_config(None)["clis"]["cursor"]["fetch_min_interval_seconds"],
+            json!(CURSOR_FETCH_MIN_INTERVAL_SECONDS)
+        );
+    }
+
+    #[test]
+    fn cursor_fetch_interval_keeps_a_non_default_value() {
+        let _sandbox = Sandbox::new();
+        let path = config_path(None);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"clis": {"cursor": {"fetch_min_interval_seconds": 45}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_config(None)["clis"]["cursor"]["fetch_min_interval_seconds"],
+            json!(45)
         );
     }
 
