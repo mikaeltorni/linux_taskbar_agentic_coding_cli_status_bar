@@ -146,8 +146,8 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 The Codex reset forecast is part of the default Codex monitoring experience:
 a clean install enables its public-site consensus automatically, and disabling
 the Codex monitor also suppresses forecast fetching and display. The popup
-starts with the consensus horizon followed by one named row per forecast site,
-including every horizon that site publishes. The arrow button left of each
+starts with the 24-48h consensus (`26%-48%` when both horizons exist) followed
+by one named row per forecast site, including every horizon that site publishes. The arrow button left of each
 site opens its public page in the desktop's default browser; Polymarket points
 directly to the newest active Codex-reset event returned by its public API.
 

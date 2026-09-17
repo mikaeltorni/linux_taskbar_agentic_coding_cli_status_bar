@@ -191,6 +191,26 @@ const results = {
     'CX',
     {selected: 1, windows: [{label: 'week', used_percent: 43}]},
     NOW),
+  codex_with_24_48_forecast: codexBarWithForecastMarkup(
+    {
+      enabled: true,
+      consensus_percent: 26,
+      consensus_percent_24h: 26,
+      consensus_percent_48h: 48,
+    },
+    'CX',
+    {selected: 1, windows: [{label: 'week', used_percent: 43}]},
+    NOW),
+  codex_with_only_48h_forecast: codexBarWithForecastMarkup(
+    {
+      enabled: true,
+      horizon: '48h',
+      consensus_percent: 48,
+      consensus_percent_48h: 48,
+    },
+    'CX',
+    {selected: 1, windows: [{label: 'week', used_percent: 43}]},
+    NOW),
   forecast_menu_entries: codexResetForecastMenuEntries({
     enabled: true,
     horizon: '24h',
@@ -207,6 +227,23 @@ const results = {
     enabled: false,
     horizon: '24h',
     consensus_percent: 26,
+  }),
+  forecast_menu_24_48: codexResetForecastMenuEntries({
+    enabled: true,
+    horizon: '24h',
+    consensus_percent: 26,
+    consensus_percent_24h: 26,
+    consensus_percent_48h: 48,
+    sites: [
+      {name: 'codex-reset.com', url: 'https://codex-reset.com/', predictions: [
+        {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
+    ],
+  }),
+  forecast_menu_only_48h: codexResetForecastMenuEntries({
+    enabled: true,
+    horizon: '48h',
+    consensus_percent: 48,
+    consensus_percent_48h: 48,
   }),
   valid_forecast_launch: validForecastLaunch,
   rejected_forecast_launch: rejectedForecastLaunch,

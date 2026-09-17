@@ -549,22 +549,79 @@ function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000
 }
 
 /**
+ * Clamp a forecast probability to an integer 0-100, or null when missing.
+ *
+ * @param {*} value - Raw consensus percentage from status.json.
+ * @returns {?number} Rounded percent, or null when the side is absent.
+ */
+function roundedForecastPercent(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    return null;
+  return Math.round(Math.min(100, Math.max(0, value)));
+}
+
+/**
+ * Read the 24h and 48h consensus values without inventing a missing side.
+ *
+ * Prefers explicit `consensus_percent_24h` / `consensus_percent_48h`. Falls
+ * back to `consensus_percent` only for the configured `horizon` so a snapshot
+ * that still publishes a single number keeps working.
+ *
+ * @param {?object} forecast - The `codex_reset_forecast` status entry.
+ * @returns {{p24: ?number, p48: ?number}} Rounded percents; null means omit.
+ */
+function forecastHorizonPercents(forecast) {
+  let p24 = roundedForecastPercent(forecast?.consensus_percent_24h);
+  let p48 = roundedForecastPercent(forecast?.consensus_percent_48h);
+  const configured = roundedForecastPercent(forecast?.consensus_percent);
+  const horizon = String(forecast?.horizon ?? '24h');
+  if (p24 === null && horizon !== '48h')
+    p24 = configured;
+  if (p48 === null && horizon === '48h')
+    p48 = configured;
+  return {p24, p48};
+}
+
+/**
+ * Visible 24-48h consensus text: `26%-48%`, or one side when the other is absent.
+ *
+ * @param {?number} p24 - Rounded 24h consensus, or null.
+ * @param {?number} p48 - Rounded 48h consensus, or null.
+ * @returns {string} Compact pair (or a single `NN%`); empty when both missing.
+ */
+function formatForecastConsensusPair(p24, p48) {
+  if (p24 !== null && p48 !== null)
+    return `${p24}%-${p48}%`;
+  if (p24 !== null)
+    return `${p24}%`;
+  if (p48 !== null)
+    return `${p48}%`;
+  return '';
+}
+
+/**
  * Format the consensus probability of a discretionary Codex limit reset.
+ *
+ * When both 24h and 48h values exist the compact bar shows `26%-48%`. A
+ * missing side is omitted rather than filled with a made-up number.
  *
  * @param {?object} forecast - The `codex_reset_forecast` status entry.
  * @returns {string} Pango markup for the percentage, or an empty string when
  *   forecasting is disabled or no consensus is available.
  */
 function codexResetForecastMarkup(forecast) {
-  const probability = forecast?.consensus_percent;
-  if (forecast?.enabled !== true || typeof probability !== 'number' ||
-      !Number.isFinite(probability))
+  if (forecast?.enabled !== true)
     return '';
-  const percent = Math.round(Math.min(100, Math.max(0, probability)));
+  const {p24, p48} = forecastHorizonPercents(forecast);
+  const text = formatForecastConsensusPair(p24, p48);
+  if (!text)
+    return '';
+  log('debug', `forecast compact consensus ${text}`);
+  const colorPercent = p24 !== null ? p24 : p48;
   const staleMark = forecast.stale
     ? `<span foreground="${NEUTRAL_COLOR}">?</span>`
     : '';
-  return `<span foreground="${percentColor(percent)}">${percent}%</span>${staleMark}`;
+  return `<span foreground="${percentColor(colorPercent)}">${text}</span>${staleMark}`;
 }
 
 /**
@@ -614,10 +671,16 @@ function codexResetForecastMenuEntries(forecast) {
   if (forecast?.enabled !== true)
     return [];
   const horizon = String(forecast.horizon ?? '24h');
-  const consensus = formatForecastPercent(forecast.consensus_percent);
-  const heading = consensus
-    ? `Codex reset forecast — ${horizon} consensus: ${consensus}`
-    : `Codex reset forecast — ${horizon} consensus unavailable`;
+  const {p24, p48} = forecastHorizonPercents(forecast);
+  const pair = formatForecastConsensusPair(p24, p48);
+  let heading;
+  if (p24 !== null && p48 !== null)
+    heading = `Codex reset forecast — 24-48h consensus: ${pair}`;
+  else if (pair)
+    heading = `Codex reset forecast — ${p24 === null ? '48h' : horizon} consensus: ${pair}`;
+  else
+    heading = `Codex reset forecast — ${horizon} consensus unavailable`;
+  log('debug', `forecast menu heading ${heading}`);
   const entries = [{
     kind: 'heading',
     name: 'Codex reset forecast',

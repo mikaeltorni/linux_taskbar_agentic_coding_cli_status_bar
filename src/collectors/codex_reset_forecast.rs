@@ -11,8 +11,8 @@
 //!   endpoint, politeness floor, parser). Adding a source is a registry entry
 //!   plus a parser, never a new fetch/throttle path.
 //! - [`collect_codex_reset_forecast`] — per-site throttled fetch and parse,
-//!   merged into one snapshot carrying a consensus percentage for the
-//!   configured horizon.
+//!   merged into one snapshot carrying 24h and 48h consensus percentages
+//!   (plus `consensus_percent` for the configured horizon).
 //!
 //! Data safety: every endpoint is a public, unauthenticated, read-only URL
 //! that the site's own `robots.txt` allows for generic agents. Nothing here
@@ -499,6 +499,23 @@ fn previous_sites(last_result: Option<&Value>) -> Map<String, Value> {
     indexed
 }
 
+/// Median consensus and contributor count for one published horizon label.
+///
+/// Sites that do not publish that label (Polymarket market expiries, a
+/// missing 48h ring) are omitted rather than filled in, so a missing side
+/// stays missing.
+fn consensus_for(rows: &[Value], horizon: &str) -> (Option<f64>, usize) {
+    let sample: Vec<f64> = rows
+        .iter()
+        .filter_map(|row| row.get("predictions").and_then(Value::as_array))
+        .flatten()
+        .filter(|prediction| prediction.get("label").and_then(Value::as_str) == Some(horizon))
+        .filter_map(|prediction| prediction.get("percent").and_then(Value::as_f64))
+        .collect();
+    let contributors = sample.len();
+    (median(sample), contributors)
+}
+
 /// Whether a site is enabled in `codex_reset_forecast.sites.<id>.enabled`.
 fn site_enabled(site_config: Option<&Value>, id: &str) -> bool {
     site_config
@@ -520,7 +537,8 @@ fn site_enabled(site_config: Option<&Value>, id: &str) -> bool {
 /// - `now` — epoch seconds override (tests pass a fixed clock).
 /// - `min_interval` — configured fetch cadence; raised per site to that site's
 ///   own `min_interval_seconds` floor.
-/// - `horizon` — which published horizon the consensus percentage uses.
+/// - `horizon` — which published horizon `consensus_percent` uses. Both 24h
+///   and 48h medians are always published alongside it.
 /// - `site_config` — the `sites` object of per-site enable toggles.
 /// - `opener` — HTTP seam; production passes `None` for [`UreqOpener`].
 pub fn collect_codex_reset_forecast(
@@ -568,15 +586,16 @@ pub fn collect_codex_reset_forecast(
         }
     }
 
-    let sample: Vec<f64> = rows
-        .iter()
-        .filter_map(|row| row.get("predictions").and_then(Value::as_array))
-        .flatten()
-        .filter(|prediction| prediction.get("label").and_then(Value::as_str) == Some(horizon))
-        .filter_map(|prediction| prediction.get("percent").and_then(Value::as_f64))
-        .collect();
-    let contributors = sample.len();
-    let consensus = median(sample);
+    let (consensus_24h, contrib_24h) = consensus_for(&rows, "24h");
+    let (consensus_48h, contrib_48h) = consensus_for(&rows, "48h");
+    let (consensus, contributors) = if horizon == "48h" {
+        (consensus_48h, contrib_48h)
+    } else {
+        (consensus_24h, contrib_24h)
+    };
+    logging::debug(format!(
+        "codex reset forecast consensus horizon={horizon} 24h={consensus_24h:?} 48h={consensus_48h:?}"
+    ));
 
     let observed_at = rows
         .iter()
@@ -601,6 +620,8 @@ pub fn collect_codex_reset_forecast(
         "source": "codex_reset_forecast",
         "horizon": horizon,
         "consensus_percent": consensus,
+        "consensus_percent_24h": consensus_24h,
+        "consensus_percent_48h": consensus_48h,
         "contributing_sites": contributors,
         "observed_at": observed_at,
         "checked_at": now,
@@ -826,6 +847,9 @@ mod tests {
         // Median of the two published 24h numbers (22, 24); Polymarket has no
         // 24h horizon, so it stays menu-only.
         assert_eq!(result["consensus_percent"], json!(23.0));
+        assert_eq!(result["consensus_percent_24h"], json!(23.0));
+        // Median of the two published 48h numbers (39, 42).
+        assert_eq!(result["consensus_percent_48h"], json!(40.5));
         assert_eq!(result["contributing_sites"], json!(2));
         assert_eq!(result["error"], Value::Null);
         assert_eq!(result["sites"].as_array().unwrap().len(), 3);
@@ -849,8 +873,11 @@ mod tests {
             None,
             Some(&opener),
         );
-        // Median of 39 and 42.
+        // Median of 39 and 42. Both horizons stay published so the bar can
+        // show 24-48h consensus regardless of which horizon is configured.
         assert_eq!(result["consensus_percent"], json!(40.5));
+        assert_eq!(result["consensus_percent_24h"], json!(23.0));
+        assert_eq!(result["consensus_percent_48h"], json!(40.5));
     }
 
     #[test]
@@ -1026,6 +1053,8 @@ mod tests {
             Some(&opener),
         );
         assert_eq!(result["consensus_percent"], Value::Null);
+        assert_eq!(result["consensus_percent_24h"], Value::Null);
+        assert_eq!(result["consensus_percent_48h"], Value::Null);
         assert_eq!(
             result["error"],
             json!("no site published a 24h probability")
