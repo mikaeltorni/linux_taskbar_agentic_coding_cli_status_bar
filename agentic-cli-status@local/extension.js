@@ -600,6 +600,39 @@ function formatForecastConsensusPair(p24, p48) {
 }
 
 /**
+ * Color one forecast percent with the shared remaining-budget scale.
+ *
+ * 100% is green (`#8ff0a4`), 0% is red (`#ff0000`) — the same
+ * :func:`percentColor` mapper used by every other bar percentage. There is
+ * no forecast-specific gradient.
+ *
+ * @param {number} percent - Rounded 0-100 consensus.
+ * @returns {string} Pango span for `NN%`.
+ */
+function forecastPercentMarkup(percent) {
+  return `<span foreground="${percentColor(percent)}">${percent}%</span>`;
+}
+
+/**
+ * Pango 24-48h consensus: each side uses percentColor; the hyphen is neutral.
+ *
+ * @param {?number} p24 - Rounded 24h consensus, or null.
+ * @param {?number} p48 - Rounded 48h consensus, or null.
+ * @returns {string} Colored pair markup, or empty when both sides are missing.
+ */
+function formatForecastConsensusMarkup(p24, p48) {
+  if (p24 !== null && p48 !== null)
+    return `${forecastPercentMarkup(p24)}` +
+      `<span foreground="${NEUTRAL_COLOR}">-</span>` +
+      `${forecastPercentMarkup(p48)}`;
+  if (p24 !== null)
+    return forecastPercentMarkup(p24);
+  if (p48 !== null)
+    return forecastPercentMarkup(p48);
+  return '';
+}
+
+/**
  * Format the consensus probability of a discretionary Codex limit reset.
  *
  * When both 24h and 48h values exist the compact bar shows `26%-48%`. A
@@ -613,15 +646,14 @@ function codexResetForecastMarkup(forecast) {
   if (forecast?.enabled !== true)
     return '';
   const {p24, p48} = forecastHorizonPercents(forecast);
-  const text = formatForecastConsensusPair(p24, p48);
-  if (!text)
+  const markup = formatForecastConsensusMarkup(p24, p48);
+  if (!markup)
     return '';
-  log('debug', `forecast compact consensus ${text}`);
-  const colorPercent = p24 !== null ? p24 : p48;
+  log('debug', `forecast compact consensus ${formatForecastConsensusPair(p24, p48)}`);
   const staleMark = forecast.stale
     ? `<span foreground="${NEUTRAL_COLOR}">?</span>`
     : '';
-  return `<span foreground="${percentColor(colorPercent)}">${text}</span>${staleMark}`;
+  return `${markup}${staleMark}`;
 }
 
 /**

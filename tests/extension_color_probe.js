@@ -26,6 +26,8 @@ const results = {
   color_50: percentColor(50),
   color_99: percentColor(99),
   color_2: percentColor(2),
+  color_26: percentColor(26),
+  color_48: percentColor(48),
   left_clamped: percentLeft({used_percent: 130}),
   dash: segmentMarkup('CX', {windows: []}),
   errored_stale_segment: segmentMarkup('CC', {
@@ -244,6 +246,16 @@ const results = {
     horizon: '48h',
     consensus_percent: 48,
     consensus_percent_48h: 48,
+  }),
+  forecast_color_100_0: codexResetForecastMarkup({
+    enabled: true,
+    consensus_percent_24h: 100,
+    consensus_percent_48h: 0,
+  }),
+  forecast_color_0_100: codexResetForecastMarkup({
+    enabled: true,
+    consensus_percent_24h: 0,
+    consensus_percent_48h: 100,
   }),
   valid_forecast_launch: validForecastLaunch,
   rejected_forecast_launch: rejectedForecastLaunch,
