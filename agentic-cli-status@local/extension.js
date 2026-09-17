@@ -653,7 +653,12 @@ function codexResetForecastMarkup(forecast) {
   const staleMark = forecast.stale
     ? `<span foreground="${NEUTRAL_COLOR}">?</span>`
     : '';
-  return `${markup}${staleMark}`;
+  // ClutterText ignores `foreground` on a span that starts the string
+  // (https://gitlab.gnome.org/GNOME/mutter/-/issues/1324). The forecast sits
+  // at the left of the Codex segment, so a leading 24h span would stay the
+  // theme color while 48h (nested later) still painted. Wrap in a plain span
+  // so both digits keep percentColor.
+  return `<span>${markup}${staleMark}</span>`;
 }
 
 /**

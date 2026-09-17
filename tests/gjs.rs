@@ -312,6 +312,23 @@ fn gradient_and_segments() {
         forecast_24_48.contains(&format!(r#"<span foreground="{color_48}">48%</span>"#)),
         "48h 48% must use percentColor(48)={color_48}: {forecast_24_48}"
     );
+    // ClutterText drops `foreground` on a span that starts the string
+    // (mutter#1324). The 24h digit is leftmost on the Codex segment, so the
+    // colored 24h span must be nested — not the first tag in the markup.
+    assert!(
+        !forecast_24_48.starts_with("<span foreground="),
+        "24h percentColor is ignored when it is the leading span: {forecast_24_48}"
+    );
+    assert!(
+        forecast_24_48.contains(&format!(
+            "<span><span foreground=\"{color_26}\">26%</span>"
+        )),
+        "24h digit must be nested so Clutter applies percentColor: {forecast_24_48}"
+    );
+    assert!(
+        !forecast_100_0.starts_with("<span foreground="),
+        "forecast markup itself must not start with a foreground span: {forecast_100_0}"
+    );
     assert_eq!(
         js["forecast_menu_entries"],
         serde_json::json!([
