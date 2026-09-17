@@ -135,6 +135,8 @@ fn agentic_results() -> Option<Value> {
         "roundedForecastPercent",
         "forecastHorizonPercents",
         "formatForecastConsensusPair",
+        "forecastPercentMarkup",
+        "formatForecastConsensusMarkup",
         "formatForecastPercent",
         "codexResetForecastMenuEntries",
         "openExternalUrl",
@@ -274,6 +276,42 @@ fn gradient_and_segments() {
         js["forecast_menu_only_48h"][0]["text"],
         "Codex reset forecast — 48h consensus: 48%"
     );
+    let color_100 = js["color_100"].as_str().unwrap();
+    let color_0 = js["color_0"].as_str().unwrap();
+    let color_26 = js["color_26"].as_str().unwrap();
+    let color_48 = js["color_48"].as_str().unwrap();
+    assert_eq!(color_100, "#8ff0a4");
+    assert_eq!(color_0, "#ff0000");
+    let forecast_100_0 = js["forecast_color_100_0"].as_str().unwrap();
+    assert!(
+        forecast_100_0.contains(&format!(r#"<span foreground="{color_100}">100%</span>"#)),
+        "100% must use percentColor(100)={color_100}: {forecast_100_0}"
+    );
+    assert!(
+        forecast_100_0.contains(&format!(r#"<span foreground="{color_0}">0%</span>"#)),
+        "0% must use percentColor(0)={color_0}: {forecast_100_0}"
+    );
+    assert!(
+        forecast_100_0.contains("<span foreground=\"#9a9996\">-</span>"),
+        "hyphen must use NEUTRAL_COLOR: {forecast_100_0}"
+    );
+    let forecast_0_100 = js["forecast_color_0_100"].as_str().unwrap();
+    assert!(
+        forecast_0_100.contains(&format!(r#"<span foreground="{color_0}">0%</span>"#)),
+        "24h 0% must use percentColor(0): {forecast_0_100}"
+    );
+    assert!(
+        forecast_0_100.contains(&format!(r#"<span foreground="{color_100}">100%</span>"#)),
+        "48h 100% must use percentColor(100): {forecast_0_100}"
+    );
+    assert!(
+        forecast_24_48.contains(&format!(r#"<span foreground="{color_26}">26%</span>"#)),
+        "24h 26% must use percentColor(26)={color_26}: {forecast_24_48}"
+    );
+    assert!(
+        forecast_24_48.contains(&format!(r#"<span foreground="{color_48}">48%</span>"#)),
+        "48h 48% must use percentColor(48)={color_48}: {forecast_24_48}"
+    );
     assert_eq!(
         js["forecast_menu_entries"],
         serde_json::json!([
@@ -341,6 +379,15 @@ fn gradient_and_segments() {
             .join("extension.js"),
     )
     .unwrap();
+    let percent_markup = extract_function(&source, "forecastPercentMarkup");
+    assert!(
+        percent_markup.contains("percentColor("),
+        "forecast digits must reuse percentColor, not a second mapper: {percent_markup}"
+    );
+    assert!(
+        !percent_markup.contains("forecastColor") && !percent_markup.contains("GRADIENT_"),
+        "forecast digits must not define a forecast-specific gradient: {percent_markup}"
+    );
     let render_start = source.find("    render(status) {").unwrap();
     let render_source = &source[render_start..];
     let forecast_menu_index = render_source
