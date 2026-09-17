@@ -132,6 +132,9 @@ fn agentic_results() -> Option<Value> {
         "codexBarMarkup",
         "codexResetForecastMarkup",
         "codexBarWithForecastMarkup",
+        "roundedForecastPercent",
+        "forecastHorizonPercents",
+        "formatForecastConsensusPair",
         "formatForecastPercent",
         "codexResetForecastMenuEntries",
         "openExternalUrl",
@@ -242,6 +245,35 @@ fn gradient_and_segments() {
     assert!(stale_forecast.contains(">?</span>"), "{stale_forecast}");
     assert_eq!(js["codex_without_forecast"], js["codex_without_consensus"]);
     assert!(!js["codex_without_forecast"].as_str().unwrap().contains('%'));
+    let pango = regex::Regex::new(r"<[^>]+>").unwrap();
+    let forecast_24_48 = js["codex_with_24_48_forecast"].as_str().unwrap();
+    let forecast_24_48_plain = pango.replace_all(forecast_24_48, "");
+    assert!(
+        forecast_24_48_plain.contains("26%-48%"),
+        "compact 24-48h consensus must be visible as 26%-48%: {forecast_24_48}"
+    );
+    assert!(
+        forecast_24_48.find("26%").unwrap() < forecast_24_48.find("48%").unwrap(),
+        "24h consensus must precede 48h: {forecast_24_48}"
+    );
+    let only_48 = js["codex_with_only_48h_forecast"].as_str().unwrap();
+    let only_48_plain = pango.replace_all(only_48, "");
+    assert!(
+        only_48_plain.contains("48%"),
+        "48h-only compact forecast missing: {only_48}"
+    );
+    assert!(
+        !only_48_plain.contains("26%-") && !only_48_plain.contains("%-48%"),
+        "must not invent a missing 24h side: {only_48}"
+    );
+    assert_eq!(
+        js["forecast_menu_24_48"][0]["text"],
+        "Codex reset forecast — 24-48h consensus: 26%-48%"
+    );
+    assert_eq!(
+        js["forecast_menu_only_48h"][0]["text"],
+        "Codex reset forecast — 48h consensus: 48%"
+    );
     assert_eq!(
         js["forecast_menu_entries"],
         serde_json::json!([
@@ -337,12 +369,16 @@ fn gradient_and_segments() {
     let crs = js["cursor_segment"].as_str().unwrap();
     assert!(crs.contains(">CRS <") || crs.contains("CRS "), "{crs}");
     assert!(crs.contains("CRS"), "{crs}");
-    assert!(crs.contains(">77<"), "cursor models remainder missing: {crs}");
-    assert!(crs.contains(">55<"), "other models remainder missing: {crs}");
+    assert!(
+        crs.contains(">77<"),
+        "cursor models remainder missing: {crs}"
+    );
+    assert!(
+        crs.contains(">55<"),
+        "other models remainder missing: {crs}"
+    );
     assert!(crs.contains(">88<"), "grok bot remainder missing: {crs}");
-    let crs_plain = regex::Regex::new(r"<[^>]+>")
-        .unwrap()
-        .replace_all(crs, "");
+    let crs_plain = regex::Regex::new(r"<[^>]+>").unwrap().replace_all(crs, "");
     assert!(
         !crs_plain.contains("Oct")
             && !crs_plain.contains("14 Oct")
