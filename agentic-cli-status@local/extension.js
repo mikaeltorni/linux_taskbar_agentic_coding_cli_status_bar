@@ -818,6 +818,18 @@ function resetAvailabilityText(count) {
     : '';
 }
 
+/**
+ * Details-menu heading for one CLI or Codex account section.
+ *
+ * @param {string} name - Human-readable CLI or instance title.
+ * @param {object} snapshot - One CLI or instance entry from status.json.
+ * @returns {string} Heading such as "Codex [1] (team) — 2 resets available".
+ */
+function cliSectionHeading(name, snapshot) {
+  const plan = snapshot.error ? '' : (snapshot.plan ? ` (${snapshot.plan})` : '');
+  return `${name}${plan}${resetAvailabilityText(snapshot.resets_available)}`;
+}
+
 const AgenticCliStatusButton = GObject.registerClass(
 class AgenticCliStatusButton extends PanelMenu.Button {
   _init() {
@@ -963,10 +975,8 @@ class AgenticCliStatusButton extends PanelMenu.Button {
     // A carried plan can belong to the subscription state from before an
     // endpoint error; do not present it as current while the reading is
     // unknown.
-    const plan = snapshot.error ? '' : (snapshot.plan ? ` (${snapshot.plan})` : '');
-    const resetCount = resetAvailabilityText(snapshot.resets_available);
     this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-      `${name}${plan}${resetCount}`, { reactive: false }));
+      cliSectionHeading(name, snapshot), { reactive: false }));
     if (snapshot.error) {
       this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
         `   ⚠ ${snapshot.error}`, { reactive: false }));

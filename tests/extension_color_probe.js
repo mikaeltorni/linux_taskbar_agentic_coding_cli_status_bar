@@ -98,6 +98,16 @@ const results = {
   multiple_resets_available: resetAvailabilityText(2),
   missing_resets_available: resetAvailabilityText(undefined),
   zero_resets_available: resetAvailabilityText(0),
+  team_instance_heading: cliSectionHeading(
+    codexInstanceTitle({id: 1, plan: 'team', resets_available: 2}),
+    {plan: 'team', resets_available: 2}),
+  personal_instance_heading: cliSectionHeading(
+    codexInstanceTitle({id: 2, label: 'main', resets_available: 1}),
+    {plan: 'team', resets_available: 1}),
+  missing_instance_heading: cliSectionHeading(
+    codexInstanceTitle({id: 1}), {plan: 'team'}),
+  zero_instance_heading: cliSectionHeading(
+    codexInstanceTitle({id: 1}), {plan: 'team', resets_available: 0}),
   fable_exhausted: segmentMarkup('CC', {windows: [
     {label: '5h', used_percent: 100, resets_at: NOW + 3300},
     {label: 'week', used_percent: 59, resets_at: 1783617000},

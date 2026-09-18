@@ -20,7 +20,7 @@ use crate::config::{
 };
 use crate::http::HttpOpener;
 use crate::logging;
-use crate::snapshot::carry_last_reading;
+use crate::snapshot::{carry_last_reading, carry_reset_metadata};
 use crate::tmux::{
     codex_console_window, console_codex_home, ensure_console, real_sleep, refresh_and_capture,
     take_codex_console_refresh, tmux_available, tmux_console_cli_ids, CodexConsole, RealTmux,
@@ -165,19 +165,7 @@ fn codex_same_account_last<'a>(
 }
 
 fn carry_codex_reset_metadata(snapshot: Value, last: Option<&Value>) -> Value {
-    let Some(last) = last else {
-        return snapshot;
-    };
-    if snapshot.get("resets_available").is_some() {
-        return snapshot;
-    }
-    let mut carried = snapshot;
-    for key in ["resets_available", "resets_checked_at"] {
-        if let Some(value) = last.get(key) {
-            carried[key] = value.clone();
-        }
-    }
-    carried
+    carry_reset_metadata(snapshot, last)
 }
 
 fn carry_window_resets(snapshot: Value, fallbacks: &[&Value]) -> Value {
@@ -1147,6 +1135,16 @@ fn apply_codex_live_pane(
             map.remove(key);
         }
     }
+    let instance_last = last.and_then(|snapshot| {
+        snapshot
+            .get("instances")
+            .and_then(Value::as_array)
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|row| row.get("id").and_then(Value::as_i64) == Some(owner_id))
+            })
+    });
+    base = carry_reset_metadata(base, instance_last);
     // A capture whose account is known from the console process environment is
     // authoritative for that account, even when its percentages look older
     // than the rollout reading.
@@ -1162,7 +1160,7 @@ fn apply_codex_live_pane(
         pane_observed_at,
         merge_mode,
         stale_after,
-        last,
+        instance_last.or(last),
         now,
     );
     if let Some(target) = rows.get_mut(index) {
@@ -2292,6 +2290,201 @@ mod tests {
             applied["instances"][0]["windows"][0]["used_percent"],
             json!(100.0)
         );
+    }
+
+    fn heatmap_status_pane() -> &'static str {
+        concat!(
+            "/usage daily\n",
+            " Token activity   last 12 months\n",
+            "   daily · weekly · cumulative\n",
+            "│  5h limit:             [████████████████████] 100% left (resets 20:12) │\n",
+            "│  Weekly limit:         [██████████░░░░░░░░░░] 62% left               │\n",
+        )
+    }
+
+    #[test]
+    fn heatmap_status_capture_keeps_each_instance_reset_count() {
+        let snapshot = json!({
+            "selected": 1,
+            "plan": "team",
+            "observed_at": 50.0,
+            "windows": [
+                {"label": "5h", "used_percent": 0.0},
+                {"label": "week", "used_percent": 38.0}
+            ],
+            "instances": [
+                {
+                    "id": 1,
+                    "home": "/home/u/.codex",
+                    "plan": "team",
+                    "resets_available": 2,
+                    "resets_checked_at": 40.0,
+                    "windows": [
+                        {"label": "5h", "used_percent": 0.0},
+                        {"label": "week", "used_percent": 38.0}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "home": "/home/u/.codex-account-2",
+                    "plan": "team",
+                    "resets_available": 1,
+                    "resets_checked_at": 40.0,
+                    "windows": [
+                        {"label": "5h", "used_percent": 10.0},
+                        {"label": "week", "used_percent": 4.0}
+                    ]
+                },
+            ]
+        });
+        let team = apply_codex_live_pane(
+            snapshot,
+            heatmap_status_pane(),
+            80.0,
+            "auto",
+            1800,
+            None,
+            80.0,
+            Some("/home/u/.codex"),
+        );
+        assert_eq!(team["instances"][0]["resets_available"], json!(2));
+        assert_eq!(team["instances"][1]["resets_available"], json!(1));
+        let personal = apply_codex_live_pane(
+            team,
+            heatmap_status_pane(),
+            81.0,
+            "auto",
+            1800,
+            None,
+            81.0,
+            Some("/home/u/.codex-account-2"),
+        );
+        assert_eq!(personal["instances"][0]["resets_available"], json!(2));
+        assert_eq!(personal["instances"][1]["resets_available"], json!(1));
+    }
+
+    #[test]
+    fn usage_menu_then_status_sets_independent_team_and_personal_reset_counts() {
+        let snapshot = json!({
+            "selected": 1,
+            "plan": "team",
+            "observed_at": 50.0,
+            "windows": [{"label": "5h", "used_percent": 1.0}],
+            "instances": [
+                {
+                    "id": 1,
+                    "home": "/home/u/.codex",
+                    "plan": "team",
+                    "windows": [{"label": "5h", "used_percent": 1.0}]
+                },
+                {
+                    "id": 2,
+                    "home": "/home/u/.codex-account-2",
+                    "plan": "team",
+                    "windows": [{"label": "5h", "used_percent": 10.0}]
+                },
+            ]
+        });
+        let team_pane = concat!(
+            "Usage\n› 1. Show usage\n  2. Redeem usage limit reset\n",
+            "You have 2 usage limit resets available.\n",
+            "5h limit: 99% left (resets 20:12)\n",
+            "Weekly limit: 9% left\n",
+        );
+        let personal_pane = concat!(
+            "You have 1 usage limit reset available.\n",
+            "5h limit: 90% left (resets 14:30)\n",
+            "Weekly limit: 80% left\n",
+        );
+        let after_team = apply_codex_live_pane(
+            snapshot,
+            team_pane,
+            80.0,
+            "tmux",
+            1800,
+            None,
+            80.0,
+            Some("/home/u/.codex"),
+        );
+        let after_both = apply_codex_live_pane(
+            after_team,
+            personal_pane,
+            81.0,
+            "tmux",
+            1800,
+            None,
+            81.0,
+            Some("/home/u/.codex-account-2"),
+        );
+        assert_eq!(after_both["instances"][0]["resets_available"], json!(2));
+        assert_eq!(after_both["instances"][1]["resets_available"], json!(1));
+        assert_eq!(after_both["resets_available"], json!(2));
+    }
+
+    #[test]
+    fn poll_once_keeps_team_and_personal_reset_counts_after_heatmap_tick() {
+        let sandbox = Sandbox::new();
+        configure(true);
+        let first = sandbox.home.join(".codex");
+        let second = sandbox.home.join(".codex-account-2");
+        write_instance_registry(&sandbox.home, &[(1, first.clone()), (2, second.clone())], 1);
+        save_pane_capture(
+            &sandbox.home,
+            "codex",
+            concat!(
+                "Usage\n› 1. Show usage\n",
+                "You have 2 usage limit resets available.\n",
+                "│  5h limit:      [█░░░░░░░░░░░░░░░░░░░] 90% left (resets 17:05) │\n",
+                "│  Weekly limit:  [█░░░░░░░░░░░░░░░░░░░] 95% left               │\n",
+            ),
+        );
+        save_pane_capture(
+            &sandbox.home,
+            "codex-2",
+            concat!(
+                "You have 1 usage limit reset available.\n",
+                "│  5h limit:      [██░░░░░░░░░░░░░░░░░░] 80% left (resets 18:20) │\n",
+                "│  Weekly limit:  [█░░░░░░░░░░░░░░░░░░░] 90% left               │\n",
+            ),
+        );
+        let hooks = PollHooks {
+            tmux: Some(Arc::new(PerWindowTmux {
+                homes: std::collections::HashMap::from([
+                    ("codex".to_string(), first.display().to_string()),
+                    ("codex-2".to_string(), second.display().to_string()),
+                ]),
+            })),
+            tmux_available: Some(true),
+            ..PollHooks::default()
+        };
+        let never_refresh = |_: &str, _: &str, _: &str| false;
+        let first_tick = poll_once(
+            Some(&sandbox.home),
+            None,
+            Some(NOW),
+            Some(&never_refresh),
+            None,
+            &hooks,
+        );
+        let instances = first_tick["clis"]["codex"]["instances"].as_array().unwrap();
+        assert_eq!(instances[0]["resets_available"], json!(2));
+        assert_eq!(instances[1]["resets_available"], json!(1));
+        save_pane_capture(&sandbox.home, "codex", heatmap_status_pane());
+        save_pane_capture(&sandbox.home, "codex-2", heatmap_status_pane());
+        let second_tick = poll_once(
+            Some(&sandbox.home),
+            Some(&first_tick),
+            Some(NOW + 5.0),
+            Some(&never_refresh),
+            None,
+            &hooks,
+        );
+        let instances = second_tick["clis"]["codex"]["instances"]
+            .as_array()
+            .unwrap();
+        assert_eq!(instances[0]["resets_available"], json!(2));
+        assert_eq!(instances[1]["resets_available"], json!(1));
+        assert_eq!(second_tick["clis"]["codex"]["resets_available"], json!(2));
     }
 
     #[test]

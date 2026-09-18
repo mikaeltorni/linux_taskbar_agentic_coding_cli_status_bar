@@ -58,6 +58,26 @@ pub fn carry_last_reading(mut snapshot: Value, last_result: Option<&Value>) -> V
     snapshot
 }
 
+/// Copy Codex usage-limit reset counts from a previous snapshot.
+///
+/// `/usage daily` heatmaps and `/status` panes do not include the count, so a
+/// later capture must not erase a count this account already reported.
+pub fn carry_reset_metadata(snapshot: Value, last: Option<&Value>) -> Value {
+    let Some(last) = last else {
+        return snapshot;
+    };
+    if snapshot.get("resets_available").is_some() {
+        return snapshot;
+    }
+    let mut carried = snapshot;
+    for key in ["resets_available", "resets_checked_at"] {
+        if let Some(value) = last.get(key) {
+            carried[key] = value.clone();
+        }
+    }
+    carried
+}
+
 /// Return windows from a snapshot, or an empty slice.
 pub fn windows_of(snapshot: &Value) -> &[Value] {
     snapshot
@@ -65,4 +85,26 @@ pub fn windows_of(snapshot: &Value) -> &[Value] {
         .and_then(Value::as_array)
         .map(|a| a.as_slice())
         .unwrap_or(&[])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn carry_reset_metadata_keeps_a_positive_count_when_the_new_reading_has_none() {
+        let snapshot = json!({"windows": [{"label": "5h", "used_percent": 1.0}]});
+        let last = json!({"resets_available": 2, "resets_checked_at": 40.0});
+        let carried = carry_reset_metadata(snapshot, Some(&last));
+        assert_eq!(carried["resets_available"], json!(2));
+        assert_eq!(carried["resets_checked_at"], json!(40.0));
+    }
+
+    #[test]
+    fn carry_reset_metadata_does_not_overwrite_a_fresh_count() {
+        let snapshot = json!({"resets_available": 1});
+        let last = json!({"resets_available": 2});
+        let carried = carry_reset_metadata(snapshot, Some(&last));
+        assert_eq!(carried["resets_available"], json!(1));
+    }
 }
