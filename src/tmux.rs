@@ -579,18 +579,17 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
 /// Open the Codex `/usage` menu that prints the reset count.
 ///
 /// Codex 0.141+ autocompletes typed `/usage` to `/usage daily` (a heatmap with
-/// no count). Escape after the typed command dismisses that completion so
-/// Enter submits the bare menu. Never select the redeem entry.
-fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, sleeper: &dyn Fn(f64)) -> bool {
+/// no count) if Enter arrives after the popup has opened. Sending `/usage` and
+/// Enter in one burst submits the bare menu. A later Escape would cancel the
+/// composer instead of dismissing completion. Never select the redeem entry.
+fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, _sleeper: &dyn Fn(f64)) -> bool {
     logging::debug(format!(
         "codex {target}: submitting bare /usage menu, not /usage daily"
     ));
-    for (keys, pause) in [
-        (vec!["Escape".into()], 0.0),
-        (vec!["C-u".into()], 0.0),
-        (vec!["/usage".into()], 0.3),
-        (vec!["Escape".into()], 0.3),
-        (vec!["Enter".into()], 0.0),
+    for keys in [
+        vec!["Escape".into()],
+        vec!["C-u".into()],
+        vec!["/usage".into(), "Enter".into()],
     ] {
         let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
         args.extend(keys);
@@ -598,9 +597,6 @@ fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, sleeper: &dyn Fn(f
         if result.0 != 0 {
             logging::warn(format!("send-keys to {target} failed: {}", result.2.trim()));
             return false;
-        }
-        if pause > 0.0 {
-            sleeper(pause);
         }
     }
     true
@@ -887,29 +883,23 @@ mod tests {
             !payloads.iter().any(|k| k.contains("daily")),
             "typed /usage must not become /usage daily: {payloads:?}"
         );
-        let usage_at = payloads
+        let usage_send = send_keys
             .iter()
-            .position(|k| k == "/usage")
+            .find(|c| c.iter().any(|k| k == "/usage"))
             .expect("/usage must be typed");
         assert_eq!(
-            payloads.get(usage_at + 1).map(String::as_str),
-            Some("Escape"),
-            "dismiss /usage daily autocomplete before Enter: {payloads:?}"
+            usage_send,
+            &["send-keys", "-t", "acs:codex", "/usage", "Enter"]
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect::<Vec<_>>(),
+            "submit /usage and Enter in one burst so autocomplete cannot insert daily: {send_keys:?}"
         );
-        assert_eq!(
-            payloads.get(usage_at + 2).map(String::as_str),
-            Some("Enter"),
-            "submit the bare /usage menu after dismissing autocomplete: {payloads:?}"
-        );
-        let usage_end = payloads
-            .iter()
-            .position(|k| k == "/status")
-            .unwrap_or(payloads.len());
         assert!(
-            !payloads[usage_at..usage_end]
+            !usage_send
                 .iter()
                 .any(|k| k == "2" || k == "Down" || k == "BSpace"),
-            "must not enter the redeem menu action: {payloads:?}"
+            "must not enter the redeem menu action: {usage_send:?}"
         );
     }
 
