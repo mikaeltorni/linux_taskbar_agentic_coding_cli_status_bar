@@ -302,7 +302,9 @@ fn pane_window_reset(
     stop_keywords: &[&Regex],
     now: f64,
     max_seconds: Option<i64>,
+    last_match: bool,
 ) -> Option<i64> {
+    let mut found = None;
     for (index, line) in lines.iter().enumerate() {
         if !keyword.is_match(line) {
             continue;
@@ -310,6 +312,7 @@ fn pane_window_reset(
         if line.to_ascii_lowercase().contains("gpt-reserve") {
             continue;
         }
+        let mut epoch = None;
         for offset in 0..3 {
             let probe = index + offset;
             if probe >= lines.len() {
@@ -318,16 +321,19 @@ fn pane_window_reset(
             if offset > 0 && stop_keywords.iter().any(|k| k.is_match(lines[probe])) {
                 break;
             }
-            if let Some(epoch) = pane_period_end_epoch(lines[probe], now)
+            epoch = pane_period_end_epoch(lines[probe], now)
                 .or_else(|| pane_reset_duration_epoch(lines[probe], now))
-                .or_else(|| pane_reset_epoch(lines[probe], now, max_seconds))
-            {
-                return Some(epoch);
+                .or_else(|| pane_reset_epoch(lines[probe], now, max_seconds));
+            if epoch.is_some() {
+                break;
             }
         }
-        return None;
+        found = epoch.or(found);
+        if found.is_some() && !last_match {
+            return found;
+        }
     }
-    None
+    found
 }
 
 /// How many lines after a window's keyword line may still carry its qualifier.
@@ -413,7 +419,9 @@ fn pane_window_percent(
     keyword: &Regex,
     stop_keywords: &[&Regex],
     text_polarity: Option<PanePolarity>,
+    last_match: bool,
 ) -> Option<f64> {
+    let mut found = None;
     for (index, line) in lines.iter().enumerate() {
         if !keyword.is_match(line) {
             continue;
@@ -425,18 +433,27 @@ fn pane_window_percent(
         if matched.is_none() && index + 1 < lines.len() {
             matched = re(PANE_PERCENT).captures(lines[index + 1]);
         }
-        let caps = matched?;
-        let percent_val = caps.get(1)?.as_str().parse::<f64>().ok()?;
-        let percent = to_percent(&json!(percent_val))?;
+        let Some(caps) = matched else {
+            continue;
+        };
+        let Ok(percent_val) = caps.get(1).unwrap().as_str().parse::<f64>() else {
+            continue;
+        };
+        let Some(percent) = to_percent(&json!(percent_val)) else {
+            continue;
+        };
         let polarity = pane_region_polarity(lines, index, stop_keywords).or(text_polarity);
-        return match polarity {
-            Some(PanePolarity::Left) => Some(100.0 - percent),
+        found = Some(match polarity {
+            Some(PanePolarity::Left) => 100.0 - percent,
             // No qualifier anywhere: the historical readings are bare `NN%`
             // percentages that have always meant consumed budget.
-            Some(PanePolarity::Used) | None => Some(percent),
-        };
+            Some(PanePolarity::Used) | None => percent,
+        });
+        if !last_match {
+            return found;
+        }
     }
-    None
+    found
 }
 
 /// Parse captured tmux pane text into the shared snapshot shape.
@@ -449,6 +466,7 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
         .map(|k| compiled_keyword(k.pattern))
         .collect();
     let text_polarity = pane_text_polarity(text);
+    let last_match = cli_id == "codex";
     let mut windows = Vec::new();
     for (idx, spec) in keywords.iter().enumerate() {
         let keyword = compiled[idx];
@@ -458,13 +476,22 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
             .filter(|(i, _)| *i != idx)
             .map(|(_, r)| *r)
             .collect();
-        let Some(percent) = pane_window_percent(&lines, keyword, &others, text_polarity) else {
+        let Some(percent) =
+            pane_window_percent(&lines, keyword, &others, text_polarity, last_match)
+        else {
             continue;
         };
         windows.push(Window {
             label: spec.label.into(),
             used_percent: percent,
-            resets_at: pane_window_reset(&lines, keyword, &others, now, spec.max_seconds),
+            resets_at: pane_window_reset(
+                &lines,
+                keyword,
+                &others,
+                now,
+                spec.max_seconds,
+                last_match,
+            ),
         });
     }
     let error = if windows.is_empty() {
@@ -475,13 +502,32 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
     let observed = if windows.is_empty() { None } else { Some(now) };
     let mut snap = snapshot("tmux_pane", observed, None, windows, error);
     if cli_id == "codex" {
-        if let Some(caps) = re(CODEX_RESETS_AVAILABLE).captures(text) {
+        if let Some(caps) = re(CODEX_RESETS_AVAILABLE).captures_iter(text).last() {
             if let Ok(count) = caps.get(1).unwrap().as_str().parse::<i64>() {
                 snap["resets_available"] = json!(count);
             }
         }
     }
     snap
+}
+
+/// Return whether a Codex pane capture failed to run `/status`.
+///
+/// Pasting `/usage` can leave the composer on `/usage`, so the follow-up
+/// `/status` becomes `/usagestatus`. Leftover `/status` boxes in that capture
+/// must not replace a newer headless reading (for example after a usage-limit
+/// reset).
+pub fn codex_status_send_failed(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let prompt = ["› /", "> /", "❯ /"]
+        .iter()
+        .filter_map(|marker| lower.rfind(marker))
+        .max();
+    let Some(at) = prompt else {
+        return lower.contains("unrecognized command '/usagestatus'");
+    };
+    let line = lower[at..].lines().next().unwrap_or("");
+    line.contains("/usagestatus")
 }
 
 #[cfg(test)]
@@ -648,6 +694,43 @@ mod tests {
             percents(&result),
             vec![("5h".into(), 40.0), ("week".into(), 22.0)]
         );
+    }
+
+    #[test]
+    fn later_status_box_wins_over_leftover_exhausted_weekly() {
+        let text = concat!(
+            "│  5h limit:             [████████████████████] 100% left (resets 05:11) │\n",
+            "│  Weekly limit:         [░░░░░░░░░░░░░░░░░░░░] 0% left                  │\n",
+            "• Unrecognized command '/usagestatus'.\n",
+            "│  5h limit:             [████████░░░░░░░░░░░░] 84% left (resets 05:11) │\n",
+            "│  Weekly limit:         [███████████████████░] 97% left                 │\n",
+        );
+        let result = parse_pane("codex", text, Some(1000.0));
+        assert_eq!(
+            percents(&result),
+            vec![("5h".into(), 16.0), ("week".into(), 3.0)]
+        );
+    }
+
+    #[test]
+    fn later_reset_count_wins_over_a_stale_hint() {
+        let text = concat!(
+            "You have 1 usage limit reset available.\n",
+            "5h limit: 100% used\n",
+            "You have 0 usage limit resets available.\n",
+        );
+        let result = parse_pane("codex", text, Some(1000.0));
+        assert_eq!(result["resets_available"], json!(0));
+    }
+
+    #[test]
+    fn failed_usagestatus_send_is_detected() {
+        assert!(codex_status_send_failed(
+            "Weekly limit: 0% left\n› /usagestatus\n  gpt-6-astra high\n"
+        ));
+        assert!(!codex_status_send_failed(
+            "Weekly limit: 97% left\n› /status\n"
+        ));
     }
 
     #[test]
