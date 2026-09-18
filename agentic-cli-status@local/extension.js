@@ -71,6 +71,9 @@ const INSTANCE_TAG_FIRST_RGB = [0x7e, 0xc8, 0xff];
 const INSTANCE_TAG_LAST_RGB = [0xa8, 0x56, 0xe8];
 const EMPTY_COLOR = '#ff0000';
 const NEUTRAL_COLOR = '#9a9996';
+// ClutterText ignores `foreground` on the first glyph (mutter#1324). A hair
+// space before the first colored span makes 24h the second glyph so it paints.
+const CLUTTER_MARKUP_PREFIX = '\u200A';
 
 // Ordered log levels; everything at or above ACTIVE_LOG_LEVEL is emitted.
 const LOG_LEVELS = { verbose: 0, debug: 1, info: 2, warn: 3, error: 4 };
@@ -653,12 +656,11 @@ function codexResetForecastMarkup(forecast) {
   const staleMark = forecast.stale
     ? `<span foreground="${NEUTRAL_COLOR}">?</span>`
     : '';
-  // ClutterText ignores `foreground` on a span that starts the string
-  // (https://gitlab.gnome.org/GNOME/mutter/-/issues/1324). The forecast sits
-  // at the left of the Codex segment, so a leading 24h span would stay the
-  // theme color while 48h (nested later) still painted. Wrap in a plain span
-  // so both digits keep percentColor.
-  return `<span>${markup}${staleMark}</span>`;
+  // ClutterText ignores `foreground` on the first glyph (mutter#1324). A
+  // wrapping span is not enough: the 24h digit would still start at index 0
+  // and stay the theme color while 48h painted. Prefix a hair-space glyph so
+  // percentColor applies to 24h.
+  return `${CLUTTER_MARKUP_PREFIX}<span>${markup}${staleMark}</span>`;
 }
 
 /**

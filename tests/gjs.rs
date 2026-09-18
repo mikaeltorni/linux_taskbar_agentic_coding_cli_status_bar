@@ -112,6 +112,7 @@ fn agentic_results() -> Option<Value> {
         "GRADIENT_LOW_RGB",
         "EMPTY_COLOR",
         "NEUTRAL_COLOR",
+        "CLUTTER_MARKUP_PREFIX",
         "INSTANCE_TAG_FIRST_RGB",
         "INSTANCE_TAG_LAST_RGB",
     ];
@@ -312,22 +313,27 @@ fn gradient_and_segments() {
         forecast_24_48.contains(&format!(r#"<span foreground="{color_48}">48%</span>"#)),
         "48h 48% must use percentColor(48)={color_48}: {forecast_24_48}"
     );
-    // ClutterText drops `foreground` on a span that starts the string
-    // (mutter#1324). The 24h digit is leftmost on the Codex segment, so the
-    // colored 24h span must be nested — not the first tag in the markup.
+    // ClutterText drops `foreground` on the first glyph (mutter#1324). A
+    // wrapping span is not enough; 24h must not start the string.
+    let prefix = js["clutter_markup_prefix"].as_str().unwrap();
+    assert_eq!(prefix, "\u{200A}");
+    assert!(
+        forecast_24_48.starts_with(prefix),
+        "24h percentColor needs a glyph before the first colored span: {forecast_24_48:?}"
+    );
     assert!(
         !forecast_24_48.starts_with("<span foreground="),
         "24h percentColor is ignored when it is the leading span: {forecast_24_48}"
     );
     assert!(
         forecast_24_48.contains(&format!(
-            "<span><span foreground=\"{color_26}\">26%</span>"
+            "{prefix}<span><span foreground=\"{color_26}\">26%</span>"
         )),
-        "24h digit must be nested so Clutter applies percentColor: {forecast_24_48}"
+        "24h digit must follow the prefix so Clutter applies percentColor: {forecast_24_48:?}"
     );
     assert!(
-        !forecast_100_0.starts_with("<span foreground="),
-        "forecast markup itself must not start with a foreground span: {forecast_100_0}"
+        forecast_100_0.starts_with(prefix) && !forecast_100_0.starts_with("<span foreground="),
+        "forecast markup itself must not start with a foreground span: {forecast_100_0:?}"
     );
     assert_eq!(
         js["forecast_menu_entries"],
