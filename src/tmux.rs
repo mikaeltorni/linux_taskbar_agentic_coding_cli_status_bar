@@ -140,6 +140,11 @@ pub trait TmuxRunner: Send + Sync {
     fn process_age_seconds(&self, pid: &str) -> Option<f64> {
         read_proc_age_seconds(pid)
     }
+
+    /// Nul-separated `/proc/<pid>/cmdline` of a pane process.
+    fn process_cmdline(&self, pid: &str) -> Option<String> {
+        read_proc_cmdline(pid)
+    }
 }
 
 /// Production tmux runner.
@@ -300,13 +305,38 @@ fn homes_match(left: &str, right: &Path) -> bool {
     Path::new(left) == right
 }
 
-/// Kill a Codex debug window when it is logged into a different ACC instance.
+/// Return whether a pane cmdline is already running `binary`.
+///
+/// Args are nul-separated as in `/proc/<pid>/cmdline`. A missing cmdline is
+/// treated as unknown (not a mismatch) so tests that do not stub it keep
+/// existing windows.
+fn cmdline_runs_binary(cmdline: &str, binary: &Path) -> bool {
+    let wanted = binary.to_string_lossy();
+    cmdline
+        .split('\0')
+        .any(|arg| !arg.is_empty() && (Path::new(arg) == binary || arg == wanted.as_ref()))
+}
+
+fn read_proc_cmdline(pid: &str) -> Option<String> {
+    if !pid.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Kill a Codex debug window when it is logged into a different ACC instance
+/// or still running an older `codex` binary than the poller would launch.
 fn recreate_codex_window_if_stale(
     session: &str,
     existing: &mut HashSet<String>,
     tmux: &dyn TmuxRunner,
     window: &str,
     desired_home: &Path,
+    desired_binary: Option<&Path>,
 ) {
     if !existing.contains(window) {
         return;
@@ -315,10 +345,14 @@ fn recreate_codex_window_if_stale(
         return;
     };
     let current = tmux.process_codex_home(&pid);
-    if current
+    let home_ok = current
         .as_deref()
-        .is_some_and(|home| homes_match(home, desired_home))
-    {
+        .is_some_and(|home| homes_match(home, desired_home));
+    let binary_ok = match (desired_binary, tmux.process_cmdline(&pid)) {
+        (Some(binary), Some(cmd)) => cmdline_runs_binary(&cmd, binary),
+        _ => true,
+    };
+    if home_ok && binary_ok {
         return;
     }
     // The launcher execs through wrapper processes before the CLI settles on
@@ -334,11 +368,20 @@ fn recreate_codex_window_if_stale(
         ));
         return;
     }
-    logging::info(format!(
-        "recreating Codex debug console {window} with CODEX_HOME={} (was {})",
-        desired_home.display(),
-        current.as_deref().unwrap_or("unset")
-    ));
+    if !binary_ok {
+        logging::info(format!(
+            "recreating Codex debug console {window} with {} (pane still on an older binary)",
+            desired_binary
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "codex".into())
+        ));
+    } else {
+        logging::info(format!(
+            "recreating Codex debug console {window} with CODEX_HOME={} (was {})",
+            desired_home.display(),
+            current.as_deref().unwrap_or("unset")
+        ));
+    }
     if !kill_console_window(session, tmux, window) {
         return;
     }
@@ -476,6 +519,7 @@ pub fn ensure_console(
             .filter(|entry| entry.cli_id == "codex")
             .map(|entry| entry.window.clone())
             .collect();
+        let desired_binary = resolve_cli_binary("codex", home);
         for entry in &desired {
             if let Some(codex_home) = &entry.codex_home {
                 recreate_codex_window_if_stale(
@@ -484,6 +528,7 @@ pub fn ensure_console(
                     tmux,
                     &entry.window,
                     codex_home,
+                    desired_binary.as_deref(),
                 );
             }
         }
@@ -578,29 +623,24 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
 
 /// Open the Codex `/usage` menu that prints the reset count.
 ///
-/// Codex 0.141+ may treat a non-literal `/usage` as `/usage daily` (heatmap,
-/// no count). Paste `/usage` with `send-keys -l`, wait the same 0.3s `/status`
-/// uses so the composer has the text, then Enter. Do not Escape after typing:
-/// that cancels the composer. Never select the redeem entry.
-fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, sleeper: &dyn Fn(f64)) -> bool {
+/// Codex 0.141+ autocompletes typed `/usage` to `/usage daily` (heatmap, no
+/// count). Paste `/usage` plus a newline as one literal so the popup cannot
+/// insert `daily`. Never select the redeem entry.
+fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, _sleeper: &dyn Fn(f64)) -> bool {
     logging::debug(format!(
         "codex {target}: submitting bare /usage menu, not /usage daily"
     ));
     for keys in [
         vec!["Escape".into()],
         vec!["C-u".into()],
-        vec!["-l".into(), "/usage".into()],
-        vec!["Enter".into()],
+        vec!["-l".into(), "/usage\n".into()],
     ] {
         let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
-        args.extend(keys.clone());
+        args.extend(keys);
         let result = tmux.run(&args);
         if result.0 != 0 {
             logging::warn(format!("send-keys to {target} failed: {}", result.2.trim()));
             return false;
-        }
-        if keys.iter().any(|k| k == "/usage") {
-            sleeper(0.3);
         }
     }
     true
@@ -734,6 +774,10 @@ mod tests {
 
         fn process_codex_home(&self, _pid: &str) -> Option<String> {
             self.codex_home_env.clone()
+        }
+
+        fn process_cmdline(&self, _pid: &str) -> Option<String> {
+            None
         }
     }
 
@@ -887,35 +931,23 @@ mod tests {
             !payloads.iter().any(|k| k.contains("daily")),
             "typed /usage must not become /usage daily: {payloads:?}"
         );
-        let usage_idx = send_keys
+        let usage_send = send_keys
             .iter()
-            .position(|c| c.iter().any(|k| k == "/usage"))
+            .find(|c| c.iter().any(|k| k.contains("/usage")))
             .expect("/usage must be typed");
         assert_eq!(
-            send_keys[usage_idx],
-            ["send-keys", "-t", "acs:codex", "-l", "/usage"]
+            usage_send,
+            &["send-keys", "-t", "acs:codex", "-l", "/usage\n"]
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect::<Vec<_>>(),
-            "type /usage as a literal string: {send_keys:?}"
-        );
-        assert_eq!(
-            send_keys.get(usage_idx + 1).map(Vec::as_slice),
-            Some(
-                ["send-keys", "-t", "acs:codex", "Enter"]
-                    .iter()
-                    .map(|s| (*s).to_string())
-                    .collect::<Vec<_>>()
-                    .as_slice()
-            ),
-            "press Enter immediately after /usage with no autocomplete pause: {send_keys:?}"
+            "paste /usage plus newline so autocomplete cannot insert daily: {send_keys:?}"
         );
         assert!(
-            !send_keys[usage_idx]
+            !usage_send
                 .iter()
-                .chain(send_keys.get(usage_idx + 1).into_iter().flatten())
                 .any(|k| k == "2" || k == "Down" || k == "BSpace"),
-            "must not enter the redeem menu action: {send_keys:?}"
+            "must not enter the redeem menu action: {usage_send:?}"
         );
     }
 
@@ -1005,6 +1037,8 @@ mod tests {
         homes: std::collections::HashMap<String, String>,
         /// Age every pane reports; None keeps the panes old enough to judge.
         pane_age_seconds: Option<f64>,
+        /// Optional `/proc/<pid>/cmdline` per window pid (window name).
+        cmdlines: std::collections::HashMap<String, String>,
     }
 
     impl TmuxRunner for MultiWindowTmux {
@@ -1032,6 +1066,10 @@ mod tests {
 
         fn process_age_seconds(&self, _pid: &str) -> Option<f64> {
             self.pane_age_seconds
+        }
+
+        fn process_cmdline(&self, pid: &str) -> Option<String> {
+            self.cmdlines.get(pid).cloned()
         }
     }
 
@@ -1082,6 +1120,7 @@ mod tests {
                 "codex".to_string(),
                 first.display().to_string(),
             )]),
+            cmdlines: std::collections::HashMap::new(),
         };
         assert!(ensure_console(
             "acs",
@@ -1143,6 +1182,7 @@ mod tests {
                 "codex-2".to_string(),
                 sandbox.home.join(".codex").display().to_string(),
             )]),
+            cmdlines: std::collections::HashMap::new(),
         };
         assert!(ensure_console(
             "acs",
@@ -1179,6 +1219,7 @@ mod tests {
                 "codex-2".to_string(),
                 sandbox.home.join(".codex").display().to_string(),
             )]),
+            cmdlines: std::collections::HashMap::new(),
         };
         assert!(ensure_console(
             "acs",
@@ -1203,6 +1244,48 @@ mod tests {
     }
 
     #[test]
+    fn a_console_on_an_old_codex_binary_is_recreated() {
+        let sandbox = Sandbox::new();
+        let original_path = install_fake_codex(&sandbox.home);
+        let first = sandbox.home.join(".codex");
+        let wanted = sandbox.home.join("bin").join("codex");
+        let tmux = MultiWindowTmux {
+            pane_age_seconds: Some(CONSOLE_SETTLE_SECONDS + 1.0),
+            calls: Mutex::new(Vec::new()),
+            windows: vec!["codex".into()],
+            homes: std::collections::HashMap::from([(
+                "codex".to_string(),
+                first.display().to_string(),
+            )]),
+            cmdlines: std::collections::HashMap::from([(
+                "codex".to_string(),
+                "node\0/usr/local/bin/codex".into(),
+            )]),
+        };
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[CodexConsole {
+                window: "codex".into(),
+                home: first,
+                instance_id: Some(1),
+            }],
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.first().map(String::as_str) == Some("kill-window")),
+            "a console still running /usr/local/bin/codex is rebuilt onto {}",
+            wanted.display()
+        );
+        restore_path(original_path);
+    }
+
+    #[test]
     fn console_of_an_unregistered_account_is_closed() {
         let sandbox = Sandbox::new();
         let original_path = install_fake_codex(&sandbox.home);
@@ -1218,6 +1301,7 @@ mod tests {
                     sandbox.home.join(".codex-account-3").display().to_string(),
                 ),
             ]),
+            cmdlines: std::collections::HashMap::new(),
         };
         assert!(ensure_console(
             "acs",
