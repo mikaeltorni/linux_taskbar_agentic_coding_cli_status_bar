@@ -559,7 +559,7 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
     for keys in [
         vec!["Escape".into()],
         vec!["C-u".into()],
-        vec![command.to_string()],
+        vec!["-l".into(), command.to_string()],
         vec!["Enter".into()],
     ] {
         let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
@@ -569,7 +569,7 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
             logging::warn(format!("send-keys to {target} failed: {}", result.2.trim()));
             return false;
         }
-        if keys.len() == 1 && keys[0] == command {
+        if keys.iter().any(|k| k == command) {
             sleeper(0.3);
         }
     }
@@ -578,12 +578,11 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
 
 /// Open the Codex `/usage` menu that prints the reset count.
 ///
-/// Codex 0.141+ autocompletes typed `/usage` to `/usage daily` (a heatmap with
-/// no count) if Enter arrives after the popup has opened. Type `/usage` as a
-/// literal string and press Enter immediately, with no pause for the popup.
-/// A later Escape would cancel the composer instead of dismissing completion.
-/// Never select the redeem entry.
-fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, _sleeper: &dyn Fn(f64)) -> bool {
+/// Codex 0.141+ may treat a non-literal `/usage` as `/usage daily` (heatmap,
+/// no count). Paste `/usage` with `send-keys -l`, wait the same 0.3s `/status`
+/// uses so the composer has the text, then Enter. Do not Escape after typing:
+/// that cancels the composer. Never select the redeem entry.
+fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, sleeper: &dyn Fn(f64)) -> bool {
     logging::debug(format!(
         "codex {target}: submitting bare /usage menu, not /usage daily"
     ));
@@ -594,11 +593,14 @@ fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, _sleeper: &dyn Fn(
         vec!["Enter".into()],
     ] {
         let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
-        args.extend(keys);
+        args.extend(keys.clone());
         let result = tmux.run(&args);
         if result.0 != 0 {
             logging::warn(format!("send-keys to {target} failed: {}", result.2.trim()));
             return false;
+        }
+        if keys.iter().any(|k| k == "/usage") {
+            sleeper(0.3);
         }
     }
     true
@@ -875,7 +877,7 @@ mod tests {
             .filter(|c| c.first().map(String::as_str) == Some("send-keys"))
             .cloned()
             .collect();
-        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "/status"]
+        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
@@ -938,7 +940,7 @@ mod tests {
             "typed /usage must not become /usage daily: {payloads:?}"
         );
         let calls = tmux.calls.lock().unwrap().clone();
-        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "/status"]
+        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
