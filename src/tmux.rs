@@ -579,9 +579,10 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
 /// Open the Codex `/usage` menu that prints the reset count.
 ///
 /// Codex 0.141+ autocompletes typed `/usage` to `/usage daily` (a heatmap with
-/// no count) if Enter arrives after the popup has opened. Sending `/usage` and
-/// Enter in one burst submits the bare menu. A later Escape would cancel the
-/// composer instead of dismissing completion. Never select the redeem entry.
+/// no count) if Enter arrives after the popup has opened. Type `/usage` as a
+/// literal string and press Enter immediately, with no pause for the popup.
+/// A later Escape would cancel the composer instead of dismissing completion.
+/// Never select the redeem entry.
 fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, _sleeper: &dyn Fn(f64)) -> bool {
     logging::debug(format!(
         "codex {target}: submitting bare /usage menu, not /usage daily"
@@ -589,7 +590,8 @@ fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, _sleeper: &dyn Fn(
     for keys in [
         vec!["Escape".into()],
         vec!["C-u".into()],
-        vec!["/usage".into(), "Enter".into()],
+        vec!["-l".into(), "/usage".into()],
+        vec!["Enter".into()],
     ] {
         let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
         args.extend(keys);
@@ -883,23 +885,35 @@ mod tests {
             !payloads.iter().any(|k| k.contains("daily")),
             "typed /usage must not become /usage daily: {payloads:?}"
         );
-        let usage_send = send_keys
+        let usage_idx = send_keys
             .iter()
-            .find(|c| c.iter().any(|k| k == "/usage"))
+            .position(|c| c.iter().any(|k| k == "/usage"))
             .expect("/usage must be typed");
         assert_eq!(
-            usage_send,
-            &["send-keys", "-t", "acs:codex", "/usage", "Enter"]
+            send_keys[usage_idx],
+            ["send-keys", "-t", "acs:codex", "-l", "/usage"]
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect::<Vec<_>>(),
-            "submit /usage and Enter in one burst so autocomplete cannot insert daily: {send_keys:?}"
+            "type /usage as a literal string: {send_keys:?}"
+        );
+        assert_eq!(
+            send_keys.get(usage_idx + 1).map(Vec::as_slice),
+            Some(
+                ["send-keys", "-t", "acs:codex", "Enter"]
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect::<Vec<_>>()
+                    .as_slice()
+            ),
+            "press Enter immediately after /usage with no autocomplete pause: {send_keys:?}"
         );
         assert!(
-            !usage_send
+            !send_keys[usage_idx]
                 .iter()
+                .chain(send_keys.get(usage_idx + 1).into_iter().flatten())
                 .any(|k| k == "2" || k == "Down" || k == "BSpace"),
-            "must not enter the redeem menu action: {usage_send:?}"
+            "must not enter the redeem menu action: {send_keys:?}"
         );
     }
 
