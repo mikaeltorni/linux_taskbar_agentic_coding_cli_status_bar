@@ -603,9 +603,9 @@ pub fn ensure_console(
 fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn Fn(f64)) -> bool {
     for keys in [
         vec!["Escape".into()],
+        vec!["Escape".into()],
         vec!["C-u".into()],
-        vec!["-l".into(), command.to_string()],
-        vec!["Enter".into()],
+        vec!["-l".into(), format!("{command}\n")],
     ] {
         let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
         args.extend(keys.clone());
@@ -614,8 +614,8 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
             logging::warn(format!("send-keys to {target} failed: {}", result.2.trim()));
             return false;
         }
-        if keys.iter().any(|k| k == command) {
-            sleeper(0.3);
+        if keys.first().map(String::as_str) == Some("Escape") {
+            sleeper(0.1);
         }
     }
     true
@@ -921,7 +921,7 @@ mod tests {
             .filter(|c| c.first().map(String::as_str) == Some("send-keys"))
             .cloned()
             .collect();
-        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status"]
+        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status\n"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
@@ -972,7 +972,7 @@ mod tests {
             "typed /usage must not become /usage daily: {payloads:?}"
         );
         let calls = tmux.calls.lock().unwrap().clone();
-        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status"]
+        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status\n"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();

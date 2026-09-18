@@ -11,9 +11,9 @@ use serde_json::{json, Value};
 
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
-    collect_claude, collect_codex_accounts, collect_codex_reset_forecast, collect_cursor,
-    collect_grok, collect_opencode_go, collect_openrouter, load_codex_account_registry, parse_pane,
-    selected_codex_home,
+    codex_status_send_failed, collect_claude, collect_codex_accounts, collect_codex_reset_forecast,
+    collect_cursor, collect_grok, collect_opencode_go, collect_openrouter,
+    load_codex_account_registry, parse_pane, selected_codex_home,
 };
 use crate::config::{
     load_config, slash_command, state_dir, CLI_IDS, CODEX_RESET_FORECAST_STALE_AFTER_SECONDS,
@@ -663,13 +663,19 @@ fn merge_cli_pane(
             .unwrap_or(true)
         || is_stale(&snapshot, stale_after, now)
         || (cli_id == "codex" && source_mode == "auto" && pane_is_newer);
-    if pane_snapshot
+    let status_send_failed = cli_id == "codex" && codex_status_send_failed(pane_text);
+    if status_send_failed {
+        logging::debug(
+            "codex pane /status send failed; keeping headless windows instead of leftover /status text",
+        );
+    }
+    let pane_windows_ok = pane_snapshot
         .get("windows")
         .and_then(Value::as_array)
         .map(|a| !a.is_empty())
         .unwrap_or(false)
-        && use_pane
-    {
+        && !status_send_failed;
+    if pane_windows_ok && use_pane {
         if cli_id == "codex"
             && source_mode == "auto"
             && snapshot
@@ -2300,6 +2306,66 @@ mod tests {
             "│  5h limit:             [████████████████████] 100% left (resets 20:12) │\n",
             "│  Weekly limit:         [██████████░░░░░░░░░░] 62% left               │\n",
         )
+    }
+
+    #[test]
+    fn leftover_failed_status_send_does_not_hide_a_headless_weekly_reset() {
+        let snapshot = json!({
+            "selected": 2,
+            "plan": "plus",
+            "observed_at": 90.0,
+            "windows": [
+                {"label": "5h", "used_percent": 16.0},
+                {"label": "week", "used_percent": 3.0}
+            ],
+            "instances": [
+                {
+                    "id": 1,
+                    "home": "/home/u/.codex",
+                    "plan": "team",
+                    "windows": [
+                        {"label": "5h", "used_percent": 0.0},
+                        {"label": "week", "used_percent": 95.0}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "home": "/home/u/.codex-account-2",
+                    "plan": "plus",
+                    "observed_at": 90.0,
+                    "windows": [
+                        {"label": "5h", "used_percent": 16.0},
+                        {"label": "week", "used_percent": 3.0}
+                    ]
+                },
+            ]
+        });
+        let pane = concat!(
+            "You have 1 usage limit reset available.\n",
+            "│  5h limit:             [████████████████████] 100% left (resets 05:11) │\n",
+            "│  Weekly limit:         [░░░░░░░░░░░░░░░░░░░░] 0% left                  │\n",
+            "• Unrecognized command '/usagestatus'. Type \"/\" for a list of supported commands.\n",
+            "› /usagestatus\n",
+        );
+        let applied = apply_codex_live_pane(
+            snapshot,
+            pane,
+            200.0,
+            "auto",
+            1800,
+            None,
+            200.0,
+            Some("/home/u/.codex-account-2"),
+        );
+        assert_eq!(
+            applied["instances"][1]["windows"][0]["used_percent"],
+            json!(16.0)
+        );
+        assert_eq!(
+            applied["instances"][1]["windows"][1]["used_percent"],
+            json!(3.0)
+        );
+        assert_eq!(applied["windows"][1]["used_percent"], json!(3.0));
     }
 
     #[test]
