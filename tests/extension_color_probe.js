@@ -20,6 +20,7 @@ const validForecastLaunch = openExternalUrl(
 const rejectedForecastLaunch = openExternalUrl(
   'javascript:alert(1)', 'Unsafe');
 const results = {
+  clutter_markup_prefix: CLUTTER_MARKUP_PREFIX,
   color_100: percentColor(100),
   color_1: percentColor(1),
   color_0: percentColor(0),
