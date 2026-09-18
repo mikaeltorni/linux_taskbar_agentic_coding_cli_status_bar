@@ -145,6 +145,7 @@ fn agentic_results() -> Option<Value> {
         "cursorExtraDetailTexts",
         "isOnDemandField",
         "codexInstanceTitle",
+        "cliSectionHeading",
         "cliEnabledFromConfig",
     ];
     let mut snippets: Vec<String> = constants
@@ -231,6 +232,16 @@ fn gradient_and_segments() {
     assert_eq!(js["multiple_resets_available"], " — 2 resets available");
     assert_eq!(js["missing_resets_available"], "");
     assert_eq!(js["zero_resets_available"], "");
+    assert_eq!(
+        js["team_instance_heading"],
+        "Codex [1] (team) — 2 resets available"
+    );
+    assert_eq!(
+        js["personal_instance_heading"],
+        "Codex [2] main (team) — 1 reset available"
+    );
+    assert_eq!(js["missing_instance_heading"], "Codex [1] (team)");
+    assert_eq!(js["zero_instance_heading"], "Codex [1] (team)");
     let two = js["two_codex_accounts"].as_str().unwrap();
     assert!(two.contains("CX1"));
     assert!(two.contains("CX2"));

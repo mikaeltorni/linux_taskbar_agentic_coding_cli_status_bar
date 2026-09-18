@@ -201,7 +201,11 @@ pub fn resolve_cli_binary(cli_id: &str, home: &Path) -> Option<PathBuf> {
 /// for the *selected* account.  Passing `ACC_CODEX_INSTANCE` pins the account
 /// the launcher resolves, so a console keeps the login it was created for
 /// instead of drifting to the selection and being torn down every tick.
-fn window_env_args(cli_id: &str, codex_home: Option<&Path>, instance_id: Option<i64>) -> Vec<String> {
+fn window_env_args(
+    cli_id: &str,
+    codex_home: Option<&Path>,
+    instance_id: Option<i64>,
+) -> Vec<String> {
     let mut args = Vec::new();
     for var in WINDOW_ENV {
         args.push("-e".into());
@@ -572,6 +576,36 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
     true
 }
 
+/// Open the Codex `/usage` menu that prints the reset count.
+///
+/// Codex 0.141+ autocompletes typed `/usage` to `/usage daily` (a heatmap with
+/// no count). Escape after the typed command dismisses that completion so
+/// Enter submits the bare menu. Never select the redeem entry.
+fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, sleeper: &dyn Fn(f64)) -> bool {
+    logging::debug(format!(
+        "codex {target}: submitting bare /usage menu, not /usage daily"
+    ));
+    for (keys, pause) in [
+        (vec!["Escape".into()], 0.0),
+        (vec!["C-u".into()], 0.0),
+        (vec!["/usage".into()], 0.3),
+        (vec!["Escape".into()], 0.3),
+        (vec!["Enter".into()], 0.0),
+    ] {
+        let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
+        args.extend(keys);
+        let result = tmux.run(&args);
+        if result.0 != 0 {
+            logging::warn(format!("send-keys to {target} failed: {}", result.2.trim()));
+            return false;
+        }
+        if pause > 0.0 {
+            sleeper(pause);
+        }
+    }
+    true
+}
+
 fn capture_pane(tmux: &dyn TmuxRunner, target: &str) -> Option<String> {
     let captured = tmux.run(&[
         "capture-pane".into(),
@@ -628,7 +662,12 @@ pub fn refresh_and_capture(
 ) -> Option<String> {
     let target = format!("{session}:{window}");
     let command = slash_command(cli_id)?;
-    if !send_slash(tmux, &target, command, sleeper) {
+    let sent = if cli_id == "codex" {
+        send_codex_usage_menu(tmux, &target, sleeper)
+    } else {
+        send_slash(tmux, &target, command, sleeper)
+    };
+    if !sent {
         return None;
     }
     sleeper(CAPTURE_DELAY_SECONDS);
@@ -810,6 +849,14 @@ mod tests {
         }
     }
 
+    fn sent_key_payloads(calls: &[Vec<String>]) -> Vec<String> {
+        calls
+            .iter()
+            .filter(|c| c.first().map(String::as_str) == Some("send-keys"))
+            .filter_map(|c| c.get(3).cloned())
+            .collect()
+    }
+
     #[test]
     fn codex_combines_usage_allowance_with_status_breakdown() {
         let tmux = FakeTmux {
@@ -826,14 +873,44 @@ mod tests {
         assert!(text.contains("Weekly limit: 9% left"));
         let calls = tmux.calls.lock().unwrap().clone();
         let send_keys: Vec<_> = calls
-            .into_iter()
+            .iter()
             .filter(|c| c.first().map(String::as_str) == Some("send-keys"))
+            .cloned()
             .collect();
         let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "/status"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
         assert!(send_keys.iter().any(|c| c == &expected));
+        let payloads = sent_key_payloads(&calls);
+        assert!(
+            !payloads.iter().any(|k| k.contains("daily")),
+            "typed /usage must not become /usage daily: {payloads:?}"
+        );
+        let usage_at = payloads
+            .iter()
+            .position(|k| k == "/usage")
+            .expect("/usage must be typed");
+        assert_eq!(
+            payloads.get(usage_at + 1).map(String::as_str),
+            Some("Escape"),
+            "dismiss /usage daily autocomplete before Enter: {payloads:?}"
+        );
+        assert_eq!(
+            payloads.get(usage_at + 2).map(String::as_str),
+            Some("Enter"),
+            "submit the bare /usage menu after dismissing autocomplete: {payloads:?}"
+        );
+        let usage_end = payloads
+            .iter()
+            .position(|k| k == "/status")
+            .unwrap_or(payloads.len());
+        assert!(
+            !payloads[usage_at..usage_end]
+                .iter()
+                .any(|k| k == "2" || k == "Down" || k == "BSpace"),
+            "must not enter the redeem menu action: {payloads:?}"
+        );
     }
 
     #[test]
@@ -851,6 +928,11 @@ mod tests {
         let text = refresh_and_capture("acs", "codex", "codex", &noop_sleep, &tmux).unwrap();
         assert!(text.contains("2 usage limit resets available"));
         assert!(text.contains("5h limit: 99% left"));
+        let payloads = sent_key_payloads(&tmux.calls.lock().unwrap());
+        assert!(
+            !payloads.iter().any(|k| k.contains("daily")),
+            "typed /usage must not become /usage daily: {payloads:?}"
+        );
         let calls = tmux.calls.lock().unwrap().clone();
         let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "/status"]
             .iter()

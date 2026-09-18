@@ -618,6 +618,56 @@ mod tests {
     }
 
     #[test]
+    fn team_usage_menu_count_survives_concatenation_with_status() {
+        let text = concat!(
+            "Usage\n",
+            "› 1. Show usage\n",
+            "  2. Redeem usage limit reset\n",
+            "You have 2 usage limit resets available.\n",
+            "5h limit: 99% left (resets 20:12)\n",
+            "Weekly limit: 9% left\n",
+        );
+        let result = parse_pane("codex", text, Some(1000.0));
+        assert_eq!(result["resets_available"], json!(2));
+        assert_eq!(
+            percents(&result),
+            vec![("5h".into(), 1.0), ("week".into(), 91.0)]
+        );
+    }
+
+    #[test]
+    fn personal_usage_menu_count_survives_concatenation_with_status() {
+        let text = concat!(
+            "You have 1 usage limit reset available.\n",
+            "5h limit: 40% used (resets 14:30)\n",
+            "Weekly limit: 22% used (resets Mon)\n",
+        );
+        let result = parse_pane("codex", text, Some(1000.0));
+        assert_eq!(result["resets_available"], json!(1));
+        assert_eq!(
+            percents(&result),
+            vec![("5h".into(), 40.0), ("week".into(), 22.0)]
+        );
+    }
+
+    #[test]
+    fn usage_daily_heatmap_without_count_does_not_invent_resets_available() {
+        let text = concat!(
+            "/usage daily\n",
+            " Token activity   last 12 months\n",
+            "   daily · weekly · cumulative\n",
+            "5h limit: 99% left (resets 20:12)\n",
+            "Weekly limit: 9% left\n",
+        );
+        let result = parse_pane("codex", text, Some(1000.0));
+        assert!(result.get("resets_available").is_none());
+        assert_eq!(
+            percents(&result),
+            vec![("5h".into(), 1.0), ("week".into(), 91.0)]
+        );
+    }
+
+    #[test]
     fn codex_status_pane_used_variant() {
         let text = concat!(
             "  /status\n",

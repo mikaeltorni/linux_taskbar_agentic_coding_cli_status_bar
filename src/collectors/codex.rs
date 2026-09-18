@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::util::{now_epoch, tail_lines, to_epoch, to_percent, TAIL_READ_BYTES};
 use crate::logging;
-use crate::snapshot::{carry_last_reading, snapshot, Window};
+use crate::snapshot::{carry_last_reading, carry_reset_metadata, snapshot, Window};
 
 pub const CODEX_INSTANCES_FILE: &str = "codex-instances.json";
 pub const CODEX_TRACKER_STATE_DIR: &str = "codex-agent-tracker";
@@ -197,7 +197,7 @@ pub fn load_codex_account_instances(home: &Path) -> Vec<CodexAccountInstance> {
 }
 
 fn instance_snapshot(row: &CodexAccountInstance, collected: Value, selected_id: i64) -> Value {
-    json!({
+    let mut snap = json!({
         "id": row.id,
         "label": row.label,
         "home": row.home.to_string_lossy(),
@@ -208,7 +208,13 @@ fn instance_snapshot(row: &CodexAccountInstance, collected: Value, selected_id: 
         "windows": collected.get("windows").cloned().unwrap_or(json!([])),
         "credits": collected.get("credits").cloned().unwrap_or(Value::Null),
         "error": collected.get("error").cloned().unwrap_or(Value::Null),
-    })
+    });
+    for key in ["resets_available", "resets_checked_at"] {
+        if let Some(value) = collected.get(key) {
+            snap[key] = value.clone();
+        }
+    }
+    snap
 }
 
 fn last_instance_by_id(last: Option<&Value>, id: i64) -> Option<&Value> {
@@ -288,8 +294,10 @@ pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value
     }
     let mut collected_rows = Vec::new();
     for row in &rows {
+        let last_inst = last_instance_by_id(last, row.id);
         let mut snap = collect_codex_at(&row.home, now);
-        snap = carry_last_reading(snap, last_instance_by_id(last, row.id));
+        snap = carry_last_reading(snap, last_inst);
+        snap = carry_reset_metadata(snap, last_inst);
         collected_rows.push(instance_snapshot(row, snap, selected_id));
     }
     let mut combined = collected_rows
@@ -1289,6 +1297,53 @@ mod tests {
             result["instances"][0]["windows"][0]["used_percent"],
             json!(10.0)
         );
+    }
+
+    #[test]
+    fn each_instance_keeps_its_own_reset_count_when_rollouts_have_windows() {
+        let sandbox = Sandbox::new();
+        let primary = sandbox.home.join(".codex");
+        let extra = sandbox.home.join(".codex-account-2");
+        write_rollout_at(
+            &primary,
+            "2026/07/03",
+            "rollout-a.jsonl",
+            &[codex_token_count_event(10.0, 5.0)],
+        );
+        write_rollout_at(
+            &extra,
+            "2026/07/03",
+            "rollout-b.jsonl",
+            &[codex_token_count_event(20.0, 8.0)],
+        );
+        write_registry(
+            &sandbox.home,
+            &json!([
+                {"id": 1, "home": primary.to_string_lossy(), "label": ""},
+                {"id": 2, "home": extra.to_string_lossy(), "label": "main"},
+            ]),
+            1,
+        );
+        let last = json!({
+            "instances": [
+                {
+                    "id": 1,
+                    "resets_available": 2,
+                    "resets_checked_at": 50.0,
+                    "windows": [{"label": "5h", "used_percent": 10.0}]
+                },
+                {
+                    "id": 2,
+                    "resets_available": 1,
+                    "resets_checked_at": 50.0,
+                    "windows": [{"label": "5h", "used_percent": 20.0}]
+                },
+            ]
+        });
+        let result = collect_codex_accounts(&sandbox.home, Some(FIXTURE_NOW), Some(&last));
+        assert_eq!(result["instances"][0]["resets_available"], json!(2));
+        assert_eq!(result["instances"][1]["resets_available"], json!(1));
+        assert_eq!(result["resets_available"], json!(2));
     }
 
     #[test]
