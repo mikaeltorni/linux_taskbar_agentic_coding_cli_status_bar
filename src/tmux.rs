@@ -188,6 +188,14 @@ pub fn tmux_available() -> bool {
 /// Return the absolute path of a CLI's binary, or None when missing.
 pub fn resolve_cli_binary(cli_id: &str, home: &Path) -> Option<PathBuf> {
     let binary = cli_binary_name(cli_id)?;
+    // The user-managed CLI is updated by the setup repository. systemd's PATH
+    // can still prefer an obsolete global npm install with a different /usage.
+    if cli_id == "codex" {
+        let managed = home.join(".local/share/linux_codex_claude_code_setup/npm/bin/codex");
+        if managed.is_file() {
+            return Some(managed);
+        }
+    }
     if let Some(found) = which(binary) {
         return Some(found);
     }
@@ -605,7 +613,8 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
         vec!["Escape".into()],
         vec!["Escape".into()],
         vec!["C-u".into()],
-        vec!["-l".into(), format!("{command}\n")],
+        vec!["-l".into(), command.into()],
+        vec!["Enter".into()],
     ] {
         let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
         args.extend(keys.clone());
@@ -616,6 +625,10 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
         }
         if keys.first().map(String::as_str) == Some("Escape") {
             sleeper(0.1);
+        } else if keys.first().map(String::as_str) == Some("-l") {
+            // Let the TUI finish its paste burst; an immediate Enter can be
+            // grouped into the paste and inserted as another composer newline.
+            sleeper(0.3);
         }
     }
     true
@@ -623,27 +636,13 @@ fn send_slash(tmux: &dyn TmuxRunner, target: &str, command: &str, sleeper: &dyn 
 
 /// Open the Codex `/usage` menu that prints the reset count.
 ///
-/// Codex 0.141+ autocompletes typed `/usage` to `/usage daily` (heatmap, no
-/// count). Paste `/usage` plus a newline as one literal so the popup cannot
-/// insert `daily`. Never select the redeem entry.
-fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, _sleeper: &dyn Fn(f64)) -> bool {
+/// Current Codex exposes the allowance in the bare menu. A literal newline is
+/// composer input, not Enter: submit a key event instead. Never select redeem.
+fn send_codex_usage_menu(tmux: &dyn TmuxRunner, target: &str, sleeper: &dyn Fn(f64)) -> bool {
     logging::debug(format!(
         "codex {target}: submitting bare /usage menu, not /usage daily"
     ));
-    for keys in [
-        vec!["Escape".into()],
-        vec!["C-u".into()],
-        vec!["-l".into(), "/usage\n".into()],
-    ] {
-        let mut args = vec!["send-keys".into(), "-t".into(), target.into()];
-        args.extend(keys);
-        let result = tmux.run(&args);
-        if result.0 != 0 {
-            logging::warn(format!("send-keys to {target} failed: {}", result.2.trim()));
-            return false;
-        }
-    }
-    true
+    send_slash(tmux, target, "/usage", sleeper)
 }
 
 fn capture_pane(tmux: &dyn TmuxRunner, target: &str) -> Option<String> {
@@ -863,6 +862,42 @@ mod tests {
     }
 
     #[test]
+    fn prefers_managed_codex_over_service_path() {
+        let sandbox = Sandbox::new();
+        let managed = sandbox
+            .home
+            .join(".local/share/linux_codex_claude_code_setup/npm/bin/codex");
+        std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        std::fs::write(&managed, "#!/bin/sh\n").unwrap();
+        assert_eq!(resolve_cli_binary("codex", &sandbox.home), Some(managed));
+    }
+
+    #[test]
+    fn slash_commands_submit_with_enter_not_literal_newline() {
+        let tmux = FakeTmux {
+            calls: Mutex::new(Vec::new()),
+            has_session: true,
+            captures: Mutex::new(Vec::new()),
+            codex_home_env: None,
+        };
+        let delays = std::cell::RefCell::new(Vec::new());
+        assert!(send_codex_usage_menu(&tmux, "acs:codex", &|seconds| {
+            delays.borrow_mut().push(seconds);
+        }));
+        assert_eq!(*delays.borrow(), vec![0.1, 0.1, 0.3]);
+        assert!(send_slash(&tmux, "acs:codex", "/status", &noop_sleep));
+        let calls = tmux.calls.lock().unwrap();
+        for command in ["/usage", "/status"] {
+            let index = calls
+                .iter()
+                .position(|call| call.last().map(String::as_str) == Some(command))
+                .unwrap();
+            assert_eq!(calls[index + 1].last().unwrap(), "Enter");
+        }
+        assert!(!calls.iter().flatten().any(|arg| arg.contains('\n')));
+    }
+
+    #[test]
     fn falls_back_to_known_install_dirs() {
         let sandbox = Sandbox::new();
         let grok = sandbox.home.join(".grok").join("bin").join("grok");
@@ -921,7 +956,7 @@ mod tests {
             .filter(|c| c.first().map(String::as_str) == Some("send-keys"))
             .cloned()
             .collect();
-        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status\n"]
+        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
@@ -937,11 +972,11 @@ mod tests {
             .expect("/usage must be typed");
         assert_eq!(
             usage_send,
-            &["send-keys", "-t", "acs:codex", "-l", "/usage\n"]
+            &["send-keys", "-t", "acs:codex", "-l", "/usage"]
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect::<Vec<_>>(),
-            "paste /usage plus newline so autocomplete cannot insert daily: {send_keys:?}"
+            "submit bare /usage with a separate Enter key: {send_keys:?}"
         );
         assert!(
             !usage_send
@@ -972,7 +1007,7 @@ mod tests {
             "typed /usage must not become /usage daily: {payloads:?}"
         );
         let calls = tmux.calls.lock().unwrap().clone();
-        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status\n"]
+        let expected: Vec<String> = ["send-keys", "-t", "acs:codex", "-l", "/status"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();

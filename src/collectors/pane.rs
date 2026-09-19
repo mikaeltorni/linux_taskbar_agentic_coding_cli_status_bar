@@ -113,7 +113,7 @@ fn compiled_regex(pattern: &'static str) -> &'static Regex {
 }
 
 const PANE_PERCENT: &str = r"(\d+(?:\.\d+)?)\s*%";
-const CODEX_RESETS_AVAILABLE: &str = r"(?i)\b(\d+)\s+(?:usage\s+limit\s+)?resets?\s+available\b";
+const CODEX_RESETS_AVAILABLE: &str = r"(?i)\b(\d+|no)\s+(?:usage\s+limit\s+)?resets?\s+available\b";
 const PANE_RESET: &str = r"(?i)\bresets?\b\s*(?:at\s+)?(.+)$";
 const PANE_RESET_CLOCK: &str = r"\b([01]?\d|2[0-3]):([0-5]\d)\b";
 const PANE_RESET_DATE: &str = r"(?i)\b(\d{1,2})\s+([A-Za-z]{3})";
@@ -503,7 +503,13 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
     let mut snap = snapshot("tmux_pane", observed, None, windows, error);
     if cli_id == "codex" {
         if let Some(caps) = re(CODEX_RESETS_AVAILABLE).captures_iter(text).last() {
-            if let Ok(count) = caps.get(1).unwrap().as_str().parse::<i64>() {
+            // The disabled redeem entry spells zero as "No ... available".
+            let raw = caps.get(1).unwrap().as_str();
+            if let Ok(count) = if raw.eq_ignore_ascii_case("no") {
+                Ok(0)
+            } else {
+                raw.parse::<i64>()
+            } {
                 snap["resets_available"] = json!(count);
             }
         }
@@ -640,6 +646,16 @@ mod tests {
         let pane = "5h limit: 61% used\nWeekly limit: 22% used\n1 reset available\n";
         let result = parse_pane("codex", pane, Some(1000.0));
         assert_eq!(result["resets_available"], json!(1));
+    }
+
+    #[test]
+    fn reads_no_available_resets_from_usage_menu() {
+        let result = parse_pane(
+            "codex",
+            "Usage\n› 1. Show usage\n  Redeem usage limit reset  No usage limit resets available.\n",
+            Some(1000.0),
+        );
+        assert_eq!(result["resets_available"], json!(0));
     }
 
     #[test]
