@@ -719,13 +719,9 @@ fn merge_cli_pane(
             .get("resets_available")
             .and_then(Value::as_i64)
             .unwrap_or(0);
-        if current_count > 0 {
-            snapshot["resets_available"] = json!(current_count);
-        } else {
-            if let Some(obj) = snapshot.as_object_mut() {
-                obj.remove("resets_available");
-            }
-        }
+        // Zero is an authoritative reading. Removing it lets per-account
+        // carry-forward restore the previously positive allowance.
+        snapshot["resets_available"] = json!(current_count);
         snapshot["resets_checked_at"] = json!(pane_observed_at);
         if previous_count != current_count {
             logging::info(format!(
@@ -2485,6 +2481,25 @@ mod tests {
         assert_eq!(after_both["instances"][0]["resets_available"], json!(2));
         assert_eq!(after_both["instances"][1]["resets_available"], json!(1));
         assert_eq!(after_both["resets_available"], json!(2));
+        let after_redemption = apply_codex_live_pane(
+            after_both,
+            "Usage\nRedeem usage limit reset  No usage limit resets available.\n5h limit: 99% left\nWeekly limit: 99% left\n",
+            82.0,
+            "tmux",
+            1800,
+            None,
+            82.0,
+            Some("/home/u/.codex-account-2"),
+        );
+        assert_eq!(
+            after_redemption["instances"][0]["resets_available"],
+            json!(2)
+        );
+        assert_eq!(
+            after_redemption["instances"][1]["resets_available"],
+            json!(0)
+        );
+        assert_eq!(after_redemption["resets_available"], json!(2));
     }
 
     #[test]
