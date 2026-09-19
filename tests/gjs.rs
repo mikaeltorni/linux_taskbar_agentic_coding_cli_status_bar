@@ -46,6 +46,33 @@ fn extract_constant(source: &str, name: &str) -> String {
     panic!("const {name} not found");
 }
 
+fn extract_const_block(source: &str, name: &str) -> String {
+    let needle = format!("const {name} = ");
+    let start = source
+        .find(&needle)
+        .unwrap_or_else(|| panic!("const {name} not found"));
+    let mut depth = 0i32;
+    let mut seen = false;
+    for (offset, ch) in source[start..].char_indices() {
+        match ch {
+            '{' => {
+                depth += 1;
+                seen = true;
+            }
+            '}' => {
+                depth -= 1;
+                if seen && depth == 0 {
+                    let end = start + offset + 1;
+                    let extra = if source[end..].starts_with(';') { 1 } else { 0 };
+                    return source[start..end + extra].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced braces extracting const {name}");
+}
+
 fn run_gjs(snippets: &[String], probe: &str) -> Value {
     let gjs = which("gjs").unwrap_or_else(|| {
         panic!("skip: gjs not installed");
@@ -677,4 +704,62 @@ fn installer_delegates_readonly_routing() {
     let text = fs::read_to_string(repo_root().join("install.sh")).unwrap();
     assert!(text.contains("isc_route_readonly_args"));
     assert!(!text.contains("--list-components|--export-selection|--detect"));
+}
+
+#[test]
+fn live_agent_row_badge_is_elapsed_clock_not_running_word() {
+    if !gjs_available() {
+        eprintln!("gjs not installed; skipping");
+        return;
+    }
+    let source = fs::read_to_string(
+        repo_root()
+            .join("acc-model-status@local")
+            .join("extension.js"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("agentPhaseBadgeText("),
+        "_agentMenuItem must call the shipped badge formatter"
+    );
+    let snippets = vec![
+        extract_const_block(&source, "PHASE_COLORS"),
+        extract_function(&source, "phaseColor"),
+        extract_function(&source, "formatRunTimer"),
+        extract_function(&source, "parseRunStartedEpoch"),
+        extract_function(&source, "agentPhaseBadgeColorKey"),
+        extract_function(&source, "agentPhaseBadgeText"),
+        extract_function(&source, "agentPhaseBadgeColor"),
+    ];
+    let js = run_gjs(
+        &snippets,
+        r#"
+const now = Date.parse('2026-08-09T12:00:00Z') / 1000;
+const live = {
+    phase: 'RUNNING',
+    run_active: true,
+    run_started_at: '2026-08-09T11:47:26Z',
+};
+const done = {phase: 'DONE'};
+const attn = {phase: 'ATTN'};
+print(JSON.stringify({
+    liveText: agentPhaseBadgeText(live, now),
+    liveColor: agentPhaseBadgeColor(live),
+    doneText: agentPhaseBadgeText(done, now),
+    doneColor: agentPhaseBadgeColor(done),
+    attnText: agentPhaseBadgeText(attn, now),
+    runningYellow: PHASE_COLORS.RUNNING,
+}));
+"#,
+    );
+    let live_text = js["liveText"].as_str().unwrap();
+    assert_eq!(live_text, "12:34");
+    assert!(
+        !live_text.contains("RUNNING"),
+        "live badge leaked RUNNING: {live_text}"
+    );
+    assert_eq!(js["liveColor"], "#e6c200");
+    assert_eq!(js["doneText"], "DONE");
+    assert_eq!(js["attnText"], "ATTN");
+    assert_eq!(js["runningYellow"], "#e6c200");
 }

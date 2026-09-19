@@ -83,6 +83,91 @@ function phaseColor(phase) {
 }
 
 /**
+ * Compact elapsed clock matching ACC ``format_run_timer`` (M:SS under one
+ * hour, else H:MM:SS).
+ *
+ * @param {number} seconds - non-negative elapsed seconds.
+ * @returns {string} clock text such as ``12:34``.
+ */
+function formatRunTimer(seconds) {
+    const elapsed = Math.max(Math.floor(Number(seconds) || 0), 0);
+    const secs = elapsed % 60;
+    const totalMinutes = Math.floor(elapsed / 60);
+    const minutes = totalMinutes % 60;
+    const hours = Math.floor(totalMinutes / 60);
+    if (hours)
+        return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+/**
+ * Parse ACC ``run_started_at`` into epoch seconds.
+ *
+ * @param {string} value - ISO-8601 instant, or empty.
+ * @returns {number} epoch seconds, or 0 when missing/unparsable.
+ */
+function parseRunStartedEpoch(value) {
+    const text = String(value || '').trim();
+    if (!text)
+        return 0;
+    const ms = Date.parse(text);
+    if (!Number.isFinite(ms) || ms <= 0)
+        return 0;
+    return Math.floor(ms / 1000);
+}
+
+/**
+ * Phase key used to color a live-row badge.
+ *
+ * A live run with a known start uses RUNNING yellow even when the payload
+ * still carries a finished phase word internally.
+ *
+ * @param {object} agent - payload agent row.
+ * @returns {string} phase key for {@link phaseColor}.
+ */
+function agentPhaseBadgeColorKey(agent) {
+    const phase = String(agent && agent.phase || 'UNKNOWN').trim().toUpperCase() || 'UNKNOWN';
+    const runActive = Boolean(agent && agent.run_active) || phase === 'RUNNING';
+    const started = parseRunStartedEpoch(agent && agent.run_started_at);
+    if (runActive && started > 0)
+        return 'RUNNING';
+    return phase;
+}
+
+/**
+ * Visible badge text for one click-menu agent row.
+ *
+ * A live run with a known start shows ACC's elapsed clock instead of the
+ * word RUNNING. Other phases keep their phase word.
+ *
+ * @param {object} agent - payload agent row.
+ * @param {number} [nowSeconds] - unix epoch seconds; defaults to now.
+ * @returns {string} clock text or phase word.
+ */
+function agentPhaseBadgeText(agent, nowSeconds) {
+    const phase = String(agent && agent.phase || 'UNKNOWN').trim().toUpperCase() || 'UNKNOWN';
+    const runActive = Boolean(agent && agent.run_active) || phase === 'RUNNING';
+    const started = parseRunStartedEpoch(agent && agent.run_started_at);
+    if (runActive && started > 0) {
+        const now = Number.isFinite(Number(nowSeconds))
+            ? Number(nowSeconds)
+            : Math.floor(Date.now() / 1000);
+        return formatRunTimer(Math.max(0, now - started));
+    }
+    return phase;
+}
+
+/**
+ * CSS color for one agent-row badge.
+ *
+ * @param {object} agent - payload agent row.
+ * @returns {string} CSS color from the shared notes palette.
+ */
+function agentPhaseBadgeColor(agent) {
+    return phaseColor(agentPhaseBadgeColorKey(agent));
+}
+
+/**
  * Resolve the published payload path.
  *
  * Honors CODEX_AGENT_TRACKER_STATE_DIR so a test or a relocated tracker state
@@ -708,13 +793,12 @@ class AccModelStatusButton extends PanelMenu.Button {
             y_align: Clutter.ActorAlign.CENTER,
         }));
 
-        const phase = String(agent.phase || 'UNKNOWN').trim().toUpperCase();
         const badge = new St.Label({
-            text: phase,
+            text: agentPhaseBadgeText(agent),
             style_class: 'ams-phase',
             y_align: Clutter.ActorAlign.CENTER,
         });
-        badge.set_style(`color: ${phaseColor(phase)};`);
+        badge.set_style(`color: ${agentPhaseBadgeColor(agent)};`);
         row.add_child(badge);
 
         if (agent.title) {
