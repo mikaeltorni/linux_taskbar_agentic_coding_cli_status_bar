@@ -46,6 +46,35 @@ fn extract_constant(source: &str, name: &str) -> String {
     panic!("const {name} not found");
 }
 
+fn extract_const_block(source: &str, name: &str) -> String {
+    let needle = format!("const {name} = ");
+    let start = source
+        .find(&needle)
+        .unwrap_or_else(|| panic!("const {name} not found"));
+    let rest = &source[start..];
+    if !rest.contains('{') {
+        return extract_constant(source, name);
+    }
+    let mut depth = 0i32;
+    for (offset, ch) in rest.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let mut end = offset + 1;
+                    if rest[end..].starts_with(';') {
+                        end += 1;
+                    }
+                    return rest[..end].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced braces extracting const {name}");
+}
+
 fn run_gjs(snippets: &[String], probe: &str) -> Value {
     let gjs = which("gjs").unwrap_or_else(|| {
         panic!("skip: gjs not installed");
@@ -582,6 +611,64 @@ const PAYLOAD = {providers: [
     for style in ["ams-ws-attn", "ams-ws-attn-dim", "ams-ws-attn-current"] {
         assert!(css.contains(&format!(".{style} {{")), "{style}");
     }
+}
+
+#[test]
+fn live_agent_badge_is_elapsed_clock_not_running() {
+    if !gjs_available() {
+        eprintln!("gjs not installed; skipping");
+        return;
+    }
+    let source = fs::read_to_string(
+        repo_root()
+            .join("acc-model-status@local")
+            .join("extension.js"),
+    )
+    .unwrap();
+    let snippets = vec![
+        extract_const_block(&source, "PHASE_COLORS"),
+        extract_function(&source, "phaseColor"),
+        extract_function(&source, "formatRunTimer"),
+        extract_function(&source, "agentPhaseBadgeText"),
+        extract_function(&source, "agentPhaseBadgeColor"),
+    ];
+    let now_ms: i64 = 1_724_000_000_000;
+    let started_ms = now_ms - (12 * 60 + 34) * 1000;
+    let probe = format!(
+        r#"
+const live = {{
+    phase: 'RUNNING',
+    run_active: true,
+    run_started_at: new Date({started_ms}).toISOString(),
+}};
+const done = {{
+    phase: 'DONE',
+    run_active: false,
+    run_started_at: new Date({started_ms}).toISOString(),
+}};
+const attn = {{phase: 'ATTN'}};
+print(JSON.stringify({{
+    live_text: agentPhaseBadgeText(live, {now_ms}),
+    live_color: agentPhaseBadgeColor(live),
+    done_text: agentPhaseBadgeText(done, {now_ms}),
+    done_color: agentPhaseBadgeColor(done),
+    attn_text: agentPhaseBadgeText(attn, {now_ms}),
+    clock: formatRunTimer(754),
+    hour_clock: formatRunTimer(7509),
+}}));
+"#
+    );
+    let js = run_gjs(&snippets, &probe);
+    assert_eq!(js["clock"], "12:34");
+    assert_eq!(js["hour_clock"], "2:05:09");
+    assert_eq!(js["live_text"], "12:34");
+    assert_eq!(js["live_color"], "#e6c200");
+    assert_ne!(js["live_text"], "RUNNING");
+    assert_eq!(js["done_text"], "DONE");
+    assert_eq!(js["done_color"], "#22c55e");
+    assert_eq!(js["attn_text"], "ATTN");
+    assert!(source.contains("agentPhaseBadgeText(agent)"));
+    assert!(source.contains("agentPhaseBadgeColor(agent)"));
 }
 
 fn code_only(text: &str) -> String {

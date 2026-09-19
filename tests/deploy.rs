@@ -384,7 +384,9 @@ fn model_status_phase_palette_and_rows() {
     assert!(body.contains("ams-menu-provider-icon"));
     assert!(!body.contains("text: `${provider.label"));
     assert!(!body.contains("ams-current-workspace-block"));
-    assert!(body.contains("phaseColor(phase)"));
+    assert!(body.contains("agentPhaseBadgeText(agent)"));
+    assert!(body.contains("agentPhaseBadgeColor(agent)"));
+    assert!(!body.contains("text: phase"));
 }
 
 #[test]
@@ -395,7 +397,7 @@ fn model_status_destroy_releases_timers() {
         .captures(&js)
         .unwrap();
     let body = &destroy[1];
-    assert_eq!(body.matches("GLib.source_remove").count(), 3);
+    assert_eq!(body.matches("GLib.source_remove").count(), 4);
     assert!(body.contains("this._monitor.cancel()"));
     assert!(body.contains("object.disconnect(id)"));
     assert!(body.contains("win.disconnect(id)"));

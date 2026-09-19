@@ -83,6 +83,62 @@ function phaseColor(phase) {
 }
 
 /**
+ * Compact ACC run clock: ``M:SS`` below one hour, else ``H:MM:SS``.
+ *
+ * Same helper the top-right ActivityAgeBanner uses (``format_run_timer``), so
+ * the click-menu badge and the terminal frame never disagree on elapsed text.
+ *
+ * @param {number} seconds - elapsed seconds since ``run_started_at``.
+ * @returns {string} compact clock text.
+ */
+function formatRunTimer(seconds) {
+    const elapsed = Math.max(Math.floor(Number(seconds) || 0), 0);
+    const hours = Math.floor(elapsed / 3600);
+    const minutes = Math.floor((elapsed % 3600) / 60);
+    const secs = elapsed % 60;
+    if (hours)
+        return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+/**
+ * Visible badge text for one click-menu agent row.
+ *
+ * A live run with a known start shows the compact yellow clock instead of the
+ * word ``RUNNING``. Other phases keep their phase word (``DONE``, ``ATTN``, …).
+ *
+ * @param {object} agent - payload agent row.
+ * @param {number} [nowMs] - clock override in milliseconds (tests).
+ * @returns {string} clock text or uppercase phase word.
+ */
+function agentPhaseBadgeText(agent, nowMs) {
+    const phase = String(agent && agent.phase || 'UNKNOWN').trim().toUpperCase();
+    const started = Date.parse(agent && agent.run_started_at || '');
+    const active = Boolean(agent && agent.run_active);
+    if (phase === 'RUNNING' && active && !Number.isNaN(started)) {
+        const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+        return formatRunTimer((now - started) / 1000);
+    }
+    return phase;
+}
+
+/**
+ * Color for one click-menu agent badge.
+ *
+ * Live-run clocks use RUNNING yellow even though the visible text is the
+ * elapsed clock rather than the word ``RUNNING``.
+ *
+ * @param {object} agent - payload agent row.
+ * @returns {string} CSS color from {@link PHASE_COLORS}.
+ */
+function agentPhaseBadgeColor(agent) {
+    const phase = String(agent && agent.phase || '').trim().toUpperCase();
+    if (phase === 'RUNNING')
+        return PHASE_COLORS.RUNNING;
+    return phaseColor(phase);
+}
+
+/**
  * Resolve the published payload path.
  *
  * Honors CODEX_AGENT_TRACKER_STATE_DIR so a test or a relocated tracker state
@@ -342,8 +398,10 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._pollId = 0;
         this._refreshId = 0;
         this._flashId = 0;
+        this._runClockId = 0;
         this._flashOn = true;
         this._flashActors = [];
+        this._runClockActors = [];
         this._shellSignals = [];
         this._windowSignals = new Map();
 
@@ -483,10 +541,12 @@ class AccModelStatusButton extends PanelMenu.Button {
         this.menu.removeAll();
         // Actors are re-collected on every repaint; never keep stale ones.
         this._flashActors = [];
+        this._runClockActors = [];
 
         if (!payload || payload.providers.length === 0) {
             this._renderEmpty(payload);
             this._syncFlashTimer();
+            this._syncRunClockTimer();
             return;
         }
 
@@ -498,6 +558,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._renderWorkspaceAttention(attention, stale);
         this._renderMenu(payload, stale, attention);
         this._syncFlashTimer();
+        this._syncRunClockTimer();
     }
 
     /**
@@ -558,6 +619,37 @@ class AccModelStatusButton extends PanelMenu.Button {
                 actor.remove_style_class_name('ams-ws-attn-dim');
             else
                 actor.add_style_class_name('ams-ws-attn-dim');
+        }
+    }
+
+    /**
+     * Tick live-run clocks once a second while any click-menu badge needs it.
+     *
+     * The payload carries ``run_started_at``; elapsed text is computed locally
+     * from that instant so the menu matches ACC's top-right timer.
+     */
+    _syncRunClockTimer() {
+        if (this._runClockActors.length === 0) {
+            if (this._runClockId) {
+                GLib.source_remove(this._runClockId);
+                this._runClockId = 0;
+            }
+            return;
+        }
+        this._applyRunClocks();
+        if (this._runClockId)
+            return;
+        this._runClockId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            this._applyRunClocks();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    /** Recompute elapsed clock text on every live-run badge. */
+    _applyRunClocks() {
+        for (const badge of this._runClockActors) {
+            if (badge._amsAgent)
+                badge.text = agentPhaseBadgeText(badge._amsAgent);
         }
     }
 
@@ -678,8 +770,8 @@ class AccModelStatusButton extends PanelMenu.Button {
      * The leading tag is Phrase Automation's persisted compact project label
      * (for example ``INS`` for installation_scripts), omitted when ACC could
      * not match the agent path to a project. Workspace numbers stay in the
-     * group headings. The phase uses the shared notes palette (DONE green,
-     * RUNNING yellow, STOPPED red …).
+     * group headings. A live run shows the compact ACC clock in RUNNING
+     * yellow instead of the word RUNNING; other phases keep their word.
      *
      * @param {object} agent - agent entry enriched from its live window.
      * @param {object} provider - provider metadata owning the agent.
@@ -708,13 +800,16 @@ class AccModelStatusButton extends PanelMenu.Button {
             y_align: Clutter.ActorAlign.CENTER,
         }));
 
-        const phase = String(agent.phase || 'UNKNOWN').trim().toUpperCase();
         const badge = new St.Label({
-            text: phase,
+            text: agentPhaseBadgeText(agent),
             style_class: 'ams-phase',
             y_align: Clutter.ActorAlign.CENTER,
         });
-        badge.set_style(`color: ${phaseColor(phase)};`);
+        badge.set_style(`color: ${agentPhaseBadgeColor(agent)};`);
+        if (agent.run_active && String(agent.phase || '').trim().toUpperCase() === 'RUNNING') {
+            badge._amsAgent = agent;
+            this._runClockActors.push(badge);
+        }
         row.add_child(badge);
 
         if (agent.title) {
@@ -756,7 +851,12 @@ class AccModelStatusButton extends PanelMenu.Button {
             GLib.source_remove(this._flashId);
             this._flashId = 0;
         }
+        if (this._runClockId) {
+            GLib.source_remove(this._runClockId);
+            this._runClockId = 0;
+        }
         this._flashActors = [];
+        this._runClockActors = [];
         if (this._monitor) {
             this._monitor.cancel();
             this._monitor = null;
