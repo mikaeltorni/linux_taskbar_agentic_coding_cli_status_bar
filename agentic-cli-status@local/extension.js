@@ -458,7 +458,7 @@ function codexLunaReserveWindow(snapshot, instanceId) {
 }
 
 /**
- * Render the compact Luna reserve counter for the taskbar.
+ * Render the compact 5h-weekly-luna reserve counter for the taskbar.
  *
  * Depleted reserves stay available to the details menu but are omitted from
  * the compact bar, where a red zero would otherwise obscure the primary
@@ -474,7 +474,7 @@ function lunaReserveMarkup(reserve, nowEpoch) {
   const left = percentLeft(reserve, nowEpoch);
   if (left === 0)
     return '';
-  return `<span foreground="${NEUTRAL_COLOR}">Luna </span>` +
+  return `<span foreground="${NEUTRAL_COLOR}">5h-weekly-luna </span>` +
     `<span foreground="${percentColor(left)}">${left}</span>`;
 }
 
