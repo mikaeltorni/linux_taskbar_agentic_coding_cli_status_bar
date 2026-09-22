@@ -110,6 +110,23 @@ pub struct CodexAccountInstance {
     pub label: String,
 }
 
+/// Return whether ``codex_home`` has finished ChatGPT login.
+///
+/// A missing ``auth.json`` means the home is still waiting on OAuth. The
+/// poller must not start a ``codex`` TUI there: that TUI opens a browser
+/// login every few seconds and keeps doing so after the dedicated ACC
+/// login later writes this file.
+pub fn codex_home_authenticated(codex_home: &Path) -> bool {
+    let authenticated = codex_home.join("auth.json").is_file();
+    if !authenticated {
+        logging::debug(format!(
+            "Codex home {} has no auth.json yet",
+            codex_home.display()
+        ));
+    }
+    authenticated
+}
+
 /// Load ACC Codex homes and the persisted selected instance id.
 ///
 /// Missing or unreadable registries yield an empty list so the poller keeps
@@ -667,7 +684,8 @@ fn codex_last_rate_limits(rollout: &Path, now: f64) -> Option<Value> {
 mod tests {
     use super::*;
     use crate::test_support::{
-        codex_token_count_event, codex_token_count_event_at, write_codex_rollout, Sandbox,
+        codex_token_count_event, codex_token_count_event_at, write_codex_auth, write_codex_rollout,
+        Sandbox,
     };
     use serde_json::json;
 
@@ -1389,5 +1407,14 @@ mod tests {
         assert_eq!(result["instances"][0]["id"], json!(1));
         assert_eq!(result["instances"][1]["id"], json!(2));
         assert_eq!(result["instances"][2]["id"], json!(3));
+    }
+
+    #[test]
+    fn authentication_is_the_auth_json_file() {
+        let sandbox = Sandbox::new();
+        let home = sandbox.home.join(".codex-account-3");
+        assert!(!codex_home_authenticated(&home));
+        write_codex_auth(&home);
+        assert!(codex_home_authenticated(&home));
     }
 }

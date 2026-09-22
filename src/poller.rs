@@ -11,9 +11,9 @@ use serde_json::{json, Value};
 
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
-    codex_status_send_failed, collect_claude, collect_codex_accounts, collect_codex_reset_forecast,
-    collect_cursor, collect_grok, collect_opencode_go, collect_openrouter,
-    load_codex_account_registry, parse_pane, selected_codex_home,
+    codex_home_authenticated, codex_status_send_failed, collect_claude, collect_codex_accounts,
+    collect_codex_reset_forecast, collect_cursor, collect_grok, collect_opencode_go,
+    collect_openrouter, load_codex_account_registry, parse_pane, selected_codex_home,
 };
 use crate::config::{
     load_config, slash_command, state_dir, CLI_IDS, CODEX_RESET_FORECAST_STALE_AFTER_SECONDS,
@@ -456,13 +456,28 @@ fn do_refresh_and_capture(
 fn codex_console_plan(home: &Path) -> Vec<CodexConsole> {
     let (rows, _) = load_codex_account_registry(home);
     if rows.is_empty() {
+        let default_home = selected_codex_home(home);
+        if !codex_home_authenticated(&default_home) {
+            logging::debug("skipping Codex debug console until the default home finishes login");
+            return Vec::new();
+        }
         return vec![CodexConsole {
             window: codex_console_window(1),
-            home: selected_codex_home(home),
+            home: default_home,
             instance_id: None,
         }];
     }
     rows.into_iter()
+        .filter(|row| {
+            let ready = codex_home_authenticated(&row.home);
+            if !ready {
+                logging::debug(format!(
+                    "skipping Codex debug console for instance {} until login finishes",
+                    row.id
+                ));
+            }
+            ready
+        })
         .map(|row| CodexConsole {
             window: codex_console_window(row.id),
             home: row.home,
@@ -1764,7 +1779,7 @@ mod tests {
     use crate::config::save_config;
     use crate::http::{HttpError, HttpResponse};
     use crate::test_support::{
-        codex_token_count_event, grok_billing_record, write_codex_rollout,
+        codex_token_count_event, grok_billing_record, write_codex_auth, write_codex_rollout,
         write_cursor_credentials, write_grok_log, Sandbox, CURSOR_SAND_USAGE_FIXTURE,
         CURSOR_SPENDING_RESET_EPOCH, CURSOR_USAGE_SUMMARY_FIXTURE, NOW,
     };
@@ -1991,6 +2006,20 @@ mod tests {
             json!({"version": 1, "selected": selected, "instances": rows}).to_string(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn console_plan_waits_for_auth_json() {
+        let sandbox = Sandbox::new();
+        let first = sandbox.home.join(".codex");
+        let extra = sandbox.home.join(".codex-account-3");
+        write_codex_auth(&first);
+        fs::create_dir_all(&extra).unwrap();
+        write_instance_registry(&sandbox.home, &[(1, first), (3, extra)], 1);
+        let plan = codex_console_plan(&sandbox.home);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].window, "codex");
+        assert_eq!(plan[0].instance_id, Some(1));
     }
 
     #[test]

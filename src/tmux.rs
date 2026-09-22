@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use regex::Regex;
 
+use crate::collectors::codex_home_authenticated;
 use crate::config::slash_command;
 use crate::logging;
 
@@ -361,6 +362,16 @@ fn recreate_codex_window_if_stale(
         _ => true,
     };
     if home_ok && binary_ok {
+        if console_started_before_auth(tmux, &pid, desired_home) {
+            logging::info(format!(
+                "recreating Codex debug console {window}; login finished after the pane started"
+            ));
+            if !kill_console_window(session, tmux, window) {
+                return;
+            }
+            existing.remove(window);
+            mark_codex_console_refresh(window);
+        }
         return;
     }
     // The launcher execs through wrapper processes before the CLI settles on
@@ -454,6 +465,45 @@ fn note_missing_cli(cli_id: &str) {
     }
 }
 
+/// Log once per window that a Codex console is waiting on ChatGPT login.
+fn note_waiting_for_auth(window: &str, home: &Path) {
+    static WAITING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let mut seen = WAITING
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if seen.insert(window.to_string()) {
+        logging::info(format!(
+            "skipping Codex debug console {window} until {}/auth.json exists",
+            home.display()
+        ));
+    }
+}
+
+/// Seconds since ``auth.json`` was written, when the file exists.
+fn auth_json_age_seconds(home: &Path) -> Option<f64> {
+    let modified = fs::metadata(home.join("auth.json")).ok()?.modified().ok()?;
+    SystemTime::now()
+        .duration_since(modified)
+        .ok()
+        .map(|age| age.as_secs_f64())
+}
+
+/// Return whether a console process started before this home finished login.
+///
+/// The status-bar ``codex`` TUI opens a browser login when ``auth.json`` is
+/// missing. After ACC writes that file the original process stays in the
+/// OAuth retry loop, so the pane must be rebuilt onto the authenticated TUI.
+fn console_started_before_auth(tmux: &dyn TmuxRunner, pid: &str, home: &Path) -> bool {
+    let Some(age) = tmux.process_age_seconds(pid) else {
+        return false;
+    };
+    let Some(auth_age) = auth_json_age_seconds(home) else {
+        return false;
+    };
+    auth_age + 1.0 < age
+}
+
 /// Ensure the detached console session exists with one window per console.
 ///
 /// `codex_consoles` lists every ACC Codex account and the window that keeps it
@@ -461,6 +511,10 @@ fn note_missing_cli(cli_id: &str) {
 /// logins on every tick instead of only the selected one. A window still
 /// running a different `CODEX_HOME` — after ACC re-registers an account — is
 /// recreated, and windows for retired accounts are closed.
+///
+/// Homes without ``auth.json`` are not started: a bare ``codex`` TUI there
+/// opens a ChatGPT login browser every few seconds. After login lands, a
+/// console that started beforehand is rebuilt so that loop dies.
 pub fn ensure_console(
     session: &str,
     cli_ids: &[String],
@@ -504,15 +558,24 @@ pub fn ensure_console(
     if wants_codex {
         if codex_consoles.is_empty() {
             // No ACC registry: the single historical window on the CLI's own
-            // default `CODEX_HOME`.
-            desired.push(DesiredWindow {
-                window: codex_console_window(1),
-                cli_id: "codex".to_string(),
-                codex_home: None,
-                instance_id: None,
-            });
+            // default `CODEX_HOME`, but only after ChatGPT login has finished.
+            let default_home = home.join(".codex");
+            if codex_home_authenticated(&default_home) {
+                desired.push(DesiredWindow {
+                    window: codex_console_window(1),
+                    cli_id: "codex".to_string(),
+                    codex_home: None,
+                    instance_id: None,
+                });
+            } else {
+                note_waiting_for_auth(&codex_console_window(1), &default_home);
+            }
         }
         for console in codex_consoles {
+            if !codex_home_authenticated(&console.home) {
+                note_waiting_for_auth(&console.window, &console.home);
+                continue;
+            }
             desired.push(DesiredWindow {
                 window: console.window.clone(),
                 cli_id: "codex".to_string(),
@@ -733,7 +796,7 @@ pub fn real_sleep(seconds: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::Sandbox;
+    use crate::test_support::{write_codex_auth, Sandbox};
     use std::sync::Mutex;
 
     struct FakeTmux {
@@ -773,6 +836,10 @@ mod tests {
 
         fn process_codex_home(&self, _pid: &str) -> Option<String> {
             self.codex_home_env.clone()
+        }
+
+        fn process_age_seconds(&self, _pid: &str) -> Option<f64> {
+            None
         }
 
         fn process_cmdline(&self, _pid: &str) -> Option<String> {
@@ -823,6 +890,7 @@ mod tests {
         unsafe {
             std::env::set_var("PATH", format!("{}:/usr/bin", bin.display()));
         }
+        write_codex_auth(&sandbox.home.join(".codex"));
         let tmux = FakeTmux {
             calls: Mutex::new(Vec::new()),
             has_session: false,
@@ -1030,6 +1098,7 @@ mod tests {
             std::env::set_var("PATH", format!("{}:/usr/bin", bin.display()));
         }
         let extra = sandbox.home.join(".codex-account-2");
+        write_codex_auth(&extra);
         let tmux = FakeTmux {
             calls: Mutex::new(Vec::new()),
             has_session: false,
@@ -1147,6 +1216,8 @@ mod tests {
         let original_path = install_fake_codex(&sandbox.home);
         let first = sandbox.home.join(".codex");
         let second = sandbox.home.join(".codex-account-2");
+        write_codex_auth(&first);
+        write_codex_auth(&second);
         let tmux = MultiWindowTmux {
             pane_age_seconds: None,
             calls: Mutex::new(Vec::new()),
@@ -1209,6 +1280,7 @@ mod tests {
         let sandbox = Sandbox::new();
         let original_path = install_fake_codex(&sandbox.home);
         let second = sandbox.home.join(".codex-account-2");
+        write_codex_auth(&second);
         let tmux = MultiWindowTmux {
             pane_age_seconds: Some(3.0),
             calls: Mutex::new(Vec::new()),
@@ -1246,6 +1318,7 @@ mod tests {
         let sandbox = Sandbox::new();
         let original_path = install_fake_codex(&sandbox.home);
         let second = sandbox.home.join(".codex-account-2");
+        write_codex_auth(&second);
         let tmux = MultiWindowTmux {
             pane_age_seconds: Some(CONSOLE_SETTLE_SECONDS + 1.0),
             calls: Mutex::new(Vec::new()),
@@ -1283,6 +1356,7 @@ mod tests {
         let sandbox = Sandbox::new();
         let original_path = install_fake_codex(&sandbox.home);
         let first = sandbox.home.join(".codex");
+        write_codex_auth(&first);
         let wanted = sandbox.home.join("bin").join("codex");
         let tmux = MultiWindowTmux {
             pane_age_seconds: Some(CONSOLE_SETTLE_SECONDS + 1.0),
@@ -1325,6 +1399,7 @@ mod tests {
         let sandbox = Sandbox::new();
         let original_path = install_fake_codex(&sandbox.home);
         let first = sandbox.home.join(".codex");
+        write_codex_auth(&first);
         let tmux = MultiWindowTmux {
             pane_age_seconds: None,
             calls: Mutex::new(Vec::new()),
@@ -1375,6 +1450,7 @@ mod tests {
             std::env::set_var("PATH", format!("{}:/usr/bin", bin.display()));
         }
         let extra = sandbox.home.join(".codex-account-2");
+        write_codex_auth(&extra);
         let tmux = FakeTmux {
             calls: Mutex::new(Vec::new()),
             has_session: true,
@@ -1427,6 +1503,7 @@ mod tests {
             std::env::set_var("PATH", format!("{}:/usr/bin", bin.display()));
         }
         let extra = sandbox.home.join(".codex-account-2");
+        write_codex_auth(&extra);
         let tmux = FakeTmux {
             calls: Mutex::new(Vec::new()),
             has_session: true,
@@ -1458,6 +1535,140 @@ mod tests {
                 None => std::env::remove_var("PATH"),
             }
         }
+    }
+
+    #[test]
+    fn unauthenticated_account_does_not_start_a_console() {
+        let sandbox = Sandbox::new();
+        let original_path = install_fake_codex(&sandbox.home);
+        let extra = sandbox.home.join(".codex-account-3");
+        std::fs::create_dir_all(&extra).unwrap();
+        let tmux = MultiWindowTmux {
+            pane_age_seconds: None,
+            calls: Mutex::new(Vec::new()),
+            windows: vec!["codex".into()],
+            homes: std::collections::HashMap::from([(
+                "codex".to_string(),
+                sandbox.home.join(".codex").display().to_string(),
+            )]),
+            cmdlines: std::collections::HashMap::new(),
+        };
+        write_codex_auth(&sandbox.home.join(".codex"));
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[
+                CodexConsole {
+                    window: "codex".into(),
+                    home: sandbox.home.join(".codex"),
+                    instance_id: Some(1),
+                },
+                CodexConsole {
+                    window: "codex-3".into(),
+                    home: extra,
+                    instance_id: Some(3),
+                },
+            ],
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        assert!(
+            !calls.iter().any(|c| {
+                c.first().map(String::as_str) == Some("new-window")
+                    && c.join(" ").contains("-n codex-3")
+            }),
+            "an account still waiting on login must not start a codex TUI"
+        );
+        restore_path(original_path);
+    }
+
+    #[test]
+    fn unauthenticated_console_is_closed() {
+        let sandbox = Sandbox::new();
+        let original_path = install_fake_codex(&sandbox.home);
+        let extra = sandbox.home.join(".codex-account-3");
+        std::fs::create_dir_all(&extra).unwrap();
+        write_codex_auth(&sandbox.home.join(".codex"));
+        let tmux = MultiWindowTmux {
+            pane_age_seconds: None,
+            calls: Mutex::new(Vec::new()),
+            windows: vec!["codex".into(), "codex-3".into()],
+            homes: std::collections::HashMap::from([
+                (
+                    "codex".to_string(),
+                    sandbox.home.join(".codex").display().to_string(),
+                ),
+                ("codex-3".to_string(), extra.display().to_string()),
+            ]),
+            cmdlines: std::collections::HashMap::new(),
+        };
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[
+                CodexConsole {
+                    window: "codex".into(),
+                    home: sandbox.home.join(".codex"),
+                    instance_id: Some(1),
+                },
+                CodexConsole {
+                    window: "codex-3".into(),
+                    home: extra,
+                    instance_id: Some(3),
+                },
+            ],
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        let killed: Vec<&Vec<String>> = calls
+            .iter()
+            .filter(|c| c.first().map(String::as_str) == Some("kill-window"))
+            .collect();
+        assert_eq!(killed.len(), 1);
+        assert_eq!(killed[0][2], "acs:codex-3");
+        restore_path(original_path);
+    }
+
+    #[test]
+    fn console_started_before_auth_is_recreated() {
+        let sandbox = Sandbox::new();
+        let original_path = install_fake_codex(&sandbox.home);
+        let extra = sandbox.home.join(".codex-account-3");
+        write_codex_auth(&extra);
+        let tmux = MultiWindowTmux {
+            pane_age_seconds: Some(120.0),
+            calls: Mutex::new(Vec::new()),
+            windows: vec!["codex-3".into()],
+            homes: std::collections::HashMap::from([(
+                "codex-3".to_string(),
+                extra.display().to_string(),
+            )]),
+            cmdlines: std::collections::HashMap::new(),
+        };
+        assert!(ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[CodexConsole {
+                window: "codex-3".into(),
+                home: extra,
+                instance_id: Some(3),
+            }],
+        ));
+        let calls = tmux.calls.lock().unwrap().clone();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.first().map(String::as_str) == Some("kill-window")),
+            "a login-loop pane that started before auth.json must be rebuilt"
+        );
+        restore_path(original_path);
     }
 
     #[test]
