@@ -696,6 +696,16 @@ function formatForecastPercent(value) {
   return `${rounded}%`;
 }
 
+/** Format a published cumulative trading volume in US dollars. */
+function formatForecastVolume(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+    return '';
+  return `$${value.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 /**
  * Build the reset-forecast entries shown above every CLI details section.
  *
@@ -734,7 +744,8 @@ function codexResetForecastMenuEntries(forecast) {
       if (!percent)
         return [];
       const label = String(prediction?.label ?? horizon).trim() || horizon;
-      return [`${label}: ${percent}`];
+      const volume = formatForecastVolume(prediction?.volume_usd);
+      return [`${label}: ${percent}${volume ? ` (volume ${volume})` : ''}`];
     });
     entries.push({
       kind: 'site',

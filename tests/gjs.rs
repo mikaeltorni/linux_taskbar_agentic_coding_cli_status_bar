@@ -168,6 +168,7 @@ fn agentic_results() -> Option<Value> {
         "forecastPercentMarkup",
         "formatForecastConsensusMarkup",
         "formatForecastPercent",
+        "formatForecastVolume",
         "codexResetForecastMenuEntries",
         "openExternalUrl",
         "cursorBarMarkup",
@@ -191,6 +192,8 @@ fn gradient_and_segments() {
     let Some(js) = agentic_results() else {
         return;
     };
+    assert_eq!(js["missing_forecast_volume"], "");
+    assert_eq!(js["invalid_forecast_volume"], "");
     assert_eq!(js["color_100"], "#8ff0a4");
     assert_eq!(js["color_1"], "#ff7b63");
     assert_eq!(js["color_0"], "#ff0000");
@@ -393,7 +396,7 @@ fn gradient_and_segments() {
             {
                 "kind": "site",
                 "name": "Polymarket",
-                "text": "Polymarket — by September 16: 35.5%",
+                "text": "Polymarket — by September 16: 35.5% (volume $1,234.56) · by September 18: 42% (volume $0.00)",
                 "url": "https://polymarket.com/",
             },
             {
