@@ -155,8 +155,9 @@ starts with the 24-48h consensus (`26%-48%` when both horizons exist) followed
 by one named row per forecast site, including every horizon that site publishes. The arrow button left of each
 site opens its public page in the desktop's default browser; Polymarket points
 directly to the newest active Codex-reset event returned by its public API. Each
-open daily Polymarket expiry shows its cumulative trading volume in dollars
-beside the Yes probability when the API publishes it.
+open daily Polymarket expiry uses a compact day.month date and shows its
+cumulative trading volume in whole dollars beside the Yes probability when the
+API publishes it (for example, `22.9: 79.5% $705`).
 
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):
