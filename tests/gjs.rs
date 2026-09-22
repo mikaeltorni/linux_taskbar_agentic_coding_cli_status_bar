@@ -429,8 +429,20 @@ fn gradient_and_segments() {
             {
                 "kind": "site",
                 "name": "WhenReset",
-                "text": "WhenReset — announcements and history",
+                "text": "WhenReset — latest banked reset · Sep 22 18:23 UTC",
                 "url": "https://whenreset.dev/codex",
+            },
+            {
+                "kind": "site",
+                "name": "Codex Resets",
+                "text": "Codex Resets — latest banked Sep 22 18:23 · direct scheduled Sep 23 06:59 UTC",
+                "url": "https://codex-resets.com/",
+            },
+            {
+                "kind": "site",
+                "name": "Will Codex Reset",
+                "text": "Will Codex Reset — 24h 20% · 48h 35% · mirrored outlook",
+                "url": "https://willcodexreset.org/",
             },
         ])
     );
@@ -444,12 +456,22 @@ fn gradient_and_segments() {
         "Polymarket — at least 1 reset: 86%"
     );
     assert_eq!(js["valid_forecast_launch"], true);
+    assert_eq!(
+        js["reference_forecast_launches"],
+        serde_json::json!([true, true, true])
+    );
     assert_eq!(js["rejected_forecast_launch"], false);
     assert_eq!(
         js["forecast_launch_calls"],
         serde_json::json!([
             ["launch", "https://polymarket.com/", null, null],
             ["finish", "https://polymarket.com/"],
+            ["launch", "https://whenreset.dev/codex", null, null],
+            ["finish", "https://whenreset.dev/codex"],
+            ["launch", "https://codex-resets.com/", null, null],
+            ["finish", "https://codex-resets.com/"],
+            ["launch", "https://willcodexreset.org/", null, null],
+            ["finish", "https://willcodexreset.org/"],
         ])
     );
     assert!(js["forecast_launch_logs"]
