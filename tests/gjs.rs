@@ -283,9 +283,18 @@ fn gradient_and_segments() {
     assert!(two.contains("CX1"));
     assert!(two.contains("CX2"));
     assert!(two.contains(" | "));
-    let luna = js["luna_reserve_on_cx1"].as_str().unwrap();
+    let luna = js["luna_reserve_on_cx3"].as_str().unwrap();
     assert!(luna.contains("Luna "));
     assert!(luna.contains(">92<"), "unexpected Luna counter: {luna}");
+    assert!(
+        luna.find("CX3").unwrap() < luna.find("Luna ").unwrap(),
+        "Luna counter should follow its CX3 account: {luna}"
+    );
+    let direct_luna = js["luna_reserve_direct_on_selected_cx3"].as_str().unwrap();
+    assert!(
+        direct_luna.find("CX3").unwrap() < direct_luna.find("Luna ").unwrap(),
+        "selected-account Luna counter should follow CX3: {direct_luna}"
+    );
     let depleted_luna = js["depleted_luna_reserve_on_bar"].as_str().unwrap();
     assert!(
         !depleted_luna.contains("Luna "),

@@ -428,7 +428,7 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000,
  *
  * The poller keeps Luna as a named window on the account whose pane exposed
  * it. The helper is kept separate from the ordinary window list so the
- * compact bar can place this shared reserve next to CX1 without replacing a
+ * compact bar can place the reserve next to that account without replacing a
  * real account's weekly limit.
  *
  * @param {?object} snapshot - Codex CLI or account snapshot.
@@ -440,21 +440,21 @@ function lunaReserveWindow(snapshot) {
 }
 
 /**
- * Find Luna reserve data across the selected Codex snapshot and its accounts.
+ * Find the Luna reserve window belonging to one Codex account.
  *
- * @param {?object} snapshot - Combined Codex snapshot.
- * @returns {?object} First reported Luna reserve window, or null.
+ * @param {?object} snapshot - Combined or selected-account Codex snapshot.
+ * @param {number|string} instanceId - Account id for the compact segment.
+ * @returns {?object} This account's Luna reserve window, or null.
  */
-function codexLunaReserveWindow(snapshot) {
-  const direct = lunaReserveWindow(snapshot);
-  if (direct)
-    return direct;
-  for (const instance of snapshot?.instances ?? []) {
-    const reserve = lunaReserveWindow(instance);
-    if (reserve)
-      return reserve;
-  }
-  return null;
+function codexLunaReserveWindow(snapshot, instanceId) {
+  const instance = (snapshot?.instances ?? [])
+    .find(candidate => String(candidate?.id ?? '') === String(instanceId));
+  const fromInstance = lunaReserveWindow(instance);
+  if (fromInstance)
+    return fromInstance;
+  return String(snapshot?.selected ?? 1) === String(instanceId)
+    ? lunaReserveWindow(snapshot)
+    : null;
 }
 
 /**
@@ -597,7 +597,6 @@ function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 100000
  */
 function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000) {
   const instances = snapshot?.instances;
-  const lunaReserve = codexLunaReserveWindow(snapshot);
   if (!Array.isArray(instances) || instances.length < 1) {
     const id = snapshot?.selected || 1;
     const base = segmentMarkup(
@@ -606,9 +605,10 @@ function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000
       nowEpoch,
       instanceTagColor(id, 1),
     );
-    const reserve = id === 1
-      ? lunaReserveMarkup(lunaReserve, nowEpoch)
-      : '';
+    const reserve = lunaReserveMarkup(
+      codexLunaReserveWindow(snapshot, id),
+      nowEpoch,
+    );
     return reserve
       ? `${base}<span foreground="${NEUTRAL_COLOR}">·</span>${reserve}`
       : base;
@@ -623,9 +623,10 @@ function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000
       nowEpoch,
       instanceTagColor(id, count),
     );
-    const reserveMarkup = id === 1
-      ? lunaReserveMarkup(lunaReserve, nowEpoch)
-      : '';
+    const reserveMarkup = lunaReserveMarkup(
+      codexLunaReserveWindow(snapshot, id),
+      nowEpoch,
+    );
     return reserveMarkup
       ? `${base}<span foreground="${NEUTRAL_COLOR}">·</span>${reserveMarkup}`
       : base;

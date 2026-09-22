@@ -176,7 +176,7 @@ const results = {
         {label: 'month', used_percent: 12, resets_at: NOW + 2588400}]},
     ]
   }, NOW),
-  luna_reserve_on_cx1: codexBarMarkup('CX', {
+  luna_reserve_on_cx3: codexBarMarkup('CX', {
     selected: 3,
     instances: [
       {id: 1, windows: [
@@ -187,6 +187,17 @@ const results = {
         {label: 'week', used_percent: 32},
         {label: 'luna_reserve', used_percent: 8}]},
     ]
+  }, NOW),
+  luna_reserve_direct_on_selected_cx3: codexBarMarkup('CX', {
+    selected: 3,
+    windows: [
+      {label: 'week', used_percent: 32},
+      {label: 'luna_reserve', used_percent: 8},
+    ],
+    instances: [
+      {id: 1, windows: [{label: 'week', used_percent: 10}]},
+      {id: 3, windows: [{label: 'week', used_percent: 32}]},
+    ],
   }, NOW),
   depleted_luna_reserve_on_bar: codexBarMarkup('CX', {
     selected: 3,
