@@ -696,14 +696,26 @@ function formatForecastPercent(value) {
   return `${rounded}%`;
 }
 
-/** Format a published cumulative trading volume in US dollars. */
+/** Format a published cumulative trading volume as whole US dollars. */
 function formatForecastVolume(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
     return '';
   return `$${value.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    maximumFractionDigits: 0,
   })}`;
+}
+
+/** Shorten a Polymarket expiry such as `by September 22` to `22.9`. */
+function formatPolymarketDate(label) {
+  const withoutBy = label.replace(/^by\s+/i, '');
+  const match = /^([A-Za-z]+) (\d{1,2})$/.exec(withoutBy);
+  if (!match)
+    return withoutBy;
+  const months = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+  const month = months.indexOf(match[1]) + 1;
+  const day = Number(match[2]);
+  return month > 0 && day >= 1 && day <= 31 ? `${day}.${month}` : withoutBy;
 }
 
 /**
@@ -743,9 +755,11 @@ function codexResetForecastMenuEntries(forecast) {
       const percent = formatForecastPercent(prediction?.percent);
       if (!percent)
         return [];
-      const label = String(prediction?.label ?? horizon).trim() || horizon;
+      const rawLabel = String(prediction?.label ?? horizon).trim() || horizon;
+      const label = site?.id === 'polymarket'
+        ? formatPolymarketDate(rawLabel) : rawLabel;
       const volume = formatForecastVolume(prediction?.volume_usd);
-      return [`${label}: ${percent}${volume ? ` (volume ${volume})` : ''}`];
+      return [`${label}: ${percent}${volume ? ` ${volume}` : ''}`];
     });
     entries.push({
       kind: 'site',

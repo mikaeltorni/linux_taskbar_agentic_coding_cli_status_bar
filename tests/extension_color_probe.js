@@ -233,9 +233,9 @@ const results = {
     sites: [
       {name: 'codex-reset.com', url: 'https://codex-reset.com/', predictions: [
         {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
-      {name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
-        {label: 'by September 16', percent: 35.5, volume_usd: 1234.56},
-        {label: 'by September 18', percent: 42, volume_usd: 0}]},
+      {id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
+        {label: 'by September 22', percent: 35.5, volume_usd: 1234.56},
+        {label: 'by September 24', percent: 42, volume_usd: 0}]},
       {name: 'Unavailable tracker', url: 'https://example.com/', predictions: [], error: 'HTTP 503'},
     ],
   }),

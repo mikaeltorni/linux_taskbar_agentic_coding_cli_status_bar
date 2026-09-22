@@ -169,6 +169,7 @@ fn agentic_results() -> Option<Value> {
         "formatForecastConsensusMarkup",
         "formatForecastPercent",
         "formatForecastVolume",
+        "formatPolymarketDate",
         "codexResetForecastMenuEntries",
         "openExternalUrl",
         "cursorBarMarkup",
@@ -396,7 +397,7 @@ fn gradient_and_segments() {
             {
                 "kind": "site",
                 "name": "Polymarket",
-                "text": "Polymarket — by September 16: 35.5% (volume $1,234.56) · by September 18: 42% (volume $0.00)",
+                "text": "Polymarket — 22.9: 35.5% $1,235 · 24.9: 42% $0",
                 "url": "https://polymarket.com/",
             },
             {
