@@ -156,6 +156,27 @@ by one named row per forecast site, including every horizon that site publishes.
 site opens its public page in the desktop's default browser; Polymarket points
 directly to the newest active Codex-reset event returned by its public API.
 
+### Public Codex reset sources
+
+These sites follow discretionary, broadly announced Codex resets. They cannot
+show when **your** 5-hour or weekly allowance will reset; use Codex `/status`
+or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan) for your account. OpenAI says occasional one-time resets are not guaranteed.
+
+| Site | What it publishes | Available surface |
+| --- | --- | --- |
+| [Codex Reset](https://codex-reset.com/) | Source-linked reset history and a documented 24h/48h JSON forecast | Public forecast API |
+| [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
+| [Polymarket](https://polymarket.com/) | Prices for active Codex-reset prediction markets, when any exist | Public market API; expiry odds differ from 24h/48h forecasts |
+| [NextReset](https://nextreset.ai/) | Source-linked, experimental 24h/48h/72h forecast with a public JSON endpoint and [methodology](https://nextreset.ai/forecast/) | Public forecast API |
+| [WhenReset](https://whenreset.dev/codex) | Announcements, reset history, and original posts; separates banked from automatic resets | Public history page |
+| [Codex Resets](https://codex-resets.com/) | Timestamped announcements and original posts, including the public history feed used by NextReset | Public history API and page |
+
+The name `whencodexwillreset` could not be tied to a working, verifiable URL
+as of September 22, 2026. The similarly named
+[Will Codex Reset](https://willcodexreset.com/) is live, but its public
+`robots.txt` disallows automated access to `/api/`; it can only be linked as a
+browser page, not used as a polled forecast source.
+
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):
 
