@@ -58,6 +58,8 @@ pub struct Prediction {
     /// prediction-market expiry like `by September 14`) is menu-only.
     pub label: String,
     pub percent: f64,
+    /// Cumulative traded volume in dollars for a Polymarket expiry, when published.
+    pub volume_usd: Option<f64>,
 }
 
 /// Everything one site published on this fetch.
@@ -180,6 +182,7 @@ fn parse_codex_reset(body: &str) -> Result<SiteForecast, String> {
             predictions.push(Prediction {
                 label: label.to_string(),
                 percent,
+                volume_usd: None,
             });
         }
     }
@@ -244,6 +247,7 @@ fn parse_codex_reset_monitor(body: &str) -> Result<SiteForecast, String> {
             predictions.push(Prediction {
                 label: horizon.to_string(),
                 percent,
+                volume_usd: None,
             });
         }
     }
@@ -287,6 +291,15 @@ fn polymarket_yes_percent(market: &Value) -> Option<f64> {
     clamp_percent(Some(price * 100.0))
 }
 
+/// Gamma publishes cumulative per-market volume as `volumeNum` or a numeric string.
+fn polymarket_volume_usd(market: &Value) -> Option<f64> {
+    market
+        .get("volumeNum")
+        .and_then(Value::as_f64)
+        .or_else(|| market.get("volume").and_then(Value::as_str)?.parse().ok())
+        .filter(|volume: &f64| volume.is_finite() && *volume >= 0.0)
+}
+
 /// Shorten a market question into a horizon label, e.g. `by September 14`.
 fn polymarket_label(question: &str) -> String {
     match question.to_lowercase().rfind(" by ") {
@@ -318,7 +331,7 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
         .ok_or_else(|| "Gamma response has no events array".to_string())?;
 
     // Guard against the search returning an unrelated event.
-    let mut newest: Option<(i64, Option<String>, Vec<(i64, String, f64)>)> = None;
+    let mut newest: Option<(i64, Option<String>, Vec<(i64, String, f64, Option<f64>)>)> = None;
     for event in events {
         let title = event
             .get("title")
@@ -366,7 +379,7 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
                 .unwrap_or(i64::MAX);
             let label =
                 polymarket_label(market.get("question").and_then(Value::as_str).unwrap_or(""));
-            open.push((end, label, percent));
+            open.push((end, label, percent, polymarket_volume_usd(market)));
         }
         if open.is_empty() {
             continue;
@@ -388,15 +401,16 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
     };
 
     // Nearest expiries first — those are the ones that answer "reset soon?".
-    open.sort_by_key(|(end, _, _)| *end);
+    open.sort_by_key(|(end, _, _, _)| *end);
     open.truncate(2);
 
     Ok(SiteForecast {
         predictions: open
             .iter()
-            .map(|(_, label, percent)| Prediction {
+            .map(|(_, label, percent, volume_usd)| Prediction {
                 label: label.clone(),
                 percent: *percent,
+                volume_usd: *volume_usd,
             })
             .collect(),
         url,
@@ -441,7 +455,13 @@ fn site_value(
         "predictions": forecast
             .predictions
             .iter()
-            .map(|prediction| json!({"label": prediction.label, "percent": prediction.percent}))
+            .map(|prediction| {
+                let mut row = json!({"label": prediction.label, "percent": prediction.percent});
+                if let Some(volume) = prediction.volume_usd {
+                    row["volume_usd"] = json!(volume);
+                }
+                row
+            })
             .collect::<Vec<Value>>(),
         "detail": forecast.detail,
         "observed_at": forecast.observed_at,
@@ -464,6 +484,10 @@ fn carried_forecast(previous: Option<&Value>) -> SiteForecast {
                     Some(Prediction {
                         label: row.get("label").and_then(Value::as_str)?.to_string(),
                         percent: clamp_percent(row.get("percent").and_then(Value::as_f64))?,
+                        volume_usd: row
+                            .get("volume_usd")
+                            .and_then(Value::as_f64)
+                            .filter(|volume| volume.is_finite() && *volume >= 0.0),
                     })
                 })
                 .collect()
@@ -694,9 +718,11 @@ mod tests {
         "markets": [
             {"question": "Will OpenAI reset Codex weekly usage limit by September 21?",
              "closed": false, "active": true, "endDate": "2026-09-22T03:59:00Z",
+             "volumeNum": 1234.56,
              "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.535\", \"0.465\"]"},
             {"question": "Will OpenAI reset Codex weekly usage limit by September 14?",
              "closed": false, "active": true, "endDate": "2026-09-15T03:59:00Z",
+             "volume": "78.9",
              "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.49\", \"0.51\"]"},
             {"question": "Will OpenAI reset Codex weekly usage limit by September 7?",
              "closed": true, "active": true, "endDate": "2026-09-08T03:59:00Z",
@@ -734,11 +760,13 @@ mod tests {
             vec![
                 Prediction {
                     label: "24h".into(),
-                    percent: 22.0
+                    percent: 22.0,
+                    volume_usd: None,
                 },
                 Prediction {
                     label: "48h".into(),
-                    percent: 39.0
+                    percent: 39.0,
+                    volume_usd: None,
                 },
             ]
         );
@@ -769,11 +797,13 @@ mod tests {
             vec![
                 Prediction {
                     label: "24h".into(),
-                    percent: 24.0
+                    percent: 24.0,
+                    volume_usd: None,
                 },
                 Prediction {
                     label: "48h".into(),
-                    percent: 42.0
+                    percent: 42.0,
+                    volume_usd: None,
                 },
             ]
         );
@@ -790,7 +820,8 @@ mod tests {
             parsed.predictions,
             vec![Prediction {
                 label: "24h".into(),
-                percent: 31.0
+                percent: 31.0,
+                volume_usd: None,
             }]
         );
     }
@@ -811,11 +842,13 @@ mod tests {
             vec![
                 Prediction {
                     label: "by September 14".into(),
-                    percent: 49.0
+                    percent: 49.0,
+                    volume_usd: Some(78.9),
                 },
                 Prediction {
                     label: "by September 21".into(),
-                    percent: 53.5
+                    percent: 53.5,
+                    volume_usd: Some(1234.56),
                 },
             ]
         );
@@ -837,6 +870,18 @@ mod tests {
     }
 
     #[test]
+    fn ignores_invalid_polymarket_volume_without_losing_the_market() {
+        let mut payload: Value = serde_json::from_str(&gamma_json()).unwrap();
+        payload["events"][0]["markets"][0]["volumeNum"] = json!(-5);
+        payload["events"][0]["markets"][1]["volume"] = json!("unknown");
+        let parsed = parse_polymarket(&payload.to_string()).expect("market remains available");
+        assert!(parsed
+            .predictions
+            .iter()
+            .all(|row| row.volume_usd.is_none()));
+    }
+
+    #[test]
     fn merges_every_site_into_one_consensus() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let opener = all_sites_opener(calls.clone());
@@ -853,6 +898,14 @@ mod tests {
         assert_eq!(result["contributing_sites"], json!(2));
         assert_eq!(result["error"], Value::Null);
         assert_eq!(result["sites"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            result["sites"][2]["predictions"][0]["volume_usd"],
+            json!(78.9)
+        );
+        assert_eq!(
+            result["sites"][2]["predictions"][1]["volume_usd"],
+            json!(1234.56)
+        );
         assert_eq!(
             result["sites"][2]["url"],
             json!(
@@ -1026,6 +1079,7 @@ mod tests {
         assert_eq!(failed["predictions"][0]["percent"], json!(22.0));
         let failed_market = &result["sites"][2];
         assert_eq!(failed_market["error"], json!("connection refused"));
+        assert_eq!(failed_market["predictions"][0]["volume_usd"], json!(78.9));
         assert_eq!(
             failed_market["url"],
             json!(
