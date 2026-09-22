@@ -371,7 +371,8 @@ function creditDetailText(credits) {
  * @returns {string} Segment markup; a trailing "?" marks stale data.
  */
 function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000, nameColor = null) {
-  const windows = snapshot?.windows ?? [];
+  const windows = (snapshot?.windows ?? [])
+    .filter(window => window?.label !== 'luna_reserve');
   // A credit block outlives any window reset, so it is flagged even when the
   // segment has no usable window numbers to color.
   const creditMark = creditBlocked(snapshot?.credits)
@@ -420,6 +421,73 @@ function segmentMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000,
     ? `<span foreground="${labelColor}">?</span>`
     : '';
   return `<span foreground="${labelColor}">${tag} </span>${parts}${staleMark}${creditMark}`;
+}
+
+/**
+ * Find a Codex snapshot's Luna reserve window.
+ *
+ * The poller keeps Luna as a named window on the account whose pane exposed
+ * it. The helper is kept separate from the ordinary window list so the
+ * compact bar can place this shared reserve next to CX1 without replacing a
+ * real account's weekly limit.
+ *
+ * @param {?object} snapshot - Codex CLI or account snapshot.
+ * @returns {?object} Luna reserve window, or null when absent.
+ */
+function lunaReserveWindow(snapshot) {
+  return (snapshot?.windows ?? [])
+    .find(window => window?.label === 'luna_reserve') ?? null;
+}
+
+/**
+ * Find Luna reserve data across the selected Codex snapshot and its accounts.
+ *
+ * @param {?object} snapshot - Combined Codex snapshot.
+ * @returns {?object} First reported Luna reserve window, or null.
+ */
+function codexLunaReserveWindow(snapshot) {
+  const direct = lunaReserveWindow(snapshot);
+  if (direct)
+    return direct;
+  for (const instance of snapshot?.instances ?? []) {
+    const reserve = lunaReserveWindow(instance);
+    if (reserve)
+      return reserve;
+  }
+  return null;
+}
+
+/**
+ * Render the compact Luna reserve counter for the taskbar.
+ *
+ * Depleted reserves stay available to the details menu but are omitted from
+ * the compact bar, where a red zero would otherwise obscure the primary
+ * account windows.
+ *
+ * @param {?object} reserve - Luna reserve window.
+ * @param {number} nowEpoch - Current epoch seconds.
+ * @returns {string} Compact markup, or an empty string when depleted/absent.
+ */
+function lunaReserveMarkup(reserve, nowEpoch) {
+  if (!reserve)
+    return '';
+  const left = percentLeft(reserve, nowEpoch);
+  if (left === 0)
+    return '';
+  return `<span foreground="${NEUTRAL_COLOR}">Luna </span>` +
+    `<span foreground="${percentColor(left)}">${left}</span>`;
+}
+
+/**
+ * Give the details menu a readable name for Codex's special window.
+ *
+ * @param {?object} window - Snapshot window.
+ * @returns {string} Human-readable window name.
+ */
+function codexWindowTitle(window) {
+  return window?.label === 'luna_reserve'
+    ? 'Luna Reserve'
+    : String(window?.label ?? '');
 }
 
 /**
@@ -529,25 +597,38 @@ function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 100000
  */
 function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000) {
   const instances = snapshot?.instances;
+  const lunaReserve = codexLunaReserveWindow(snapshot);
   if (!Array.isArray(instances) || instances.length < 1) {
     const id = snapshot?.selected || 1;
-    return segmentMarkup(
+    const base = segmentMarkup(
       `CX${id}`,
       snapshot,
       nowEpoch,
       instanceTagColor(id, 1),
     );
+    const reserve = id === 1
+      ? lunaReserveMarkup(lunaReserve, nowEpoch)
+      : '';
+    return reserve
+      ? `${base}<span foreground="${NEUTRAL_COLOR}">·</span>${reserve}`
+      : base;
   }
   const count = instances.length;
   const sep = `<span foreground="${NEUTRAL_COLOR}"> | </span>`;
   return instances.map((instance) => {
     const id = instance?.id ?? 1;
-    return segmentMarkup(
+    const base = segmentMarkup(
       `CX${id}`,
       instance,
       nowEpoch,
       instanceTagColor(id, count),
     );
+    const reserveMarkup = id === 1
+      ? lunaReserveMarkup(lunaReserve, nowEpoch)
+      : '';
+    return reserveMarkup
+      ? `${base}<span foreground="${NEUTRAL_COLOR}">·</span>${reserveMarkup}`
+      : base;
   }).join(sep);
 }
 
@@ -1029,7 +1110,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         ? '' : resetsText(window.resets_at, monthLike ? 'month' : window.label);
       const title = name === 'Cursor'
         ? cursorWindowLabel(window.label)
-        : String(window.label ?? '');
+        : codexWindowTitle(window);
       const item = new PopupMenu.PopupMenuItem('', { reactive: false });
       item.label.clutter_text.set_markup(
         `   ${GLib.markup_escape_text(title, -1)}: ` +
