@@ -722,8 +722,8 @@ function formatPolymarketDate(label) {
  * Build the reset-forecast entries shown above every CLI details section.
  *
  * Each source gets one named row containing every horizon it publishes. A
- * failed source remains visible as unavailable so the menu does not silently
- * make a multi-source consensus look healthier than it is.
+ * failed forecast source remains visible as unavailable; link-only reference
+ * sources show their purpose without implying they contributed a percentage.
  *
  * @param {?object} forecast - The `codex_reset_forecast` status entry.
  * @returns {object[]} Heading followed by one linked entry per source.
@@ -764,9 +764,11 @@ function codexResetForecastMenuEntries(forecast) {
     entries.push({
       kind: 'site',
       name,
-      text: predictions.length
-        ? `${name} — ${predictions.join(' · ')}`
-        : `${name} — unavailable`,
+      text: site?.reference === true
+        ? `${name} — ${String(site?.detail ?? 'reset history')}`
+        : predictions.length
+          ? `${name} — ${predictions.join(' · ')}`
+          : `${name} — unavailable`,
       url: site?.url ?? null,
     });
   }

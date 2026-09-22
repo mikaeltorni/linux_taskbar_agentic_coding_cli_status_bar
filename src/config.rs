@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use crate::collectors::codex_reset_forecast::{CONSENSUS_HORIZONS, FORECAST_SITES};
+use crate::collectors::codex_reset_forecast::{
+    CONSENSUS_HORIZONS, FORECAST_SITES, RESET_REFERENCE_SITES,
+};
 use crate::logging;
 
 pub const CONFIG_DIR_NAME: &str = "agentic-cli-status";
@@ -71,11 +73,15 @@ pub fn slash_command(cli_id: &str) -> Option<&'static str> {
 }
 
 /// Default per-site toggles, derived from the collector's site registry so the
-/// catalog of forecast sources lives in exactly one place.
+/// catalog of forecast and reference sources lives in the collector.
 fn default_forecast_sites() -> Value {
     let mut sites = Map::new();
-    for site in FORECAST_SITES {
-        sites.insert(site.id.to_string(), json!({"enabled": true}));
+    for id in FORECAST_SITES
+        .iter()
+        .map(|site| site.id)
+        .chain(RESET_REFERENCE_SITES.iter().map(|site| site.id))
+    {
+        sites.insert(id.to_string(), json!({"enabled": true}));
     }
     Value::Object(sites)
 }
@@ -496,7 +502,12 @@ fn validate_codex_reset_forecast(config: &mut Value) {
     }
     // Unknown site ids are dropped so a stale config cannot resurrect a source
     // that was removed from the registry.
-    let known: Vec<String> = FORECAST_SITES.iter().map(|s| s.id.to_string()).collect();
+    let known: Vec<String> = FORECAST_SITES
+        .iter()
+        .map(|site| site.id)
+        .chain(RESET_REFERENCE_SITES.iter().map(|site| site.id))
+        .map(str::to_string)
+        .collect();
     if let Some(sites) = forecast["sites"].as_object_mut() {
         sites.retain(|id, _| known.contains(id));
         for id in &known {
@@ -606,9 +617,16 @@ mod tests {
         assert_eq!(forecast["horizon"], json!("24h"));
         assert_eq!(forecast["fetch_min_interval_seconds"], json!(30));
         let sites = forecast["sites"].as_object().unwrap();
-        assert_eq!(sites.len(), FORECAST_SITES.len());
-        for site in FORECAST_SITES {
-            assert_eq!(sites[site.id]["enabled"], json!(true), "{}", site.id);
+        assert_eq!(
+            sites.len(),
+            FORECAST_SITES.len() + RESET_REFERENCE_SITES.len()
+        );
+        for id in FORECAST_SITES
+            .iter()
+            .map(|site| site.id)
+            .chain(RESET_REFERENCE_SITES.iter().map(|site| site.id))
+        {
+            assert_eq!(sites[id]["enabled"], json!(true), "{id}");
         }
     }
 
@@ -646,11 +664,15 @@ mod tests {
             "sites": {"polymarket": {"enabled": false}, "some_removed_site": {"enabled": true}}
         }));
         let sites = forecast["sites"].as_object().unwrap();
-        assert_eq!(sites.len(), FORECAST_SITES.len());
+        assert_eq!(
+            sites.len(),
+            FORECAST_SITES.len() + RESET_REFERENCE_SITES.len()
+        );
         assert!(!sites.contains_key("some_removed_site"));
         // An explicit opt-out survives; unlisted sites default to on.
         assert_eq!(sites["polymarket"]["enabled"], json!(false));
         assert_eq!(sites["codex_reset"]["enabled"], json!(true));
+        assert_eq!(sites["whenreset"]["enabled"], json!(true));
     }
 
     #[test]
@@ -661,7 +683,7 @@ mod tests {
         assert_eq!(forecast["horizon"], json!("24h"));
         assert_eq!(
             forecast["sites"].as_object().unwrap().len(),
-            FORECAST_SITES.len()
+            FORECAST_SITES.len() + RESET_REFERENCE_SITES.len()
         );
     }
 

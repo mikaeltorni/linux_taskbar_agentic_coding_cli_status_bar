@@ -406,6 +406,12 @@ fn gradient_and_segments() {
                 "text": "Unavailable tracker — unavailable",
                 "url": "https://example.com/",
             },
+            {
+                "kind": "site",
+                "name": "WhenReset",
+                "text": "WhenReset — announcements and history",
+                "url": "https://whenreset.dev/codex",
+            },
         ])
     );
     assert_eq!(js["disabled_forecast_menu_entries"], serde_json::json!([]));

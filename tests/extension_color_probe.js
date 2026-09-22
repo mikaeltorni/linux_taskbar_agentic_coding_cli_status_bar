@@ -237,6 +237,8 @@ const results = {
         {label: 'by September 22', percent: 35.5, volume_usd: 1234.56},
         {label: 'by September 24', percent: 42, volume_usd: 0}]},
       {name: 'Unavailable tracker', url: 'https://example.com/', predictions: [], error: 'HTTP 503'},
+      {name: 'WhenReset', url: 'https://whenreset.dev/codex',
+        reference: true, detail: 'announcements and history', predictions: []},
     ],
   }),
   disabled_forecast_menu_entries: codexResetForecastMenuEntries({
