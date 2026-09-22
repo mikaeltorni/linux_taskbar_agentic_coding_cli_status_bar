@@ -395,13 +395,13 @@ fn polymarket_string_array(market: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Yes-share price (0..1) of a binary market, as a percentage.
-fn polymarket_yes_percent(market: &Value) -> Option<f64> {
+/// Price of one named binary-market outcome, as a percentage.
+fn polymarket_outcome_percent(market: &Value, outcome_name: &str) -> Option<f64> {
     let outcomes = polymarket_string_array(market, "outcomes");
     let prices = polymarket_string_array(market, "outcomePrices");
     let index = outcomes
         .iter()
-        .position(|outcome| outcome.eq_ignore_ascii_case("yes"))?;
+        .position(|outcome| outcome.eq_ignore_ascii_case(outcome_name))?;
     let price: f64 = prices.get(index)?.parse().ok()?;
     clamp_percent(Some(price * 100.0))
 }
@@ -436,7 +436,9 @@ fn polymarket_event_url(event: &Value) -> Option<String> {
     Some(format!("https://polymarket.com/event/{slug}"))
 }
 
-/// Parse the newest matching Gamma event into its nearest open markets.
+/// Parse the newest matching Gamma event. Count markets use the No share of
+/// their zero-reset contract as the chance of at least one reset; dated markets
+/// continue to show the two nearest expiries.
 fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
     let root: Value =
         serde_json::from_str(body).map_err(|exc| format!("invalid Gamma JSON ({exc})"))?;
@@ -464,6 +466,7 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
         {
             continue;
         }
+        let count_event = title.starts_with("how many codex resets");
         let mut open = Vec::new();
         for market in event
             .get("markets")
@@ -484,7 +487,16 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
             {
                 continue;
             }
-            let Some(percent) = polymarket_yes_percent(market) else {
+            let question = market.get("question").and_then(Value::as_str).unwrap_or("");
+            if count_event
+                && !question
+                    .to_ascii_lowercase()
+                    .starts_with("will there be no codex weekly usage limit reset in the week of ")
+            {
+                continue;
+            }
+            let outcome = if count_event { "no" } else { "yes" };
+            let Some(percent) = polymarket_outcome_percent(market, outcome) else {
                 continue;
             };
             let end = market
@@ -492,8 +504,11 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
                 .and_then(Value::as_str)
                 .and_then(parse_iso_epoch)
                 .unwrap_or(i64::MAX);
-            let label =
-                polymarket_label(market.get("question").and_then(Value::as_str).unwrap_or(""));
+            let label = if count_event {
+                "at least 1 reset".to_string()
+            } else {
+                polymarket_label(question)
+            };
             open.push((end, label, percent, polymarket_volume_usd(market)));
         }
         if open.is_empty() {
@@ -515,9 +530,12 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
         return Err("no open Codex reset market in the Gamma response".into());
     };
 
-    // Nearest expiries first — those are the ones that answer "reset soon?".
+    // Nearest expiries first for dated markets; a count event has one selected contract.
     open.sort_by_key(|(end, _, _, _)| *end);
     open.truncate(2);
+    let count_event = open
+        .first()
+        .is_some_and(|(_, label, _, _)| label == "at least 1 reset");
 
     Ok(SiteForecast {
         predictions: open
@@ -529,7 +547,14 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
             })
             .collect(),
         url,
-        detail: Some("nearest open markets · Yes price".to_string()),
+        detail: Some(
+            if count_event {
+                "count market · zero-reset No share"
+            } else {
+                "nearest open markets · Yes price"
+            }
+            .to_string(),
+        ),
         observed_at: None,
         commitment: None,
     })
@@ -1246,6 +1271,44 @@ mod tests {
         assert_eq!(
             parsed.url.as_deref(),
             Some("https://polymarket.com/event/openai-resets-codex-weekly-usage-limit-by-20260914")
+        );
+    }
+
+    #[test]
+    fn count_market_reports_the_chance_of_any_reset() {
+        let body = json!({"events": [{
+            "title": "How many Codex resets week of September 21?",
+            "slug": "how-many-codex-resets-week-of-september-21",
+            "active": true, "closed": false,
+            "creationDate": "2026-09-21T00:00:00Z",
+            "markets": [
+                {"question": "Will there be no Codex weekly usage limit reset in the week of September 21?",
+                 "active": true, "closed": false, "endDate": "2026-09-28T00:00:00Z",
+                 "outcomes": "[\"Yes\",\"No\"]", "outcomePrices": "[\"0.14\",\"0.86\"]"},
+                {"question": "Will there be exactly 1 Codex weekly usage limit reset in the week of September 21?",
+                 "active": true, "closed": false, "endDate": "2026-09-28T00:00:00Z",
+                 "outcomes": "[\"Yes\",\"No\"]", "outcomePrices": "[\"0.135\",\"0.865\"]"},
+                {"question": "Will there be exactly 2 Codex weekly usage limit resets in the week of September 21?",
+                 "active": true, "closed": false, "endDate": "2026-09-28T00:00:00Z",
+                 "outcomes": "[\"Yes\",\"No\"]", "outcomePrices": "[\"0.14\",\"0.86\"]"}
+            ]
+        }]}).to_string();
+        let parsed = parse_polymarket(&body).expect("count market");
+        assert_eq!(
+            parsed.predictions,
+            vec![Prediction {
+                label: "at least 1 reset".into(),
+                percent: 86.0,
+                volume_usd: None,
+            }]
+        );
+        assert_eq!(
+            parsed.url.as_deref(),
+            Some("https://polymarket.com/event/how-many-codex-resets-week-of-september-21")
+        );
+        assert_eq!(
+            parsed.detail.as_deref(),
+            Some("count market · zero-reset No share")
         );
     }
 

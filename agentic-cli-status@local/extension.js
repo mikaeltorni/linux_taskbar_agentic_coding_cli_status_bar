@@ -843,7 +843,19 @@ function codexResetForecastMenuEntries(forecast) {
   for (const site of forecast.sites ?? []) {
     const name = String(site?.name ?? site?.id ?? 'Unknown site').trim() ||
       'Unknown site';
-    const predictions = (site?.predictions ?? []).flatMap(prediction => {
+    // Older status snapshots carry every count-market question. Render those
+    // like the current collector until a successful refresh replaces them.
+    const noReset = site?.id === 'polymarket'
+      ? (site?.predictions ?? []).find(prediction =>
+        formatPolymarketLabel(String(prediction?.label ?? '')) === '0 resets' &&
+        Number.isFinite(prediction?.percent) &&
+        prediction.percent >= 0 && prediction.percent <= 100)
+      : null;
+    const sitePredictions = noReset
+      ? [{label: 'at least 1 reset', percent: 100 - noReset.percent,
+        volume_usd: noReset.volume_usd}]
+      : site?.predictions ?? [];
+    const predictions = sitePredictions.flatMap(prediction => {
       const percent = formatForecastPercent(prediction?.percent);
       if (!percent)
         return [];

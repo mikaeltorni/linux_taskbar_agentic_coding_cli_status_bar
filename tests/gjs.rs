@@ -437,7 +437,11 @@ fn gradient_and_segments() {
     assert_eq!(js["disabled_forecast_menu_entries"], serde_json::json!([]));
     assert_eq!(
         js["forecast_menu_weekly_questions"][1]["text"],
-        "Polymarket — 0 resets: 21% · 1 reset: 14%"
+        "Polymarket — at least 1 reset: 79%"
+    );
+    assert_eq!(
+        js["forecast_menu_count_market"][1]["text"],
+        "Polymarket — at least 1 reset: 86%"
     );
     assert_eq!(js["valid_forecast_launch"], true);
     assert_eq!(js["rejected_forecast_launch"], false);
