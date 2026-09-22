@@ -159,6 +159,12 @@ open daily Polymarket expiry uses a compact day.month date and shows its
 cumulative trading volume in whole dollars beside the Yes probability when the
 API publishes it (for example, `22.9: 79.5% $705`).
 
+When codex-reset.com publishes a dated official commitment, its commitment
+percentage is used as a floor for any 24h or 48h horizon containing the stated
+deadline. The popup labels that source “official commitment” while it applies.
+The site's model probabilities return when the deadline passes or the signal is
+withdrawn; a cached commitment expires without waiting for another HTTP fetch.
+
 ### Public Codex reset sources
 
 These sites follow discretionary, broadly announced Codex resets. They cannot

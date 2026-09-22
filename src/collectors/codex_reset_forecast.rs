@@ -72,6 +72,15 @@ pub struct SiteForecast {
     pub detail: Option<String>,
     /// Upstream publication time, when the site states one.
     pub observed_at: Option<f64>,
+    /// A dated official commitment can raise the probability for horizons
+    /// containing its deadline. The model predictions remain available after it expires.
+    commitment: Option<DatedCommitment>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DatedCommitment {
+    percent: f64,
+    deadline_at: f64,
 }
 
 /// A vetted forecast source.
@@ -209,6 +218,28 @@ fn parse_codex_reset(body: &str) -> Result<SiteForecast, String> {
             .and_then(Value::as_str)
             .and_then(parse_iso_epoch)
             .map(|epoch| epoch as f64),
+        commitment: (root.get("mode").and_then(Value::as_str) == Some("announced")
+            && root
+                .pointer("/official_signal/signal_type")
+                .and_then(Value::as_str)
+                == Some("dated_commitment")
+            && root
+                .pointer("/official_signal/window/target_kind")
+                .and_then(Value::as_str)
+                == Some("deadline"))
+        .then(|| {
+            Some(DatedCommitment {
+                percent: clamp_percent(
+                    root.pointer("/probabilities/commitment_floor_percent")
+                        .and_then(Value::as_f64),
+                )?,
+                deadline_at: root
+                    .pointer("/official_signal/window/target_at")
+                    .and_then(Value::as_str)
+                    .and_then(parse_iso_epoch)? as f64,
+            })
+        })
+        .flatten(),
     })
 }
 
@@ -268,6 +299,7 @@ fn parse_codex_reset_monitor(body: &str) -> Result<SiteForecast, String> {
         url: None,
         detail,
         observed_at: None,
+        commitment: None,
     })
 }
 
@@ -416,6 +448,7 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
         url,
         detail: Some("nearest open markets · Yes price".to_string()),
         observed_at: None,
+        commitment: None,
     })
 }
 
@@ -447,27 +480,60 @@ fn site_value(
     forecast: &SiteForecast,
     checked_at: f64,
     error: Option<String>,
+    now: f64,
 ) -> Value {
-    json!({
-        "id": site.id,
-        "name": site.name,
-        "url": forecast.url.as_deref().unwrap_or(site.url),
-        "predictions": forecast
-            .predictions
-            .iter()
-            .map(|prediction| {
-                let mut row = json!({"label": prediction.label, "percent": prediction.percent});
-                if let Some(volume) = prediction.volume_usd {
-                    row["volume_usd"] = json!(volume);
+    let baseline_predictions: Vec<Value> = forecast
+        .predictions
+        .iter()
+        .map(|prediction| {
+            let mut row = json!({"label": prediction.label, "percent": prediction.percent});
+            if let Some(volume) = prediction.volume_usd {
+                row["volume_usd"] = json!(volume);
+            }
+            row
+        })
+        .collect();
+    let mut predictions = baseline_predictions.clone();
+    let mut commitment_applied = false;
+    if let Some(commitment) = &forecast.commitment {
+        for prediction in &mut predictions {
+            let horizon_seconds = match prediction.get("label").and_then(Value::as_str) {
+                Some("24h") => 24.0 * 3600.0,
+                Some("48h") => 48.0 * 3600.0,
+                _ => continue,
+            };
+            if commitment.deadline_at > now && commitment.deadline_at <= now + horizon_seconds {
+                let model_percent = prediction["percent"].as_f64().unwrap_or(0.0);
+                if commitment.percent > model_percent {
+                    prediction["percent"] = json!(commitment.percent);
+                    commitment_applied = true;
                 }
-                row
-            })
-            .collect::<Vec<Value>>(),
+            }
+        }
+    }
+    let mut row = json!({
+        "id": site.id,
+        "name": if commitment_applied {
+            format!("{} (official commitment)", site.name)
+        } else {
+            site.name.to_string()
+        },
+        "url": forecast.url.as_deref().unwrap_or(site.url),
+        "predictions": predictions,
         "detail": forecast.detail,
         "observed_at": forecast.observed_at,
         "checked_at": checked_at,
         "error": error,
-    })
+    });
+    if let Some(commitment) = &forecast.commitment {
+        row["baseline_predictions"] = json!(baseline_predictions);
+        row["commitment"] = json!({
+            "percent": commitment.percent,
+            "deadline_at": commitment.deadline_at,
+        });
+        row["commitment_applied"] = json!(commitment_applied);
+    }
+    row
 }
 
 /// Read a previously stored site entry back into a [`SiteForecast`].
@@ -476,7 +542,8 @@ fn carried_forecast(previous: Option<&Value>) -> SiteForecast {
         return SiteForecast::default();
     };
     let predictions = previous
-        .get("predictions")
+        .get("baseline_predictions")
+        .or_else(|| previous.get("predictions"))
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
@@ -504,6 +571,12 @@ fn carried_forecast(previous: Option<&Value>) -> SiteForecast {
             .and_then(Value::as_str)
             .map(str::to_string),
         observed_at: previous.get("observed_at").and_then(Value::as_f64),
+        commitment: previous.get("commitment").and_then(|value| {
+            Some(DatedCommitment {
+                percent: clamp_percent(value.get("percent").and_then(Value::as_f64))?,
+                deadline_at: value.get("deadline_at").and_then(Value::as_f64)?,
+            })
+        }),
     }
 }
 
@@ -591,12 +664,21 @@ pub fn collect_codex_reset_forecast(
         {
             if now - checked < interval {
                 // Still inside this source's politeness window: republish it.
-                rows.push(last_site.cloned().unwrap_or(Value::Null));
+                if last_site.and_then(|row| row.get("commitment")).is_some() {
+                    let carried = carried_forecast(last_site);
+                    let error = last_site
+                        .and_then(|row| row.get("error"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    rows.push(site_value(site, &carried, checked, error, now));
+                } else {
+                    rows.push(last_site.cloned().unwrap_or(Value::Null));
+                }
                 continue;
             }
         }
         match fetch_site(site, opener) {
-            Ok(forecast) => rows.push(site_value(site, &forecast, now, None)),
+            Ok(forecast) => rows.push(site_value(site, &forecast, now, None, now)),
             Err(exc) => {
                 let carried = carried_forecast(last_site);
                 let previous_error = last_site
@@ -605,8 +687,27 @@ pub fn collect_codex_reset_forecast(
                 if previous_error != Some(exc.as_str()) {
                     logging::warn(format!("codex reset forecast {}: {exc}", site.id));
                 }
-                rows.push(site_value(site, &carried, now, Some(exc)));
+                rows.push(site_value(site, &carried, now, Some(exc), now));
             }
+        }
+    }
+
+    if let Some(current) = rows.iter().find(|row| row["id"] == "codex_reset") {
+        let active = current["commitment_applied"].as_bool().unwrap_or(false);
+        let was_active = previous
+            .get("codex_reset")
+            .and_then(|row| row.get("commitment_applied"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if active != was_active {
+            logging::info(format!(
+                "codex reset forecast official commitment {}",
+                if active {
+                    "active"
+                } else {
+                    "expired or withdrawn"
+                }
+            ));
         }
     }
 
@@ -695,6 +796,138 @@ mod tests {
                               "raw_24h": 0.2178, "raw_48h": 0.3882},
         })
         .to_string()
+    }
+
+    fn announced_forecast_json(deadline: &str) -> String {
+        json!({
+            "mode": "announced",
+            "probabilities": {
+                "rounded_24h": 20,
+                "rounded_48h": 35,
+                "commitment_floor_percent": 93
+            },
+            "official_signal": {
+                "signal_type": "dated_commitment",
+                "window": {"target_kind": "deadline", "target_at": deadline}
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn announced_commitment_replaces_model_forecast_only_within_its_horizon() {
+        let deadline = "2026-09-23T06:59:59.999Z";
+        let deadline_at = parse_iso_epoch(deadline).unwrap() as f64;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let opener = FakeOpener {
+            bodies: vec![
+                (
+                    "codex-reset.com".into(),
+                    Ok(announced_forecast_json(deadline)),
+                ),
+                ("codexreset.org".into(), Ok(monitor_html())),
+                ("gamma-api".into(), Ok(gamma_json())),
+            ],
+            calls: calls.clone(),
+        };
+
+        let before_48h = collect_codex_reset_forecast(
+            None,
+            Some(deadline_at - 36.0 * 3600.0),
+            None,
+            None,
+            None,
+            Some(&opener),
+        );
+        assert_eq!(
+            before_48h["sites"][0]["predictions"][0]["percent"],
+            json!(20.0)
+        );
+        assert_eq!(
+            before_48h["sites"][0]["predictions"][1]["percent"],
+            json!(93.0)
+        );
+        assert_eq!(before_48h["consensus_percent_24h"], json!(22.0));
+        assert_eq!(before_48h["consensus_percent_48h"], json!(67.5));
+
+        let within_24h = collect_codex_reset_forecast(
+            Some(&before_48h),
+            Some(deadline_at - 3600.0),
+            None,
+            None,
+            None,
+            Some(&opener),
+        );
+        assert_eq!(
+            within_24h["sites"][0]["predictions"][0]["percent"],
+            json!(93.0)
+        );
+        assert_eq!(
+            within_24h["sites"][0]["predictions"][1]["percent"],
+            json!(93.0)
+        );
+        assert_eq!(
+            within_24h["sites"][0]["name"],
+            json!("codex-reset.com (official commitment)")
+        );
+        assert_eq!(within_24h["consensus_percent_24h"], json!(58.5));
+        calls.lock().unwrap().clear();
+
+        let just_before_deadline = collect_codex_reset_forecast(
+            Some(&within_24h),
+            Some(deadline_at - 5.0),
+            None,
+            None,
+            None,
+            Some(&opener),
+        );
+        calls.lock().unwrap().clear();
+        let expired = collect_codex_reset_forecast(
+            Some(&just_before_deadline),
+            Some(deadline_at + 1.0),
+            None,
+            None,
+            None,
+            Some(&FakeOpener {
+                bodies: vec![("codex-reset.com".into(), Err("offline".into()))],
+                calls: calls.clone(),
+            }),
+        );
+        assert_eq!(
+            expired["sites"][0]["predictions"][0]["percent"],
+            json!(20.0)
+        );
+        assert_eq!(
+            expired["sites"][0]["predictions"][1]["percent"],
+            json!(35.0)
+        );
+        assert_eq!(expired["sites"][0]["name"], json!("codex-reset.com"));
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "expiry needs no HTTP fetch"
+        );
+    }
+
+    #[test]
+    fn incomplete_commitment_does_not_override_model_forecast() {
+        let mut payload: Value =
+            serde_json::from_str(&announced_forecast_json("2026-09-23T06:59:59.999Z")).unwrap();
+        payload["official_signal"]["window"]["target_at"] = Value::Null;
+        let opener = FakeOpener {
+            bodies: vec![("codex-reset.com".into(), Ok(payload.to_string()))],
+            calls: Arc::new(Mutex::new(Vec::new())),
+        };
+        let sites =
+            json!({"codex_reset_monitor": {"enabled": false}, "polymarket": {"enabled": false}});
+        let result = collect_codex_reset_forecast(
+            None,
+            Some(1_000.0),
+            None,
+            None,
+            Some(&sites),
+            Some(&opener),
+        );
+        assert_eq!(result["consensus_percent"], json!(20.0));
     }
 
     fn monitor_html() -> String {
