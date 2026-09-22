@@ -112,8 +112,8 @@ pub struct ForecastSite {
 ///   refreshes hourly, hence the 300 s floor.
 /// - Polymarket — a real-money prediction market on exactly this question,
 ///   read through the documented public Gamma API.
-/// - NextReset — public JSON forecast with 24h/48h/72h windows; its published
-///   method identifies an experimental, incompletely calibrated estimate.
+/// - Codex Reset Observatory — server-rendered 24h/48h progress bars with a
+///   published history-and-signals method; its public page permits crawling.
 pub const FORECAST_SITES: &[ForecastSite] = &[
     ForecastSite {
         id: "codex_reset",
@@ -143,12 +143,12 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         carry_on_error: true,
     },
     ForecastSite {
-        id: "nextreset",
-        name: "NextReset (experimental)",
-        url: "https://nextreset.ai/",
-        endpoint: "https://nextreset.ai/api/forecast",
+        id: "codex_observatory",
+        name: "Codex Reset Observatory",
+        url: "https://codex.gussuriworks.com/en",
+        endpoint: "https://codex.gussuriworks.com/en",
         min_interval_seconds: 300.0,
-        parse: parse_nextreset,
+        parse: parse_codex_observatory,
         carry_on_error: false,
     },
 ];
@@ -293,60 +293,36 @@ fn parse_codex_reset(body: &str) -> Result<SiteForecast, String> {
     })
 }
 
-/// Parse NextReset's public versioned forecast. Probabilities are fractions;
-/// the 72h window is displayed in the menu but omitted from the consensus.
-/// Reject an expired snapshot because NextReset explicitly withdraws its
-/// percentage after `expiresAt` until fresh evidence is available.
-fn parse_nextreset(body: &str) -> Result<SiteForecast, String> {
-    let root: Value =
-        serde_json::from_str(body).map_err(|exc| format!("invalid forecast JSON ({exc})"))?;
-    if let Some(expires_at) = root.get("expiresAt") {
-        let expires = expires_at
-            .as_str()
-            .and_then(parse_iso_epoch)
-            .ok_or_else(|| "forecast JSON has an invalid expiry".to_string())?;
-        if (expires as f64) <= now_epoch() {
-            return Err("forecast has expired".into());
-        }
-    }
-    let windows = root
-        .get("windows")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "forecast JSON has no windows array".to_string())?;
-    let predictions: Vec<Prediction> = [24, 48, 72]
+/// Parse the public, server-rendered probability progress bars. A missing or
+/// invalid bar is omitted, and an error page cannot contribute to consensus.
+fn parse_codex_observatory(body: &str) -> Result<SiteForecast, String> {
+    let predictions: Vec<Prediction> = [("24h", "24"), ("48h", "48")]
         .into_iter()
-        .filter_map(|hours| {
-            let window = windows
-                .iter()
-                .find(|row| row.get("hours").and_then(Value::as_u64) == Some(hours))?;
-            let fraction = window.get("probability")?.as_f64()?;
-            if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
-                return None;
-            }
+        .filter_map(|(label, hours)| {
+            let pattern = format!(
+                r#"aria-label="Within {hours}h"[^>]*aria-valuenow="([0-9]+(?:\.[0-9]+)?)""#
+            );
+            let percent = regex::Regex::new(&pattern)
+                .ok()?
+                .captures(body)?
+                .get(1)?
+                .as_str()
+                .parse::<f64>()
+                .ok()
+                .filter(|value| (0.0..=100.0).contains(value))?;
             Some(Prediction {
-                label: format!("{hours}h"),
-                percent: fraction * 100.0,
+                label: label.to_string(),
+                percent,
                 volume_usd: None,
             })
         })
         .collect();
     if predictions.is_empty() {
-        return Err("forecast JSON published no valid probability".into());
+        return Err("observatory page published no probability bar".into());
     }
-    let version = root
-        .get("version")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown version");
     Ok(SiteForecast {
         predictions,
-        url: None,
-        detail: Some(format!("experimental · {version}")),
-        observed_at: root
-            .get("asOf")
-            .and_then(Value::as_str)
-            .and_then(parse_iso_epoch)
-            .map(|epoch| epoch as f64),
-        commitment: None,
+        ..SiteForecast::default()
     })
 }
 
@@ -931,62 +907,21 @@ mod tests {
         .to_string()
     }
 
-    fn nextreset_json() -> String {
-        json!({
-            "version": "NR-1.3",
-            "asOf": "2026-09-22T01:15:37.331Z",
-            "expiresAt": "2099-09-22T01:30:37.331Z",
-            "state": "forecast",
-            "degraded": false,
-            "windows": [
-                {"hours": 24, "probability": 0.36},
-                {"hours": 48, "probability": 0.60},
-                {"hours": 72, "probability": 0.75}
-            ]
-        })
-        .to_string()
+    fn observatory_html() -> &'static str {
+        r#"<div aria-label="Within 24h" aria-valuemax="100" aria-valuemin="0" aria-valuenow="88" role="progressbar"></div>
+           <div aria-label="Within 48h" aria-valuemax="100" aria-valuemin="0" aria-valuenow="95" role="progressbar"></div>"#
     }
 
     #[test]
-    fn parses_nextreset_public_forecast_without_treating_72h_as_consensus() {
-        let parsed = parse_nextreset(&nextreset_json()).expect("parsed");
-        assert_eq!(
-            parsed.predictions,
-            vec![
-                Prediction {
-                    label: "24h".into(),
-                    percent: 36.0,
-                    volume_usd: None,
-                },
-                Prediction {
-                    label: "48h".into(),
-                    percent: 60.0,
-                    volume_usd: None,
-                },
-                Prediction {
-                    label: "72h".into(),
-                    percent: 75.0,
-                    volume_usd: None,
-                },
-            ]
-        );
-        assert_eq!(parsed.detail.as_deref(), Some("experimental · NR-1.3"));
-        assert!(parsed.observed_at.is_some());
-    }
-
-    #[test]
-    fn rejects_nextreset_missing_or_invalid_probability() {
-        assert!(parse_nextreset("{}").is_err());
-        assert!(parse_nextreset(
-            &json!({"windows": [{"hours": 24, "probability": 1.4}]}).to_string()
-        )
-        .is_err());
-        assert!(parse_nextreset(
-            &json!({
-                "expiresAt": "2020-01-01T00:00:00Z",
-                "windows": [{"hours": 24, "probability": 0.5}]
-            })
-            .to_string()
+    fn parses_public_observatory_progressbars() {
+        let parsed = parse_codex_observatory(observatory_html()).expect("parsed");
+        assert_eq!(parsed.predictions[0].label, "24h");
+        assert_eq!(parsed.predictions[0].percent, 88.0);
+        assert_eq!(parsed.predictions[1].label, "48h");
+        assert_eq!(parsed.predictions[1].percent, 95.0);
+        assert!(parse_codex_observatory("<html>Unavailable</html>").is_err());
+        assert!(parse_codex_observatory(
+            r#"<div aria-label="Within 24h" aria-valuenow="not-a-number"></div>"#
         )
         .is_err());
     }
@@ -1050,7 +985,7 @@ mod tests {
             calls: calls.clone(),
         };
 
-        let sites = json!({"nextreset": {"enabled": false}});
+        let sites = json!({"codex_observatory": {"enabled": false}});
         let before_48h = collect_codex_reset_forecast(
             None,
             Some(deadline_at - 36.0 * 3600.0),
@@ -1137,7 +1072,7 @@ mod tests {
             bodies: vec![("codex-reset.com".into(), Ok(payload.to_string()))],
             calls: Arc::new(Mutex::new(Vec::new())),
         };
-        let sites = json!({"codex_reset_monitor": {"enabled": false}, "polymarket": {"enabled": false}, "nextreset": {"enabled": false}});
+        let sites = json!({"codex_reset_monitor": {"enabled": false}, "polymarket": {"enabled": false}, "codex_observatory": {"enabled": false}});
         let result = collect_codex_reset_forecast(
             None,
             Some(1_000.0),
@@ -1199,7 +1134,10 @@ mod tests {
                 ("codex-reset.com".into(), Ok(forecast_json())),
                 ("codexreset.org".into(), Ok(monitor_html())),
                 ("gamma-api".into(), Ok(gamma_json())),
-                ("nextreset.ai".into(), Ok(nextreset_json())),
+                (
+                    "codex.gussuriworks.com".into(),
+                    Ok(observatory_html().into()),
+                ),
             ],
             calls,
         }
@@ -1342,14 +1280,23 @@ mod tests {
             collect_codex_reset_forecast(None, Some(1_000.0), None, None, None, Some(&opener));
 
         assert_eq!(result["horizon"], json!("24h"));
-        // Polymarket expiries and reference links do not vote in the 24h/48h
-        // medians; NextReset's 72h window is visible but does not vote either.
+        // Polymarket expiries and reference links do not vote in the 24h/48h medians.
         assert_eq!(result["consensus_percent"], json!(24.0));
         assert_eq!(result["consensus_percent_24h"], json!(24.0));
         assert_eq!(result["consensus_percent_48h"], json!(42.0));
         assert_eq!(result["contributing_sites"], json!(3));
         assert_eq!(result["error"], Value::Null);
         assert_eq!(result["sites"].as_array().unwrap().len(), 7);
+        assert_eq!(result["sites"][3]["id"], json!("codex_observatory"));
+        assert_eq!(
+            result["sites"][3]["url"],
+            json!("https://codex.gussuriworks.com/en")
+        );
+        assert!(!result["sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|site| site["id"] == "nextreset"));
         assert_eq!(
             result["sites"][2]["predictions"][0]["volume_usd"],
             json!(78.9)
@@ -1378,7 +1325,7 @@ mod tests {
             None,
             Some(&opener),
         );
-        // Median of 39, 42, and 60. Both horizons stay published so the bar can
+        // Median of 39, 42, and 95. Both horizons stay published so the bar can
         // show 24-48h consensus regardless of which horizon is configured.
         assert_eq!(result["consensus_percent"], json!(42.0));
         assert_eq!(result["consensus_percent_24h"], json!(24.0));
@@ -1392,7 +1339,7 @@ mod tests {
         let sites = json!({
             "codex_reset_monitor": {"enabled": false},
             "polymarket": {"enabled": false},
-            "nextreset": {"enabled": false},
+            "codex_observatory": {"enabled": false},
             "whenreset": {"enabled": false},
             "codex_resets": {"enabled": false},
             "will_codex_reset": {"enabled": false}
@@ -1519,7 +1466,10 @@ mod tests {
                 ("codex-reset.com".into(), Err("connection refused".into())),
                 ("codexreset.org".into(), Ok(monitor_html())),
                 ("gamma-api".into(), Err("connection refused".into())),
-                ("nextreset.ai".into(), Ok(nextreset_json())),
+                (
+                    "codex.gussuriworks.com".into(),
+                    Ok(observatory_html().into()),
+                ),
             ],
             calls: Arc::new(Mutex::new(Vec::new())),
         };
@@ -1550,7 +1500,7 @@ mod tests {
     }
 
     #[test]
-    fn nextreset_failure_withdraws_its_expiring_probability() {
+    fn observatory_failure_withdraws_its_probability() {
         let good = collect_codex_reset_forecast(
             None,
             Some(1_000.0),
@@ -1564,7 +1514,10 @@ mod tests {
                 ("codex-reset.com".into(), Ok(forecast_json())),
                 ("codexreset.org".into(), Ok(monitor_html())),
                 ("gamma-api".into(), Ok(gamma_json())),
-                ("nextreset.ai".into(), Err("connection refused".into())),
+                (
+                    "codex.gussuriworks.com".into(),
+                    Err("connection refused".into()),
+                ),
             ],
             calls: Arc::new(Mutex::new(Vec::new())),
         };
@@ -1576,14 +1529,14 @@ mod tests {
             None,
             Some(&broken),
         );
-        let nextreset = result["sites"]
+        let observatory = result["sites"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|site| site["id"] == "nextreset")
+            .find(|site| site["id"] == "codex_observatory")
             .unwrap();
-        assert_eq!(nextreset["error"], json!("connection refused"));
-        assert_eq!(nextreset["predictions"], json!([]));
+        assert_eq!(observatory["error"], json!("connection refused"));
+        assert_eq!(observatory["predictions"], json!([]));
         assert_eq!(result["contributing_sites"], json!(2));
     }
 
@@ -1596,7 +1549,7 @@ mod tests {
         let sites = json!({
             "codex_reset": {"enabled": false},
             "codex_reset_monitor": {"enabled": false},
-            "nextreset": {"enabled": false}
+            "codex_observatory": {"enabled": false}
         });
         let result = collect_codex_reset_forecast(
             None,
@@ -1626,7 +1579,7 @@ mod tests {
             "codex_reset": {"enabled": false},
             "codex_reset_monitor": {"enabled": false},
             "polymarket": {"enabled": false},
-            "nextreset": {"enabled": false},
+            "codex_observatory": {"enabled": false},
             "whenreset": {"enabled": false},
             "codex_resets": {"enabled": false},
             "will_codex_reset": {"enabled": false},
