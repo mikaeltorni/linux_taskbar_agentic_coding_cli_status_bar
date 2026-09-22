@@ -3,6 +3,7 @@ import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
+import Pango from 'gi://Pango';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -800,6 +801,16 @@ function formatPolymarketDate(label) {
   return month > 0 && day >= 1 && day <= 31 ? `${day}.${month}` : withoutBy;
 }
 
+/** Keep a weekly market's outcome and date while dropping repeated question text. */
+function formatPolymarketLabel(label) {
+  const match = /^Will there be (no|exactly \d+) Codex weekly usage limit resets? in the week of ([A-Za-z]+ \d{1,2})\??$/i.exec(label);
+  if (!match)
+    return formatPolymarketDate(label);
+  const count = match[1].toLowerCase() === 'no'
+    ? 0 : Number(match[1].replace(/^exactly /i, ''));
+  return `${count} reset${count === 1 ? '' : 's'}, week of ${formatPolymarketDate(match[2])}`;
+}
+
 /**
  * Build the reset-forecast entries shown above every CLI details section.
  *
@@ -839,7 +850,7 @@ function codexResetForecastMenuEntries(forecast) {
         return [];
       const rawLabel = String(prediction?.label ?? horizon).trim() || horizon;
       const label = site?.id === 'polymarket'
-        ? formatPolymarketDate(rawLabel) : rawLabel;
+        ? formatPolymarketLabel(rawLabel) : rawLabel;
       const volume = formatForecastVolume(prediction?.volume_usd);
       return [`${label}: ${percent}${volume ? ` ${volume}` : ''}`];
     });
@@ -1064,10 +1075,13 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         openExternalUrl(entry.url, entry.name);
       });
       row.add_child(button);
-      row.add_child(new St.Label({
+      const label = new St.Label({
         text: entry.text,
+        style_class: 'acs-forecast-site-label',
         y_align: Clutter.ActorAlign.CENTER,
-      }));
+      });
+      label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+      row.add_child(label);
       item.add_child(row);
       this.menu.addMenuItem(item);
     }
