@@ -95,8 +95,10 @@ scrapes, and Cursor only GETs the spending dashboard with a session cookie.
 ### tmux debug console
 
 The poller maintains a detached tmux session (default `agentic-cli-status`)
-with one window per monitored CLI running that CLI's TUI. Attach any time to
-inspect what the CLIs report:
+with one window per monitored CLI running that CLI's TUI. Codex windows
+wait until that account's `auth.json` exists, and a pane that started
+before login is rebuilt afterwards, so the TUI cannot keep opening a
+ChatGPT browser loop. Attach any time to inspect what the CLIs report:
 
 ```bash
 tmux attach -t agentic-cli-status    # detach again with Ctrl+B D

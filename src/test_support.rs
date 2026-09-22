@@ -318,6 +318,14 @@ pub fn write_opencode_go_credentials(home: &Path) -> PathBuf {
     write_opencode_go_credentials_at(home, "wrk_test123", "Fe26.2**testcookie")
 }
 
+/// Mark a Codex home as logged in without writing real credentials.
+pub fn write_codex_auth(codex_home: &Path) -> PathBuf {
+    fs::create_dir_all(codex_home).unwrap();
+    let target = codex_home.join("auth.json");
+    fs::write(&target, "{}\n").unwrap();
+    target
+}
+
 /// Write a Cursor spending-page session cookie for collector tests.
 pub fn write_cursor_credentials(home: &Path) -> PathBuf {
     write_cursor_credentials_at(home, "test-workos-session-token")

@@ -20,8 +20,8 @@ pub mod util;
 
 pub use claude::{claude_is_running, claude_user_agent, collect_claude};
 pub use codex::{
-    codex_window_label, collect_codex, collect_codex_accounts, load_codex_account_registry,
-    selected_codex_home,
+    codex_home_authenticated, codex_window_label, collect_codex, collect_codex_accounts,
+    load_codex_account_registry, selected_codex_home,
 };
 pub use codex_reset_forecast::{
     collect_codex_reset_forecast, forecast_site, FORECAST_FETCH_MIN_INTERVAL_SECONDS,
