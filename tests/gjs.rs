@@ -173,6 +173,7 @@ fn agentic_results() -> Option<Value> {
         "formatForecastPercent",
         "formatForecastVolume",
         "formatPolymarketDate",
+        "formatPolymarketLabel",
         "codexResetForecastMenuEntries",
         "openExternalUrl",
         "cursorBarMarkup",
@@ -437,6 +438,10 @@ fn gradient_and_segments() {
         ])
     );
     assert_eq!(js["disabled_forecast_menu_entries"], serde_json::json!([]));
+    assert_eq!(
+        js["forecast_menu_weekly_questions"][1]["text"],
+        "Polymarket — 0 resets, week of 21.9: 21% · 1 reset, week of 21.9: 14%"
+    );
     assert_eq!(js["valid_forecast_launch"], true);
     assert_eq!(js["rejected_forecast_launch"], false);
     assert_eq!(
@@ -503,6 +508,9 @@ fn gradient_and_segments() {
     )
     .unwrap();
     assert!(stylesheet.contains(".acs-forecast-link-button"));
+    assert!(stylesheet.contains(".acs-forecast-site-label"));
+    assert!(stylesheet.contains("max-width: 34em"));
+    assert!(source.contains("label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END)"));
     let og_index = source.find("['opencode_go', 'OG']").unwrap();
     let or_index = source.find("['openrouter', 'OR']").unwrap();
     let crs_index = source.find("['cursor', 'CRS']").unwrap();
