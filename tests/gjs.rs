@@ -437,7 +437,7 @@ fn gradient_and_segments() {
     assert_eq!(js["disabled_forecast_menu_entries"], serde_json::json!([]));
     assert_eq!(
         js["forecast_menu_weekly_questions"][1]["text"],
-        "Polymarket — 0 resets, week of 21.9: 21% · 1 reset, week of 21.9: 14%"
+        "Polymarket — 0 resets: 21% · 1 reset: 14%"
     );
     assert_eq!(js["valid_forecast_launch"], true);
     assert_eq!(js["rejected_forecast_launch"], false);
@@ -492,22 +492,19 @@ fn gradient_and_segments() {
         .unwrap();
     let cli_menu_index = render_source.find("const names = {").unwrap();
     assert!(forecast_menu_index < cli_menu_index);
-    assert!(source.contains("new St.Button({"));
-    assert!(source.contains("accessible_name: `Open ${entry.name} in browser`"));
+    assert!(source.contains("new PopupMenu.PopupMenuItem(`↗ ${entry.text}`"));
+    assert!(source.contains("item.connect('activate', () =>"));
     assert!(source.contains("Gio.AppInfo.launch_default_for_uri_async"));
-    assert!(source.contains("const row = new St.BoxLayout({"));
-    assert!(source.contains("row.add_child(button)"));
-    assert!(source.contains("item.add_child(row)"));
+    assert!(source.contains("item.label.add_style_class_name('acs-forecast-site-label')"));
     let stylesheet = fs::read_to_string(
         repo_root()
             .join("agentic-cli-status@local")
             .join("stylesheet.css"),
     )
     .unwrap();
-    assert!(stylesheet.contains(".acs-forecast-link-button"));
     assert!(stylesheet.contains(".acs-forecast-site-label"));
     assert!(stylesheet.contains("max-width: 34em"));
-    assert!(source.contains("label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END)"));
+    assert!(source.contains("item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END)"));
     let og_index = source.find("['opencode_go', 'OG']").unwrap();
     let or_index = source.find("['openrouter', 'OR']").unwrap();
     let crs_index = source.find("['cursor', 'CRS']").unwrap();

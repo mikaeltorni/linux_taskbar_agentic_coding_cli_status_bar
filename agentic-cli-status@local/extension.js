@@ -800,14 +800,14 @@ function formatPolymarketDate(label) {
   return month > 0 && day >= 1 && day <= 31 ? `${day}.${month}` : withoutBy;
 }
 
-/** Keep a weekly market's outcome and date while dropping repeated question text. */
+/** Show the current event's outcome; its linked market page supplies the date. */
 function formatPolymarketLabel(label) {
-  const match = /^Will there be (no|exactly \d+) Codex weekly usage limit resets? in the week of ([A-Za-z]+ \d{1,2})\??$/i.exec(label);
+  const match = /^Will there be (no|exactly \d+) Codex weekly usage limit resets? in the week of [A-Za-z]+ \d{1,2}\??$/i.exec(label);
   if (!match)
     return formatPolymarketDate(label);
   const count = match[1].toLowerCase() === 'no'
     ? 0 : Number(match[1].replace(/^exactly /i, ''));
-  return `${count} reset${count === 1 ? '' : 's'}, week of ${formatPolymarketDate(match[2])}`;
+  return `${count} reset${count === 1 ? '' : 's'}`;
 }
 
 /**
@@ -1052,36 +1052,18 @@ class AgenticCliStatusButton extends PanelMenu.Button {
           entry.text, { reactive: false }));
         continue;
       }
-      const item = new PopupMenu.PopupBaseMenuItem({
-        reactive: false,
-        can_focus: false,
-      });
-      const row = new St.BoxLayout({
-        y_align: Clutter.ActorAlign.CENTER,
-      });
       const hasUrl = typeof entry.url === 'string' &&
         entry.url.startsWith('https://');
-      const button = new St.Button({
-        label: '↗',
-        style_class: 'acs-forecast-link-button',
+      const item = new PopupMenu.PopupMenuItem(`↗ ${entry.text}`, {
         reactive: hasUrl,
         can_focus: hasUrl,
-        track_hover: hasUrl,
-        accessible_name: `Open ${entry.name} in browser`,
       });
-      button.connect('clicked', () => {
+      item.label.add_style_class_name('acs-forecast-site-label');
+      item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+      item.connect('activate', () => {
         this.menu.close();
         openExternalUrl(entry.url, entry.name);
       });
-      row.add_child(button);
-      const label = new St.Label({
-        text: entry.text,
-        style_class: 'acs-forecast-site-label',
-        y_align: Clutter.ActorAlign.CENTER,
-      });
-      label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
-      row.add_child(label);
-      item.add_child(row);
       this.menu.addMenuItem(item);
     }
   }
