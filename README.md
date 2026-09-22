@@ -164,6 +164,12 @@ values contribute to the consensus, while its 72h value stays in its source
 row. Each source can be disabled with its
 `codex_reset_forecast.sites.<id>.enabled` setting.
 
+When codex-reset.com publishes a dated official commitment, its commitment
+percentage is used as a floor for any 24h or 48h horizon containing the stated
+deadline. The popup labels that source “official commitment” while it applies.
+The site's model probabilities return when the deadline passes or the signal is
+withdrawn; a cached commitment expires without waiting for another HTTP fetch.
+
 ### Public Codex reset sources
 
 These sites follow discretionary, broadly announced Codex resets. They cannot
