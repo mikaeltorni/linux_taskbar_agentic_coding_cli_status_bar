@@ -10,8 +10,8 @@
 //! - [`FORECAST_SITES`] — the vetted source registry (id, display name, page,
 //!   endpoint, politeness floor, parser). Adding a source is a registry entry
 //!   plus a parser, never a new fetch/throttle path.
-//! - [`RESET_REFERENCE_SITES`] — public history or browser-only sources shown
-//!   as links without adding a network request or a consensus vote.
+//! - [`RESET_REFERENCE_SITES`] — public history or mirrored forecast sources
+//!   summarized in linked rows without adding a consensus vote.
 //! - [`collect_codex_reset_forecast`] — per-site throttled fetch and parse,
 //!   merged into one snapshot carrying 24h and 48h consensus percentages
 //!   (plus `consensus_percent` for the configured horizon).
@@ -153,35 +153,42 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
     },
 ];
 
-/// A vetted public source whose page is useful but whose forecast is not
-/// suitable for automated polling or the numeric consensus.
+/// A vetted public supplemental source whose data is not an independent
+/// numeric forecast for the consensus.
 pub struct ResetReferenceSite {
     pub id: &'static str,
     pub name: &'static str,
     pub url: &'static str,
-    pub detail: &'static str,
+    pub endpoint: &'static str,
+    pub parse: fn(&str) -> Result<SiteForecast, String>,
+    pub min_interval_seconds: f64,
 }
 
-/// Link-only sources. The first two publish source-linked reset history; the
-/// last publishes a browser forecast but disallows generic `/api/` crawling.
+/// Supplemental sources with live summaries, excluded from the consensus.
 pub const RESET_REFERENCE_SITES: &[ResetReferenceSite] = &[
     ResetReferenceSite {
         id: "whenreset",
         name: "WhenReset",
         url: "https://whenreset.dev/codex",
-        detail: "announcements and history",
+        endpoint: "https://whenreset.dev/api/reset-feed?provider=codex",
+        parse: parse_whenreset_feed,
+        min_interval_seconds: 300.0,
     },
     ResetReferenceSite {
         id: "codex_resets",
         name: "Codex Resets",
         url: "https://codex-resets.com/",
-        detail: "source-linked history",
+        endpoint: "https://codex-resets.com/api/v1/status",
+        parse: parse_codex_resets_status,
+        min_interval_seconds: 300.0,
     },
     ResetReferenceSite {
         id: "will_codex_reset",
         name: "Will Codex Reset",
-        url: "https://willcodexreset.com/",
-        detail: "browser forecast",
+        url: "https://willcodexreset.org/",
+        endpoint: "https://willcodexreset.org/",
+        parse: parse_will_codex_reset_mirror,
+        min_interval_seconds: 300.0,
     },
 ];
 
@@ -322,6 +329,116 @@ fn parse_codex_observatory(body: &str) -> Result<SiteForecast, String> {
     }
     Ok(SiteForecast {
         predictions,
+        ..SiteForecast::default()
+    })
+}
+
+/// Format a published UTC event timestamp for a compact source row.
+fn event_time(epoch: i64) -> Result<String, String> {
+    chrono::DateTime::from_timestamp(epoch, 0)
+        .map(|date| date.format("%b %-d %H:%M").to_string())
+        .ok_or_else(|| "source published an invalid event timestamp".to_string())
+}
+
+/// Read the newest announced event from WhenReset's public Codex RSS feed.
+/// A bonus reset is a banked credit; it does not refill usage immediately.
+fn parse_whenreset_feed(body: &str) -> Result<SiteForecast, String> {
+    let item = body
+        .split("<item>")
+        .nth(1)
+        .and_then(|part| part.split("</item>").next())
+        .ok_or_else(|| "WhenReset feed published no Codex event".to_string())?;
+    let title = item
+        .split("<title>")
+        .nth(1)
+        .and_then(|part| part.split("</title>").next())
+        .ok_or_else(|| "WhenReset event has no title".to_string())?;
+    let kind = if title.contains("Bonus reset") {
+        "banked reset"
+    } else if title.contains("Usage reset") {
+        "direct reset"
+    } else {
+        return Err("WhenReset event has an unknown reset type".into());
+    };
+    let date = item
+        .split("<pubDate>")
+        .nth(1)
+        .and_then(|part| part.split("</pubDate>").next())
+        .and_then(|date| chrono::DateTime::parse_from_rfc2822(date).ok())
+        .ok_or_else(|| "WhenReset event has no valid publication time".to_string())?;
+    Ok(SiteForecast {
+        detail: Some(format!(
+            "latest {kind} · {} UTC",
+            event_time(date.timestamp())?
+        )),
+        observed_at: Some(date.timestamp() as f64),
+        ..SiteForecast::default()
+    })
+}
+
+/// Read the latest completed reset and any still scheduled reset separately.
+fn parse_codex_resets_status(body: &str) -> Result<SiteForecast, String> {
+    let root: Value = serde_json::from_str(body)
+        .map_err(|exc| format!("invalid Codex Resets status JSON ({exc})"))?;
+    let data = root.get("data").ok_or("Codex Resets status has no data")?;
+    let mut parts = Vec::new();
+    let mut observed_at = None;
+    if let Some(latest) = data.get("latest_reset").filter(|value| !value.is_null()) {
+        let kind = match latest.get("reset_type").and_then(Value::as_str) {
+            Some("banked") => "banked",
+            Some("regular") => "direct",
+            _ => return Err("Codex Resets latest event has unknown type".into()),
+        };
+        let epoch = latest
+            .get("announced_at")
+            .and_then(Value::as_str)
+            .and_then(parse_iso_epoch)
+            .ok_or("Codex Resets latest event has no valid time")?;
+        parts.push(format!("latest {kind} {}", event_time(epoch)?));
+        observed_at = Some(epoch as f64);
+    }
+    if let Some(scheduled) = data.get("scheduled_reset").filter(|value| !value.is_null()) {
+        if scheduled.get("status").and_then(Value::as_str) == Some("scheduled") {
+            let kind = match scheduled.get("reset_type").and_then(Value::as_str) {
+                Some("banked") => "banked",
+                Some("regular") => "direct",
+                _ => return Err("Codex Resets scheduled event has unknown type".into()),
+            };
+            let epoch = scheduled
+                .get("scheduled_for")
+                .and_then(Value::as_str)
+                .and_then(parse_iso_epoch)
+                .ok_or("Codex Resets scheduled event has no valid time")?;
+            parts.push(format!("{kind} scheduled {}", event_time(epoch)?));
+        }
+    }
+    if parts.is_empty() {
+        return Err("Codex Resets status published no reset event".into());
+    }
+    Ok(SiteForecast {
+        detail: Some(format!("{} UTC", parts.join(" · "))),
+        observed_at,
+        ..SiteForecast::default()
+    })
+}
+
+/// Show the rendered mirror's numbers as context without double-counting its
+/// upstream codex-reset.com forecast in the consensus.
+fn parse_will_codex_reset_mirror(body: &str) -> Result<SiteForecast, String> {
+    let mut values = Vec::new();
+    for hours in [24, 48] {
+        let pattern = format!(r#"id="probability{hours}">([0-9]+(?:\.[0-9]+)?)</span>"#);
+        let percent = regex::Regex::new(&pattern)
+            .ok()
+            .and_then(|re| re.captures(body))
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<f64>().ok())
+            .filter(|value| (0.0..=100.0).contains(value))
+            .ok_or_else(|| format!("Will Codex Reset page has no valid {hours}h probability"))?;
+        values.push(format!("{hours}h {percent}%"));
+    }
+    Ok(SiteForecast {
+        detail: Some(format!("{} · mirrored outlook", values.join(" · "))),
         ..SiteForecast::default()
     })
 }
@@ -562,14 +679,18 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
 
 /// Fetch one site's endpoint and parse it.
 fn fetch_site(
-    site: &ForecastSite,
+    endpoint: &str,
+    parse: fn(&str) -> Result<SiteForecast, String>,
     opener: Option<&dyn HttpOpener>,
 ) -> Result<SiteForecast, String> {
     let request = HttpRequest {
-        url: site.endpoint.to_string(),
+        url: endpoint.to_string(),
         method: "GET".into(),
         headers: vec![
-            ("Accept".into(), "application/json, text/html;q=0.9".into()),
+            (
+                "Accept".into(),
+                "application/json, text/html;q=0.9, application/rss+xml;q=0.8".into(),
+            ),
             ("Accept-Encoding".into(), "gzip".into()),
             ("User-Agent".into(), USER_AGENT.into()),
         ],
@@ -579,7 +700,7 @@ fn fetch_site(
     let default_opener = UreqOpener;
     let opener: &dyn HttpOpener = opener.unwrap_or(&default_opener);
     let response = opener.open(&request).map_err(|exc| exc.to_string())?;
-    (site.parse)(&response.text())
+    parse(&response.text())
 }
 
 /// Serialize a site's state for `status.json`.
@@ -644,18 +765,29 @@ fn site_value(
     row
 }
 
-/// Serialize a browser-only source in the same shape as a forecast row.
-fn reference_site_value(site: &ResetReferenceSite) -> Value {
+/// Serialize a supplemental source in the same shape as a forecast row.
+fn reference_site_value(
+    site: &ResetReferenceSite,
+    forecast: &SiteForecast,
+    checked_at: f64,
+    error: Option<String>,
+) -> Value {
     json!({
         "id": site.id,
         "name": site.name,
         "url": site.url,
         "reference": true,
         "predictions": [],
-        "detail": site.detail,
-        "observed_at": null,
-        "checked_at": null,
-        "error": null,
+        "detail": match (forecast.detail.as_deref(), error.as_deref()) {
+            (Some(detail), Some(_)) => {
+                format!("{} · last known", detail.trim_end_matches(" · last known"))
+            },
+            (Some(detail), None) => detail.to_string(),
+            (None, _) => "live data unavailable".to_string(),
+        },
+        "observed_at": forecast.observed_at,
+        "checked_at": checked_at,
+        "error": error,
     })
 }
 
@@ -745,6 +877,14 @@ fn site_enabled(site_config: Option<&Value>, id: &str) -> bool {
         .unwrap_or(true)
 }
 
+/// Return the last check time while this source remains inside its fetch floor.
+fn checked_within_interval(previous: Option<&Value>, now: f64, interval: f64) -> Option<f64> {
+    previous
+        .and_then(|row| row.get("checked_at"))
+        .and_then(Value::as_f64)
+        .filter(|checked| now - checked < interval)
+}
+
 /// Collect Codex reset forecasts from every enabled site.
 ///
 /// Each site self-throttles against its own `checked_at` in `last_result`, so
@@ -781,26 +921,21 @@ pub fn collect_codex_reset_forecast(
         }
         let last_site = previous.get(site.id);
         let interval = min_interval.max(site.min_interval_seconds);
-        if let Some(checked) = last_site
-            .and_then(|row| row.get("checked_at"))
-            .and_then(Value::as_f64)
-        {
-            if now - checked < interval {
-                // Still inside this source's politeness window: republish it.
-                if last_site.and_then(|row| row.get("commitment")).is_some() {
-                    let carried = carried_forecast(last_site);
-                    let error = last_site
-                        .and_then(|row| row.get("error"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    rows.push(site_value(site, &carried, checked, error, now));
-                } else {
-                    rows.push(last_site.cloned().unwrap_or(Value::Null));
-                }
-                continue;
+        if let Some(checked) = checked_within_interval(last_site, now, interval) {
+            // A dated commitment can expire before the next site fetch.
+            if last_site.and_then(|row| row.get("commitment")).is_some() {
+                let carried = carried_forecast(last_site);
+                let error = last_site
+                    .and_then(|row| row.get("error"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                rows.push(site_value(site, &carried, checked, error, now));
+            } else {
+                rows.push(last_site.cloned().unwrap_or(Value::Null));
             }
+            continue;
         }
-        match fetch_site(site, opener) {
+        match fetch_site(site.endpoint, site.parse, opener) {
             Ok(forecast) => rows.push(site_value(site, &forecast, now, None, now)),
             Err(exc) => {
                 let carried = if site.carry_on_error {
@@ -821,8 +956,27 @@ pub fn collect_codex_reset_forecast(
 
     let forecast_rows = rows.len();
     for site in RESET_REFERENCE_SITES {
-        if site_enabled(site_config, site.id) {
-            rows.push(reference_site_value(site));
+        if !site_enabled(site_config, site.id) {
+            continue;
+        }
+        let last_site = previous.get(site.id);
+        let interval = min_interval.max(site.min_interval_seconds);
+        if checked_within_interval(last_site, now, interval).is_some() {
+            rows.push(last_site.cloned().unwrap_or(Value::Null));
+            continue;
+        }
+        match fetch_site(site.endpoint, site.parse, opener) {
+            Ok(forecast) => rows.push(reference_site_value(site, &forecast, now, None)),
+            Err(exc) => {
+                let carried = carried_forecast(last_site);
+                let previous_error = last_site
+                    .and_then(|row| row.get("error"))
+                    .and_then(Value::as_str);
+                if previous_error != Some(exc.as_str()) {
+                    logging::warn(format!("codex reset reference {}: {exc}", site.id));
+                }
+                rows.push(reference_site_value(site, &carried, now, Some(exc)));
+            }
         }
     }
 
@@ -952,7 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn reference_sites_are_linked_without_fetching_or_changing_consensus() {
+    fn reference_sites_publish_live_context_without_changing_consensus() {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let result = collect_codex_reset_forecast(
             None,
@@ -966,15 +1120,63 @@ mod tests {
         for (id, url) in [
             ("whenreset", "https://whenreset.dev/codex"),
             ("codex_resets", "https://codex-resets.com/"),
-            ("will_codex_reset", "https://willcodexreset.com/"),
+            ("will_codex_reset", "https://willcodexreset.org/"),
         ] {
             let site = sites.iter().find(|site| site["id"] == id).expect(id);
             assert_eq!(site["url"], json!(url));
             assert_eq!(site["reference"], json!(true));
             assert_eq!(site["predictions"], json!([]));
+            assert!(site["detail"]
+                .as_str()
+                .is_some_and(|detail| !detail.is_empty()));
         }
-        assert_eq!(calls.lock().unwrap().len(), FORECAST_SITES.len());
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            FORECAST_SITES.len() + RESET_REFERENCE_SITES.len()
+        );
         assert_eq!(result["contributing_sites"], json!(3));
+    }
+
+    #[test]
+    fn parses_whenreset_banked_reset_without_implying_immediate_refill() {
+        let feed = r#"<rss><channel><item><title>Tibo · Bonus reset</title><pubDate>Tue, 22 Sep 2026 18:23:37 GMT</pubDate></item></channel></rss>"#;
+        let parsed = parse_whenreset_feed(feed).expect("valid feed");
+        assert_eq!(
+            parsed.detail.as_deref(),
+            Some("latest banked reset · Sep 22 18:23 UTC")
+        );
+        assert!(parsed.predictions.is_empty());
+        assert!(parse_whenreset_feed("<rss><channel></channel></rss>").is_err());
+    }
+
+    #[test]
+    fn parses_codex_resets_status_and_keeps_scheduled_reset_distinct() {
+        let status = json!({"data": {
+            "latest_reset": {"reset_type": "banked", "announced_at": "2026-09-22T18:23:37Z"},
+            "scheduled_reset": {"status": "scheduled", "reset_type": "regular",
+                "scheduled_for": "2026-09-23T06:59:00Z"}
+        }});
+        let parsed = parse_codex_resets_status(&status.to_string()).expect("valid status");
+        assert_eq!(
+            parsed.detail.as_deref(),
+            Some("latest banked Sep 22 18:23 · direct scheduled Sep 23 06:59 UTC")
+        );
+        assert!(parsed.predictions.is_empty());
+        assert!(parse_codex_resets_status("{\"data\":{}}").is_err());
+    }
+
+    #[test]
+    fn failed_reference_keeps_one_stale_marker() {
+        let site = &RESET_REFERENCE_SITES[0];
+        let forecast = SiteForecast {
+            detail: Some("latest banked reset · Sep 22 18:23 UTC · last known".into()),
+            ..SiteForecast::default()
+        };
+        let row = reference_site_value(site, &forecast, 1_000.0, Some("offline".into()));
+        assert_eq!(
+            row["detail"],
+            "latest banked reset · Sep 22 18:23 UTC · last known"
+        );
     }
 
     fn announced_forecast_json(deadline: &str) -> String {
@@ -1163,6 +1365,9 @@ mod tests {
                     "codex.gussuriworks.com".into(),
                     Ok(observatory_html().into()),
                 ),
+                ("whenreset.dev".into(), Ok("<rss><channel><item><title>Tibo · Bonus reset</title><pubDate>Tue, 22 Sep 2026 18:23:37 GMT</pubDate></item></channel></rss>".into())),
+                ("codex-resets.com".into(), Ok(json!({"data":{"latest_reset":{"reset_type":"banked","announced_at":"2026-09-22T18:23:37Z"},"scheduled_reset":null}}).to_string())),
+                ("willcodexreset.org".into(), Ok("<span id=\"probability24\">20</span><span id=\"probability48\">35</span>".into())),
             ],
             calls,
         }
@@ -1374,7 +1579,7 @@ mod tests {
                 "https://polymarket.com/event/openai-resets-codex-weekly-usage-limit-by-20260914"
             )
         );
-        assert_eq!(calls.lock().unwrap().len(), 4);
+        assert_eq!(calls.lock().unwrap().len(), 7);
     }
 
     #[test]
@@ -1669,8 +1874,9 @@ mod tests {
         }
         for site in RESET_REFERENCE_SITES {
             assert!(site.url.starts_with("https://"), "{}", site.id);
+            assert!(site.endpoint.starts_with("https://"), "{}", site.id);
             assert!(!site.name.is_empty(), "{}", site.id);
-            assert!(!site.detail.is_empty(), "{}", site.id);
+            assert!(site.min_interval_seconds >= FORECAST_FETCH_MIN_INTERVAL_SECONDS);
             assert!(forecast_site(site.id).is_none(), "{}", site.id);
         }
     }

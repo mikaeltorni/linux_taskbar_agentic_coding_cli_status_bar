@@ -187,13 +187,14 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 | [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
 | [Polymarket](https://polymarket.com/) | Prices for active Codex-reset prediction markets, when any exist | Public market API; expiry odds differ from 24h/48h forecasts |
 | [Codex Reset Observatory](https://codex.gussuriworks.com/en) | 24h/48h estimates from reset history and public signals, with original post links | Public server-rendered page |
-| [WhenReset](https://whenreset.dev/codex) | Announcements, reset history, and original posts; separates banked from automatic resets | Public history page |
-| [Codex Resets](https://codex-resets.com/) | Timestamped announcements and original posts | Public history API and page |
-| [Will Codex Reset](https://willcodexreset.com/) | Browser forecast, signal desk, and reset calendar | Public page; `/api/` is disallowed by its `robots.txt` |
+| [WhenReset](https://whenreset.dev/codex) | Latest direct or banked reset, with original posts and history | Public Codex RSS feed; shown as context, not a consensus vote |
+| [Codex Resets](https://codex-resets.com/) | Latest completed reset and any separately scheduled reset | Public status API; shown as context, not a consensus vote |
+| [Will Codex Reset](https://willcodexreset.org/) | 24h/48h outlook mirrored from Codex Reset | Public rendered page; shown as context, not a second consensus vote |
 
 The name `whencodexwillreset` could not be tied to a working, verifiable URL
-as of September 22, 2026. The similarly named Will Codex Reset is linked in
-the app without polling its forecast.
+as of September 22, 2026. The similarly named Will Codex Reset mirror is linked
+in the app and polled for context, without counting its duplicated forecast in
+the consensus.
 
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):
