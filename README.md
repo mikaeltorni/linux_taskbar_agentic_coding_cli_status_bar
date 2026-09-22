@@ -164,9 +164,8 @@ daily Polymarket expiry uses a compact day.month date and shows its cumulative
 trading volume in whole dollars beside the Yes probability when the API
 publishes it (for example, `22.9: 79.5% $705`). Weekly-count markets show
 only the outcome (for example, `0 resets: 21%`); the linked event gives the
-week. NextReset's public 24h/48h values contribute to the consensus, while its
-72h value stays in its source
-row. Each source can be disabled with its
+week. Codex Reset Observatory contributes its public 24h/48h values to the
+consensus. Each source can be disabled with its
 `codex_reset_forecast.sites.<id>.enabled` setting.
 
 When codex-reset.com publishes a dated official commitment, its commitment
@@ -186,9 +185,9 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 | [Codex Reset](https://codex-reset.com/) | Source-linked reset history and a documented 24h/48h JSON forecast | Public forecast API |
 | [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
 | [Polymarket](https://polymarket.com/) | Prices for active Codex-reset prediction markets, when any exist | Public market API; expiry odds differ from 24h/48h forecasts |
-| [NextReset](https://nextreset.ai/) | Source-linked, experimental 24h/48h/72h forecast with a public JSON endpoint and [methodology](https://nextreset.ai/forecast/) | Public forecast API |
+| [Codex Reset Observatory](https://codex.gussuriworks.com/en) | 24h/48h estimates from reset history and public signals, with original post links | Public server-rendered page |
 | [WhenReset](https://whenreset.dev/codex) | Announcements, reset history, and original posts; separates banked from automatic resets | Public history page |
-| [Codex Resets](https://codex-resets.com/) | Timestamped announcements and original posts, including the public history feed used by NextReset | Public history API and page |
+| [Codex Resets](https://codex-resets.com/) | Timestamped announcements and original posts | Public history API and page |
 | [Will Codex Reset](https://willcodexreset.com/) | Browser forecast, signal desk, and reset calendar | Public page; `/api/` is disallowed by its `robots.txt` |
 
 The name `whencodexwillreset` could not be tied to a working, verifiable URL

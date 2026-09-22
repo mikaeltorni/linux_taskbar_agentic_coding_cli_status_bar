@@ -661,7 +661,11 @@ mod tests {
     fn codex_reset_forecast_drops_unknown_sites_and_fills_missing_ones() {
         let _sandbox = Sandbox::new();
         let forecast = load_with(json!({
-            "sites": {"polymarket": {"enabled": false}, "some_removed_site": {"enabled": true}}
+            "sites": {
+                "polymarket": {"enabled": false},
+                "nextreset": {"enabled": true},
+                "some_removed_site": {"enabled": true}
+            }
         }));
         let sites = forecast["sites"].as_object().unwrap();
         assert_eq!(
@@ -669,10 +673,12 @@ mod tests {
             FORECAST_SITES.len() + RESET_REFERENCE_SITES.len()
         );
         assert!(!sites.contains_key("some_removed_site"));
+        assert!(!sites.contains_key("nextreset"));
         // An explicit opt-out survives; unlisted sites default to on.
         assert_eq!(sites["polymarket"]["enabled"], json!(false));
         assert_eq!(sites["codex_reset"]["enabled"], json!(true));
         assert_eq!(sites["whenreset"]["enabled"], json!(true));
+        assert_eq!(sites["codex_observatory"]["enabled"], json!(true));
     }
 
     #[test]
