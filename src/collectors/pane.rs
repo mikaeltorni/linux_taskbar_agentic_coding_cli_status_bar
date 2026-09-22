@@ -46,6 +46,11 @@ fn pane_window_keywords(cli_id: &str) -> &'static [WindowKeyword] {
                 max_seconds: WEEK_SECONDS,
             },
             WindowKeyword {
+                label: "luna_reserve",
+                pattern: r"(?i)luna\s+reserve\s+weekly\s+limit",
+                max_seconds: WEEK_SECONDS,
+            },
+            WindowKeyword {
                 label: "month",
                 pattern: r"(?i)month(?:ly)?\s+limit",
                 max_seconds: MONTH_SECONDS,
@@ -127,6 +132,11 @@ const LEFT_QUALIFIED_PERCENT: &str = r"(?i)\d\s*%\s*left\b";
 const USED_QUALIFIED_PERCENT: &str = r"(?i)\d\s*%\s*used\b";
 const DAY_MONTH: &str = r"(?i)\b(\d{1,2})\s+([A-Za-z]{3})\b";
 const MONTH_DAY: &str = r"(?i)\b([A-Za-z]{3})\s+(\d{1,2})\b";
+
+/// Whether a Codex usage line belongs to the separate Luna reserve pool.
+fn is_luna_reserve_line(line: &str) -> bool {
+    line.to_ascii_lowercase().contains("luna reserve")
+}
 
 fn month_number(abbr: &str) -> Option<u32> {
     match abbr.to_ascii_lowercase().as_str() {
@@ -303,13 +313,15 @@ fn pane_window_reset(
     now: f64,
     max_seconds: Option<i64>,
     last_match: bool,
+    luna_reserve: bool,
 ) -> Option<i64> {
     let mut found = None;
     for (index, line) in lines.iter().enumerate() {
         if !keyword.is_match(line) {
             continue;
         }
-        if line.to_ascii_lowercase().contains("gpt-reserve") {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("gpt-reserve") || is_luna_reserve_line(line) != luna_reserve {
             continue;
         }
         let mut epoch = None;
@@ -420,13 +432,15 @@ fn pane_window_percent(
     stop_keywords: &[&Regex],
     text_polarity: Option<PanePolarity>,
     last_match: bool,
+    luna_reserve: bool,
 ) -> Option<f64> {
     let mut found = None;
     for (index, line) in lines.iter().enumerate() {
         if !keyword.is_match(line) {
             continue;
         }
-        if line.to_ascii_lowercase().contains("gpt-reserve") {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("gpt-reserve") || is_luna_reserve_line(line) != luna_reserve {
             continue;
         }
         let mut matched = re(PANE_PERCENT).captures(line);
@@ -476,9 +490,14 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
             .filter(|(i, _)| *i != idx)
             .map(|(_, r)| *r)
             .collect();
-        let Some(percent) =
-            pane_window_percent(&lines, keyword, &others, text_polarity, last_match)
-        else {
+        let Some(percent) = pane_window_percent(
+            &lines,
+            keyword,
+            &others,
+            text_polarity,
+            last_match,
+            spec.label == "luna_reserve",
+        ) else {
             continue;
         };
         windows.push(Window {
@@ -491,6 +510,7 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
                 now,
                 spec.max_seconds,
                 last_match,
+                spec.label == "luna_reserve",
             ),
         });
     }
@@ -879,6 +899,35 @@ mod tests {
             })
             .collect();
         assert_eq!(pairs, vec![("5h".into(), 100.0), ("week".into(), 16.0)]);
+    }
+
+    #[test]
+    fn codex_status_pane_keeps_luna_reserve_separate_from_weekly_limit() {
+        let text = concat!(
+            "│  5h limit:                  [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 21:03)          │\n",
+            "│  Weekly limit:              [██████████████░░░░░░] 68% left (resets 03:57 on 29 Sep)│\n",
+            "│  Luna Reserve Weekly limit: [██████████████████░░] 92% left (resets 16:26 on 29 Sep)│\n",
+        );
+        let result = parse_pane("codex", text, Some(5.0));
+        let pairs: Vec<_> = result["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                (
+                    w["label"].as_str().unwrap().to_string(),
+                    w["used_percent"].as_f64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("5h".into(), 100.0),
+                ("week".into(), 32.0),
+                ("luna_reserve".into(), 8.0),
+            ]
+        );
     }
 
     #[test]

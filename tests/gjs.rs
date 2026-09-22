@@ -159,6 +159,9 @@ fn agentic_results() -> Option<Value> {
         "zeroBalance",
         "creditDetailText",
         "segmentMarkup",
+        "lunaReserveWindow",
+        "codexLunaReserveWindow",
+        "lunaReserveMarkup",
         "codexBarMarkup",
         "codexResetForecastMarkup",
         "codexBarWithForecastMarkup",
@@ -176,6 +179,7 @@ fn agentic_results() -> Option<Value> {
         "cursorExtraDetailTexts",
         "isOnDemandField",
         "codexInstanceTitle",
+        "codexWindowTitle",
         "cliSectionHeading",
         "cliEnabledFromConfig",
     ];
@@ -279,6 +283,15 @@ fn gradient_and_segments() {
     assert!(two.contains("CX1"));
     assert!(two.contains("CX2"));
     assert!(two.contains(" | "));
+    let luna = js["luna_reserve_on_cx1"].as_str().unwrap();
+    assert!(luna.contains("Luna "));
+    assert!(luna.contains(">92<"), "unexpected Luna counter: {luna}");
+    let depleted_luna = js["depleted_luna_reserve_on_bar"].as_str().unwrap();
+    assert!(
+        !depleted_luna.contains("Luna "),
+        "depleted Luna on bar: {depleted_luna}"
+    );
+    assert_eq!(js["luna_reserve_window_title"], "Luna Reserve");
     let first = js["first_codex_account"].as_str().unwrap();
     assert!(first.contains("CX1"));
     assert!(first.contains("CX2"));

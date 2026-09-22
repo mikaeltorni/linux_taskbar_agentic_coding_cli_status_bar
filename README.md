@@ -31,7 +31,10 @@ gradient (first account blue, last account purple); remaining-percent
 digits keep the usual green→red usage colors. A trial/free plan is just another instance; its month
 window is independent of the paid account's 5h/week windows. The click menu
 lists `Codex [1]` and `Codex [2] trial *` as separate sections, with `*` on the
-selected account.
+selected account. A Codex pane's separate `Luna Reserve` weekly pool is kept
+out of the normal weekly value; when it has budget left, the compact counter
+is shown next to `CX1`, while the click menu always lists the reserve under the
+account that reported it.
 Claude's third value is its active model-scoped weekly limit (currently
 Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
