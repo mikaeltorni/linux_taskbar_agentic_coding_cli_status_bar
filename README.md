@@ -157,13 +157,15 @@ the Codex monitor also suppresses forecast fetching and display. The popup
 starts with the 24-48h consensus (`26%-48%` when both horizons exist) followed
 by one named row per source. Forecast rows show every published horizon;
 reference rows link to history or browser-only forecasts without adding a
-percentage to the consensus. The arrow button left of each row opens its
-public page in the desktop's default browser; Polymarket points directly to
+percentage to the consensus. Clicking or pressing Enter on a source row opens
+its public page in the desktop's default browser; Polymarket points directly to
 the newest active Codex-reset event returned by its public API. Each open
 daily Polymarket expiry uses a compact day.month date and shows its cumulative
 trading volume in whole dollars beside the Yes probability when the API
-publishes it (for example, `22.9: 79.5% $705`). NextReset's public 24h/48h
-values contribute to the consensus, while its 72h value stays in its source
+publishes it (for example, `22.9: 79.5% $705`). Weekly-count markets show
+only the outcome (for example, `0 resets: 21%`); the linked event gives the
+week. NextReset's public 24h/48h values contribute to the consensus, while its
+72h value stays in its source
 row. Each source can be disabled with its
 `codex_reset_forecast.sites.<id>.enabled` setting.
 
