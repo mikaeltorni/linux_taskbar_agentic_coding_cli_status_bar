@@ -152,9 +152,14 @@ The Codex reset forecast is part of the default Codex monitoring experience:
 a clean install enables its public-site consensus automatically, and disabling
 the Codex monitor also suppresses forecast fetching and display. The popup
 starts with the 24-48h consensus (`26%-48%` when both horizons exist) followed
-by one named row per forecast site, including every horizon that site publishes. The arrow button left of each
-site opens its public page in the desktop's default browser; Polymarket points
-directly to the newest active Codex-reset event returned by its public API.
+by one named row per source. Forecast rows show every published horizon;
+reference rows link to history or browser-only forecasts without adding a
+percentage to the consensus. The arrow button left of each row opens its
+public page in the desktop's default browser; Polymarket points directly to
+the newest active Codex-reset event returned by its public API. NextReset's
+public 24h/48h values contribute to the consensus, while its 72h value stays
+in its source row. Each source can be disabled with its
+`codex_reset_forecast.sites.<id>.enabled` setting.
 
 ### Public Codex reset sources
 
@@ -170,12 +175,11 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 | [NextReset](https://nextreset.ai/) | Source-linked, experimental 24h/48h/72h forecast with a public JSON endpoint and [methodology](https://nextreset.ai/forecast/) | Public forecast API |
 | [WhenReset](https://whenreset.dev/codex) | Announcements, reset history, and original posts; separates banked from automatic resets | Public history page |
 | [Codex Resets](https://codex-resets.com/) | Timestamped announcements and original posts, including the public history feed used by NextReset | Public history API and page |
+| [Will Codex Reset](https://willcodexreset.com/) | Browser forecast, signal desk, and reset calendar | Public page; `/api/` is disallowed by its `robots.txt` |
 
 The name `whencodexwillreset` could not be tied to a working, verifiable URL
-as of September 22, 2026. The similarly named
-[Will Codex Reset](https://willcodexreset.com/) is live, but its public
-`robots.txt` disallows automated access to `/api/`; it can only be linked as a
-browser page, not used as a polled forecast source.
+as of September 22, 2026. The similarly named Will Codex Reset is linked in
+the app without polling its forecast.
 
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):

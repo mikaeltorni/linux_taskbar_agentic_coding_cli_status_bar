@@ -234,6 +234,8 @@ const results = {
       {name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
         {label: 'by September 16', percent: 35.5}]},
       {name: 'Unavailable tracker', url: 'https://example.com/', predictions: [], error: 'HTTP 503'},
+      {name: 'WhenReset', url: 'https://whenreset.dev/codex',
+        reference: true, detail: 'announcements and history', predictions: []},
     ],
   }),
   disabled_forecast_menu_entries: codexResetForecastMenuEntries({
