@@ -199,15 +199,8 @@ const results = {
       {id: 3, windows: [{label: 'week', used_percent: 32}]},
     ],
   }, NOW),
-  depleted_luna_reserve_on_bar: codexBarMarkup('CX', {
-    selected: 3,
-    instances: [
-      {id: 1, windows: [{label: 'week', used_percent: 10}]},
-      {id: 3, windows: [
-        {label: 'week', used_percent: 32},
-        {label: 'luna_reserve', used_percent: 100}]},
-    ]
-  }, NOW),
+  depleted_luna_reserve_markup: lunaReserveMarkup(
+    {label: 'luna_reserve', used_percent: 100}, NOW),
   luna_reserve_window_title: codexWindowTitle({label: 'luna_reserve'}),
   first_codex_account: codexBarMarkup('CX', {
     selected: 1,
