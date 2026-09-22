@@ -163,9 +163,10 @@ the newest active Codex-reset event returned by its public API. Each open
 daily Polymarket expiry uses a compact day.month date and shows its cumulative
 trading volume in whole dollars beside the Yes probability when the API
 publishes it (for example, `22.9: 79.5% $705`). Weekly-count markets show
-only the outcome (for example, `0 resets: 21%`); the linked event gives the
-week. Codex Reset Observatory contributes its public 24h/48h values to the
-consensus. Each source can be disabled with its
+the price for at least one reset, taken from the No side of the zero-reset
+contract (for example, `at least 1 reset: 86%`); the linked event gives the
+week and other counts. Codex Reset Observatory contributes its public 24h/48h
+values to the consensus. Each source can be disabled with its
 `codex_reset_forecast.sites.<id>.enabled` setting.
 
 When codex-reset.com publishes a dated official commitment, its commitment

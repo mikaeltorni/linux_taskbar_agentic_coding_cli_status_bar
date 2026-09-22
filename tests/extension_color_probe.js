@@ -275,6 +275,13 @@ const results = {
       {label: 'Will there be exactly 1 Codex weekly usage limit reset in the week of September 21', percent: 14},
     ]}],
   }),
+  forecast_menu_count_market: codexResetForecastMenuEntries({
+    enabled: true,
+    horizon: '24h',
+    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
+      {label: 'at least 1 reset', percent: 86},
+    ]}],
+  }),
   disabled_forecast_menu_entries: codexResetForecastMenuEntries({
     enabled: false,
     horizon: '24h',
