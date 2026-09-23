@@ -159,14 +159,10 @@ by one named row per source. Forecast rows show every published horizon;
 reference rows link to history or browser-only forecasts without adding a
 percentage to the consensus. Clicking or pressing Enter on a source row opens
 its public page in the desktop's default browser; Polymarket points directly to
-the newest active Codex-reset event returned by its public API. Each open
+the daily Codex-reset event returned by its public API. Each open
 daily Polymarket expiry uses a compact day.month date and shows its cumulative
 trading volume in whole dollars beside the Yes probability when the API
-publishes it (for example, `22.9: 79.5% $705`). Weekly-count markets show
-the price for at least one reset, taken from the No side of the zero-reset
-contract (for example, `at least 1 reset: 86%`); the linked event gives the
-week and other counts. Codex Reset Observatory contributes its public 24h/48h
-values to the consensus. Each source can be disabled with its
+publishes it (for example, `22.9: 79.5% $705`). Each source can be disabled with its
 `codex_reset_forecast.sites.<id>.enabled` setting.
 
 When codex-reset.com publishes a dated official commitment, its commitment
@@ -185,7 +181,7 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 | --- | --- | --- |
 | [Codex Reset](https://codex-reset.com/) | Source-linked reset history and a documented 24h/48h JSON forecast | Public forecast API |
 | [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
-| [Polymarket](https://polymarket.com/) | Yes prices for the next two open daily Codex reset markets, with each date and volume | Public market API; daily odds differ from 24h/48h forecasts |
+| [Polymarket](https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt) | Yes prices for the next two open daily Codex reset markets, with each date and volume | Public market API; daily odds differ from 24h/48h forecasts |
 | [WhenReset](https://whenreset.dev/codex) | Latest direct or banked reset, with original posts and history | Public Codex RSS feed; shown as context, not a consensus vote |
 | [Codex Resets](https://codex-resets.com/) | Latest completed reset and any separately scheduled reset | Public status API; shown as context, not a consensus vote |
 | [Will Codex Reset](https://willcodexreset.org/) | 24h/48h outlook mirrored from Codex Reset | Public rendered page; shown as context, not a second consensus vote |

@@ -130,8 +130,9 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
     ForecastSite {
         id: "polymarket",
         name: "Polymarket",
-        url: "https://polymarket.com/",
-        endpoint: "https://gamma-api.polymarket.com/public-search?q=OpenAI%20resets%20Codex%20weekly%20limit%20on&limit_per_type=5",
+        url: "https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt",
+        endpoint:
+            "https://gamma-api.polymarket.com/events/slug/openai-resets-codex-weekly-limit-onptptpt",
         min_interval_seconds: 30.0,
         parse: parse_polymarket,
     },
@@ -483,24 +484,17 @@ fn polymarket_volume_usd(market: &Value) -> Option<f64> {
         .filter(|volume: &f64| volume.is_finite() && *volume >= 0.0)
 }
 
-/// Parse the current daily Codex event from Gamma search results. The two
-/// earliest open contracts carry today's and tomorrow's separate Yes prices.
+/// Parse the canonical daily Codex event from Gamma. The two earliest open
+/// contracts carry separate Yes prices for the current and next market days.
 fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
-    let root: Value =
+    let event: Value =
         serde_json::from_str(body).map_err(|exc| format!("invalid Gamma JSON ({exc})"))?;
-    let events = root
-        .get("events")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "Gamma response has no events array".to_string())?;
-    let event = events
-        .iter()
-        .find(|event| {
-            event.get("title").and_then(Value::as_str)
-                == Some("OpenAI resets Codex weekly limit on...?")
-                && event.get("slug").and_then(Value::as_str)
-                    == Some("openai-resets-codex-weekly-limit-onptptpt")
-        })
-        .ok_or_else(|| "Gamma search omitted the daily Codex reset event".to_string())?;
+    if event.get("title").and_then(Value::as_str) != Some("OpenAI resets Codex weekly limit on...?")
+        || event.get("slug").and_then(Value::as_str)
+            != Some("openai-resets-codex-weekly-limit-onptptpt")
+    {
+        return Err("Gamma returned a different Codex reset event".to_string());
+    }
     let mut open = Vec::new();
     if event.get("closed").and_then(Value::as_bool) == Some(false)
         && event.get("active").and_then(Value::as_bool) == Some(true)
@@ -1190,7 +1184,7 @@ mod tests {
     }
 
     fn gamma_json() -> String {
-        json!({"events": [{
+        json!({
         "title": "OpenAI resets Codex weekly limit on...?",
         "slug": "openai-resets-codex-weekly-limit-onptptpt",
         "active": true,
@@ -1214,16 +1208,7 @@ mod tests {
              "groupItemTitle": "September 22", "closed": true, "active": true,
              "endDate": "2026-09-23T03:59:00Z",
              "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"1\", \"0\"]"}
-        ]}, {
-        "title": "How many Codex resets week of September 21?",
-        "slug": "how-many-codex-resets-week-of-september-21",
-        "active": true,
-        "closed": false,
-        "markets": [{
-            "question": "Will there be exactly 1 Codex weekly usage limit reset in the week of September 21?",
-            "closed": false, "active": true, "endDate": "2026-09-28T03:59:00Z",
-            "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.8\", \"0.2\"]"
-        }]}]})
+        ]})
         .to_string()
     }
 
@@ -1345,24 +1330,24 @@ mod tests {
 
     #[test]
     fn does_not_substitute_the_weekly_count_market() {
-        let body = json!({"events": [{
+        let body = json!({
             "title": "How many Codex resets week of September 21?",
             "slug": "how-many-codex-resets-week-of-september-21",
             "active": true, "closed": false,
             "markets": [{"question": "Will there be exactly 1 Codex weekly usage limit reset in the week of September 21?",
                 "active": true, "closed": false, "outcomes": "[\"Yes\",\"No\"]",
                 "outcomePrices": "[\"0.57\",\"0.43\"]"}]
-        }]}).to_string();
+        }).to_string();
         assert!(parse_polymarket(&body).is_err());
     }
 
     #[test]
     fn closed_market_clears_its_old_quote() {
-        let body = json!({"events": [{"title": "OpenAI resets Codex weekly limit on...?",
+        let body = json!({"title": "OpenAI resets Codex weekly limit on...?",
             "slug": "openai-resets-codex-weekly-limit-onptptpt",
-            "active": true, "closed": true, "markets": []}]})
+            "active": true, "closed": true, "markets": []})
         .to_string();
-        let parsed = parse_polymarket(&body).expect("valid search with no open market");
+        let parsed = parse_polymarket(&body).expect("valid event with no open market");
         assert!(parsed.predictions.is_empty());
         assert_eq!(parsed.detail.as_deref(), Some("no open market"));
     }
@@ -1397,16 +1382,19 @@ mod tests {
         );
         assert_eq!(calls.lock().unwrap().len(), 1);
         assert_eq!(result["sites"][0]["predictions"], json!([]));
-        assert_eq!(result["sites"][0]["url"], json!("https://polymarket.com/"));
+        assert_eq!(
+            result["sites"][0]["url"],
+            json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
+        );
     }
 
     #[test]
     fn ignores_unrelated_polymarket_events() {
-        let body = json!({"events": [{
+        let body = json!({
             "title": "Who wins the election?",
             "markets": [{"question": "Will X win by November 3?", "closed": false, "active": true,
                          "endDate": "2026-11-04T03:59:00Z",
-                         "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.6\", \"0.4\"]"}]}]})
+                         "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.6\", \"0.4\"]"}]})
         .to_string();
         assert!(parse_polymarket(&body).is_err());
     }
@@ -1414,8 +1402,8 @@ mod tests {
     #[test]
     fn ignores_invalid_polymarket_volume_without_losing_the_market() {
         let mut payload: Value = serde_json::from_str(&gamma_json()).unwrap();
-        payload["events"][0]["markets"][0]["volumeNum"] = json!(-5);
-        payload["events"][0]["markets"][1]["volume"] = json!("unknown");
+        payload["markets"][0]["volumeNum"] = json!(-5);
+        payload["markets"][1]["volume"] = json!("unknown");
         let parsed = parse_polymarket(&payload.to_string()).expect("market remains available");
         assert!(parsed
             .predictions
@@ -1452,7 +1440,10 @@ mod tests {
             result["sites"][2]["predictions"][1]["volume_usd"],
             json!(1234.56)
         );
-        assert_eq!(result["sites"][2]["url"], json!("https://polymarket.com/"));
+        assert_eq!(
+            result["sites"][2]["url"],
+            json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
+        );
         assert_eq!(calls.lock().unwrap().len(), 6);
     }
 
@@ -1625,7 +1616,10 @@ mod tests {
         let failed_market = &result["sites"][2];
         assert_eq!(failed_market["error"], json!("connection refused"));
         assert_eq!(failed_market["predictions"][0]["volume_usd"], json!(78.9));
-        assert_eq!(failed_market["url"], json!("https://polymarket.com/"));
+        assert_eq!(
+            failed_market["url"],
+            json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
+        );
         // The bar keeps a consensus rather than blanking on one bad source.
         assert_eq!(result["consensus_percent"], json!(23.0));
     }
