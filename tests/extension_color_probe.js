@@ -16,7 +16,7 @@ function log(level, message) {
   logCalls.push([level, message]);
 }
 const validForecastLaunch = openExternalUrl(
-  'https://polymarket.com/', 'Polymarket');
+  'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt', 'Polymarket');
 const referenceForecastLaunches = [
   ['https://whenreset.dev/codex', 'WhenReset'],
   ['https://codex-resets.com/', 'Codex Resets'],
@@ -264,7 +264,7 @@ const results = {
     sites: [
       {name: 'codex-reset.com', url: 'https://codex-reset.com/', predictions: [
         {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
-      {id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
+      {id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt', predictions: [
         {label: 'September 23', percent: 24, volume_usd: 1234.56},
         {label: 'September 24', percent: 15, volume_usd: 0}]},
       {name: 'Unavailable tracker', url: 'https://example.com/', predictions: [], error: 'HTTP 503'},
@@ -279,7 +279,7 @@ const results = {
   forecast_menu_weekly_questions: codexResetForecastMenuEntries({
     enabled: true,
     horizon: '24h',
-    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
+    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt', predictions: [
       {label: 'Will there be no Codex weekly usage limit reset in the week of September 21', percent: 21},
       {label: 'Will there be exactly 1 Codex weekly usage limit reset in the week of September 21', percent: 14},
     ]}],
@@ -287,18 +287,18 @@ const results = {
   forecast_menu_count_market: codexResetForecastMenuEntries({
     enabled: true,
     horizon: '24h',
-    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
+    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt', predictions: [
       {label: 'at least 1 reset', percent: 86},
     ]}],
   }),
   forecast_menu_no_open_market: codexResetForecastMenuEntries({
     enabled: true,
-    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/',
+    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt',
       detail: 'no open market', predictions: []}],
   }),
   forecast_menu_stale_market: codexResetForecastMenuEntries({
     enabled: true,
-    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/',
+    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt',
       error: 'network timeout', predictions: [{label: 'September 23', percent: 57}]}],
   }),
   disabled_forecast_menu_entries: codexResetForecastMenuEntries({

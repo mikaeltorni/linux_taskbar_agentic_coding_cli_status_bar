@@ -417,7 +417,7 @@ fn gradient_and_segments() {
                 "kind": "site",
                 "name": "Polymarket",
                 "text": "Polymarket — 23.9: 24% $1,235 · 24.9: 15% $0",
-                "url": "https://polymarket.com/",
+                "url": "https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt",
             },
             {
                 "kind": "site",
@@ -471,8 +471,16 @@ fn gradient_and_segments() {
     assert_eq!(
         js["forecast_launch_calls"],
         serde_json::json!([
-            ["launch", "https://polymarket.com/", null, null],
-            ["finish", "https://polymarket.com/"],
+            [
+                "launch",
+                "https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt",
+                null,
+                null
+            ],
+            [
+                "finish",
+                "https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt"
+            ],
             ["launch", "https://whenreset.dev/codex", null, null],
             ["finish", "https://whenreset.dev/codex"],
             ["launch", "https://codex-resets.com/", null, null],
