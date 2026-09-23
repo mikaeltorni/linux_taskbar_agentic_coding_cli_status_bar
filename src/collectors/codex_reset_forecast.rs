@@ -89,7 +89,6 @@ struct DatedCommitment {
 ///
 /// `endpoint` is what the collector fetches; `url` is the human page shown as
 /// provenance. `min_interval_seconds` is this source's politeness floor.
-/// `carry_on_error` is false for sources that expire their own forecast.
 pub struct ForecastSite {
     pub id: &'static str,
     pub name: &'static str,
@@ -97,7 +96,6 @@ pub struct ForecastSite {
     pub endpoint: &'static str,
     pub min_interval_seconds: f64,
     pub parse: fn(&str) -> Result<SiteForecast, String>,
-    pub carry_on_error: bool,
 }
 
 /// The vetted source registry — the single catalog of forecast sites.
@@ -112,8 +110,6 @@ pub struct ForecastSite {
 ///   refreshes hourly, hence the 300 s floor.
 /// - Polymarket — a real-money prediction market on exactly this question,
 ///   read through the documented public Gamma API.
-/// - Codex Reset Observatory — server-rendered 24h/48h progress bars with a
-///   published history-and-signals method; its public page permits crawling.
 pub const FORECAST_SITES: &[ForecastSite] = &[
     ForecastSite {
         id: "codex_reset",
@@ -122,7 +118,6 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         endpoint: "https://codex-reset.com/api/forecast",
         min_interval_seconds: 30.0,
         parse: parse_codex_reset,
-        carry_on_error: true,
     },
     ForecastSite {
         id: "codex_reset_monitor",
@@ -131,7 +126,6 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         endpoint: "https://codexreset.org/",
         min_interval_seconds: 300.0,
         parse: parse_codex_reset_monitor,
-        carry_on_error: true,
     },
     ForecastSite {
         id: "polymarket",
@@ -140,16 +134,6 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         endpoint: "https://gamma-api.polymarket.com/public-search?q=OpenAI%20resets%20Codex%20weekly%20usage%20limit&limit_per_type=5",
         min_interval_seconds: 30.0,
         parse: parse_polymarket,
-        carry_on_error: true,
-    },
-    ForecastSite {
-        id: "codex_observatory",
-        name: "Codex Reset Observatory",
-        url: "https://codex.gussuriworks.com/en",
-        endpoint: "https://codex.gussuriworks.com/en",
-        min_interval_seconds: 300.0,
-        parse: parse_codex_observatory,
-        carry_on_error: false,
     },
 ];
 
@@ -297,39 +281,6 @@ fn parse_codex_reset(body: &str) -> Result<SiteForecast, String> {
             })
         })
         .flatten(),
-    })
-}
-
-/// Parse the public, server-rendered probability progress bars. A missing or
-/// invalid bar is omitted, and an error page cannot contribute to consensus.
-fn parse_codex_observatory(body: &str) -> Result<SiteForecast, String> {
-    let predictions: Vec<Prediction> = [("24h", "24"), ("48h", "48")]
-        .into_iter()
-        .filter_map(|(label, hours)| {
-            let pattern = format!(
-                r#"aria-label="Within {hours}h"[^>]*aria-valuenow="([0-9]+(?:\.[0-9]+)?)""#
-            );
-            let percent = regex::Regex::new(&pattern)
-                .ok()?
-                .captures(body)?
-                .get(1)?
-                .as_str()
-                .parse::<f64>()
-                .ok()
-                .filter(|value| (0.0..=100.0).contains(value))?;
-            Some(Prediction {
-                label: label.to_string(),
-                percent,
-                volume_usd: None,
-            })
-        })
-        .collect();
-    if predictions.is_empty() {
-        return Err("observatory page published no probability bar".into());
-    }
-    Ok(SiteForecast {
-        predictions,
-        ..SiteForecast::default()
     })
 }
 
@@ -938,11 +889,7 @@ pub fn collect_codex_reset_forecast(
         match fetch_site(site.endpoint, site.parse, opener) {
             Ok(forecast) => rows.push(site_value(site, &forecast, now, None, now)),
             Err(exc) => {
-                let carried = if site.carry_on_error {
-                    carried_forecast(last_site)
-                } else {
-                    SiteForecast::default()
-                };
+                let carried = carried_forecast(last_site);
                 let previous_error = last_site
                     .and_then(|row| row.get("error"))
                     .and_then(Value::as_str);
@@ -1086,25 +1033,6 @@ mod tests {
         .to_string()
     }
 
-    fn observatory_html() -> &'static str {
-        r#"<div aria-label="Within 24h" aria-valuemax="100" aria-valuemin="0" aria-valuenow="88" role="progressbar"></div>
-           <div aria-label="Within 48h" aria-valuemax="100" aria-valuemin="0" aria-valuenow="95" role="progressbar"></div>"#
-    }
-
-    #[test]
-    fn parses_public_observatory_progressbars() {
-        let parsed = parse_codex_observatory(observatory_html()).expect("parsed");
-        assert_eq!(parsed.predictions[0].label, "24h");
-        assert_eq!(parsed.predictions[0].percent, 88.0);
-        assert_eq!(parsed.predictions[1].label, "48h");
-        assert_eq!(parsed.predictions[1].percent, 95.0);
-        assert!(parse_codex_observatory("<html>Unavailable</html>").is_err());
-        assert!(parse_codex_observatory(
-            r#"<div aria-label="Within 24h" aria-valuenow="not-a-number"></div>"#
-        )
-        .is_err());
-    }
-
     #[test]
     fn reference_sites_publish_live_context_without_changing_consensus() {
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1134,7 +1062,7 @@ mod tests {
             calls.lock().unwrap().len(),
             FORECAST_SITES.len() + RESET_REFERENCE_SITES.len()
         );
-        assert_eq!(result["contributing_sites"], json!(3));
+        assert_eq!(result["contributing_sites"], json!(2));
     }
 
     #[test]
@@ -1212,13 +1140,12 @@ mod tests {
             calls: calls.clone(),
         };
 
-        let sites = json!({"codex_observatory": {"enabled": false}});
         let before_48h = collect_codex_reset_forecast(
             None,
             Some(deadline_at - 36.0 * 3600.0),
             None,
             None,
-            Some(&sites),
+            None,
             Some(&opener),
         );
         assert_eq!(
@@ -1237,7 +1164,7 @@ mod tests {
             Some(deadline_at - 3600.0),
             None,
             None,
-            Some(&sites),
+            None,
             Some(&opener),
         );
         assert_eq!(
@@ -1260,7 +1187,7 @@ mod tests {
             Some(deadline_at - 5.0),
             None,
             None,
-            Some(&sites),
+            None,
             Some(&opener),
         );
         calls.lock().unwrap().clear();
@@ -1269,7 +1196,7 @@ mod tests {
             Some(deadline_at + 1.0),
             None,
             None,
-            Some(&sites),
+            None,
             Some(&FakeOpener {
                 bodies: vec![("codex-reset.com".into(), Err("offline".into()))],
                 calls: calls.clone(),
@@ -1299,7 +1226,8 @@ mod tests {
             bodies: vec![("codex-reset.com".into(), Ok(payload.to_string()))],
             calls: Arc::new(Mutex::new(Vec::new())),
         };
-        let sites = json!({"codex_reset_monitor": {"enabled": false}, "polymarket": {"enabled": false}, "codex_observatory": {"enabled": false}});
+        let sites =
+            json!({"codex_reset_monitor": {"enabled": false}, "polymarket": {"enabled": false}});
         let result = collect_codex_reset_forecast(
             None,
             Some(1_000.0),
@@ -1361,10 +1289,6 @@ mod tests {
                 ("codex-reset.com".into(), Ok(forecast_json())),
                 ("codexreset.org".into(), Ok(monitor_html())),
                 ("gamma-api".into(), Ok(gamma_json())),
-                (
-                    "codex.gussuriworks.com".into(),
-                    Ok(observatory_html().into()),
-                ),
                 ("whenreset.dev".into(), Ok("<rss><channel><item><title>Tibo · Bonus reset</title><pubDate>Tue, 22 Sep 2026 18:23:37 GMT</pubDate></item></channel></rss>".into())),
                 ("codex-resets.com".into(), Ok(json!({"data":{"latest_reset":{"reset_type":"banked","announced_at":"2026-09-22T18:23:37Z"},"scheduled_reset":null}}).to_string())),
                 ("willcodexreset.org".into(), Ok("<span id=\"probability24\">20</span><span id=\"probability48\">35</span>".into())),
@@ -1548,18 +1472,14 @@ mod tests {
             collect_codex_reset_forecast(None, Some(1_000.0), None, None, None, Some(&opener));
 
         assert_eq!(result["horizon"], json!("24h"));
-        // Polymarket expiries and reference links do not vote in the 24h/48h medians.
-        assert_eq!(result["consensus_percent"], json!(24.0));
-        assert_eq!(result["consensus_percent_24h"], json!(24.0));
-        assert_eq!(result["consensus_percent_48h"], json!(42.0));
-        assert_eq!(result["contributing_sites"], json!(3));
+        // Polymarket expiries and supplemental rows do not vote in the medians.
+        assert_eq!(result["consensus_percent"], json!(23.0));
+        assert_eq!(result["consensus_percent_24h"], json!(23.0));
+        assert_eq!(result["consensus_percent_48h"], json!(40.5));
+        assert_eq!(result["contributing_sites"], json!(2));
         assert_eq!(result["error"], Value::Null);
-        assert_eq!(result["sites"].as_array().unwrap().len(), 7);
-        assert_eq!(result["sites"][3]["id"], json!("codex_observatory"));
-        assert_eq!(
-            result["sites"][3]["url"],
-            json!("https://codex.gussuriworks.com/en")
-        );
+        assert_eq!(result["sites"].as_array().unwrap().len(), 6);
+        assert_eq!(result["sites"][3]["id"], json!("whenreset"));
         assert!(!result["sites"]
             .as_array()
             .unwrap()
@@ -1579,7 +1499,7 @@ mod tests {
                 "https://polymarket.com/event/openai-resets-codex-weekly-usage-limit-by-20260914"
             )
         );
-        assert_eq!(calls.lock().unwrap().len(), 7);
+        assert_eq!(calls.lock().unwrap().len(), 6);
     }
 
     #[test]
@@ -1593,11 +1513,10 @@ mod tests {
             None,
             Some(&opener),
         );
-        // Median of 39, 42, and 95. Both horizons stay published so the bar can
-        // show 24-48h consensus regardless of which horizon is configured.
-        assert_eq!(result["consensus_percent"], json!(42.0));
-        assert_eq!(result["consensus_percent_24h"], json!(24.0));
-        assert_eq!(result["consensus_percent_48h"], json!(42.0));
+        // Both horizons stay published regardless of which is configured.
+        assert_eq!(result["consensus_percent"], json!(40.5));
+        assert_eq!(result["consensus_percent_24h"], json!(23.0));
+        assert_eq!(result["consensus_percent_48h"], json!(40.5));
     }
 
     #[test]
@@ -1607,7 +1526,6 @@ mod tests {
         let sites = json!({
             "codex_reset_monitor": {"enabled": false},
             "polymarket": {"enabled": false},
-            "codex_observatory": {"enabled": false},
             "whenreset": {"enabled": false},
             "codex_resets": {"enabled": false},
             "will_codex_reset": {"enabled": false}
@@ -1652,7 +1570,7 @@ mod tests {
         assert_eq!(fetched.len(), 2);
         assert!(fetched.iter().all(|url| !url.contains("codexreset.org")));
         // The throttled site still reports its carried value.
-        assert_eq!(second["consensus_percent"], json!(24.0));
+        assert_eq!(second["consensus_percent"], json!(23.0));
     }
 
     #[test]
@@ -1734,10 +1652,6 @@ mod tests {
                 ("codex-reset.com".into(), Err("connection refused".into())),
                 ("codexreset.org".into(), Ok(monitor_html())),
                 ("gamma-api".into(), Err("connection refused".into())),
-                (
-                    "codex.gussuriworks.com".into(),
-                    Ok(observatory_html().into()),
-                ),
             ],
             calls: Arc::new(Mutex::new(Vec::new())),
         };
@@ -1764,48 +1678,7 @@ mod tests {
             )
         );
         // The bar keeps a consensus rather than blanking on one bad source.
-        assert_eq!(result["consensus_percent"], json!(24.0));
-    }
-
-    #[test]
-    fn observatory_failure_withdraws_its_probability() {
-        let good = collect_codex_reset_forecast(
-            None,
-            Some(1_000.0),
-            None,
-            None,
-            None,
-            Some(&all_sites_opener(Arc::new(Mutex::new(Vec::new())))),
-        );
-        let broken = FakeOpener {
-            bodies: vec![
-                ("codex-reset.com".into(), Ok(forecast_json())),
-                ("codexreset.org".into(), Ok(monitor_html())),
-                ("gamma-api".into(), Ok(gamma_json())),
-                (
-                    "codex.gussuriworks.com".into(),
-                    Err("connection refused".into()),
-                ),
-            ],
-            calls: Arc::new(Mutex::new(Vec::new())),
-        };
-        let result = collect_codex_reset_forecast(
-            Some(&good),
-            Some(2_000.0),
-            None,
-            None,
-            None,
-            Some(&broken),
-        );
-        let observatory = result["sites"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|site| site["id"] == "codex_observatory")
-            .unwrap();
-        assert_eq!(observatory["error"], json!("connection refused"));
-        assert_eq!(observatory["predictions"], json!([]));
-        assert_eq!(result["contributing_sites"], json!(2));
+        assert_eq!(result["consensus_percent"], json!(23.0));
     }
 
     #[test]
@@ -1817,7 +1690,6 @@ mod tests {
         let sites = json!({
             "codex_reset": {"enabled": false},
             "codex_reset_monitor": {"enabled": false},
-            "codex_observatory": {"enabled": false}
         });
         let result = collect_codex_reset_forecast(
             None,
@@ -1847,7 +1719,6 @@ mod tests {
             "codex_reset": {"enabled": false},
             "codex_reset_monitor": {"enabled": false},
             "polymarket": {"enabled": false},
-            "codex_observatory": {"enabled": false},
             "whenreset": {"enabled": false},
             "codex_resets": {"enabled": false},
             "will_codex_reset": {"enabled": false},
