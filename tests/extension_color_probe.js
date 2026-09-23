@@ -19,7 +19,6 @@ const validForecastLaunch = openExternalUrl(
   'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt', 'Polymarket');
 const referenceForecastLaunches = [
   ['https://whenreset.dev/codex', 'WhenReset'],
-  ['https://codex-resets.com/', 'Codex Resets'],
   ['https://willcodexreset.org/', 'Will Codex Reset'],
 ].map(([url, name]) => openExternalUrl(url, name));
 const rejectedForecastLaunch = openExternalUrl(
@@ -267,13 +266,11 @@ const results = {
       {id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt', predictions: [
         {label: 'September 23', percent: 24, volume_usd: 1234.56},
         {label: 'September 24', percent: 15, volume_usd: 0}]},
-      {name: 'Unavailable tracker', url: 'https://example.com/', predictions: [], error: 'HTTP 503'},
-      {name: 'WhenReset', url: 'https://whenreset.dev/codex',
-        reference: true, detail: 'latest banked reset · Sep 22 18:23 UTC', predictions: []},
-      {name: 'Codex Resets', url: 'https://codex-resets.com/',
-        reference: true, detail: 'latest banked Sep 22 18:23 · direct scheduled Sep 23 06:59 UTC', predictions: []},
       {name: 'Will Codex Reset', url: 'https://willcodexreset.org/',
         reference: true, detail: '24h 20% · 48h 35% · mirrored outlook', predictions: []},
+      {name: 'codexreset.org', url: 'https://codexreset.org/', predictions: [], error: 'HTTP 503'},
+      {name: 'WhenReset', url: 'https://whenreset.dev/codex',
+        reference: true, detail: 'latest banked reset · Sep 22 18:23 UTC', predictions: []},
     ],
   }),
   forecast_menu_weekly_questions: codexResetForecastMenuEntries({
