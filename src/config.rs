@@ -664,6 +664,7 @@ mod tests {
             "sites": {
                 "polymarket": {"enabled": false},
                 "nextreset": {"enabled": true},
+                "codex_observatory": {"enabled": true},
                 "some_removed_site": {"enabled": true}
             }
         }));
@@ -674,11 +675,11 @@ mod tests {
         );
         assert!(!sites.contains_key("some_removed_site"));
         assert!(!sites.contains_key("nextreset"));
+        assert!(!sites.contains_key("codex_observatory"));
         // An explicit opt-out survives; unlisted sites default to on.
         assert_eq!(sites["polymarket"]["enabled"], json!(false));
         assert_eq!(sites["codex_reset"]["enabled"], json!(true));
         assert_eq!(sites["whenreset"]["enabled"], json!(true));
-        assert_eq!(sites["codex_observatory"]["enabled"], json!(true));
     }
 
     #[test]
