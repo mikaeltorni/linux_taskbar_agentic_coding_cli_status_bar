@@ -10,6 +10,7 @@
 
 pub mod claude;
 pub mod codex;
+pub mod codex_reset_credits;
 pub mod codex_reset_forecast;
 pub mod cursor;
 pub mod grok;
