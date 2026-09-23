@@ -70,7 +70,7 @@ pub fn carry_reset_metadata(snapshot: Value, last: Option<&Value>) -> Value {
         return snapshot;
     }
     let mut carried = snapshot;
-    for key in ["resets_available", "resets_checked_at"] {
+    for key in ["resets_available", "resets_checked_at", "reset_probe_at"] {
         if let Some(value) = last.get(key) {
             carried[key] = value.clone();
         }

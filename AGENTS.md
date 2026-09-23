@@ -9,8 +9,9 @@ themselves are installed by `linux_codex_claude_code_setup`, and the in-TUI
 status-bar rendering (statusline segments) stays in `claude_code_status_bar`.
 
 Monitoring must never consume plan limits: collectors only read data the CLIs
-already store locally (Codex session rollouts, Grok billing logs), their
-billing/metadata endpoint (Claude OAuth usage), a headless HTML scrape of
+already store locally (Codex session rollouts, Grok billing logs), the Codex
+CLI's read-only `account/rateLimits/read` metadata method for per-account
+manual-reset counts, their billing/metadata endpoint (Claude OAuth usage), a headless HTML scrape of
 the OpenCode Go workspace page (same source as the `opencode-go-usage` plugin),
 the OpenRouter analytics API (management API key from installer setup;
 read-only, not chat/completions), or a headless scrape of the Cursor spending dashboard's usage endpoints

@@ -9,6 +9,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+use crate::collectors::codex::refresh_codex_reset_counts;
+use crate::collectors::codex_reset_credits::read_codex_reset_count;
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
     codex_home_authenticated, codex_status_send_failed, collect_claude, collect_codex_accounts,
@@ -23,8 +25,8 @@ use crate::logging;
 use crate::snapshot::{carry_last_reading, carry_reset_metadata};
 use crate::tmux::{
     codex_console_window, console_codex_home, ensure_console, real_sleep, refresh_and_capture,
-    take_codex_console_refresh, tmux_available, tmux_console_cli_ids, CodexConsole, RealTmux,
-    TmuxRunner,
+    resolve_cli_binary, take_codex_console_refresh, tmux_available, tmux_console_cli_ids,
+    CodexConsole, RealTmux, TmuxRunner,
 };
 
 pub const STATUS_FILE_NAME: &str = "status.json";
@@ -57,6 +59,8 @@ pub struct PollHooks {
     pub tmux_available: Option<bool>,
     pub claude_running: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub sleeper: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+    /// Inject the read-only Codex reset metadata source in tests.
+    pub codex_reset_reader: Option<Arc<dyn Fn(&Path, &str) -> Result<i64, String> + Send + Sync>>,
 }
 
 fn now_epoch() -> f64 {
@@ -658,14 +662,16 @@ fn merge_cli_pane(
     now: f64,
 ) -> Value {
     let pane_snapshot = parse_pane(cli_id, pane_text, Some(pane_observed_at));
-    let pane_has_reset_metadata = pane_snapshot.get("resets_available").is_some();
+    let metadata_read_started = cli_id == "codex" && snapshot.get("reset_probe_at").is_some();
+    let pane_has_reset_metadata =
+        !metadata_read_started && pane_snapshot.get("resets_available").is_some();
     let pane_is_newer = pane_observed_at
         >= snapshot
             .get("observed_at")
             .and_then(Value::as_f64)
             .unwrap_or(0.0);
     let mut prior_reset_metadata = json!({});
-    for key in ["resets_available", "resets_checked_at"] {
+    for key in ["resets_available", "resets_checked_at", "reset_probe_at"] {
         if let Some(value) = snapshot.get(key) {
             prior_reset_metadata[key] = value.clone();
         }
@@ -703,6 +709,14 @@ fn merge_cli_pane(
             logging::debug("codex pane reading superseded rollout snapshot");
         }
         let mut pane_snapshot = pane_snapshot.clone();
+        if metadata_read_started {
+            // A legacy pane may still contain a count from before a reset was
+            // redeemed. Once metadata reads start, only that source can set it.
+            pane_snapshot
+                .as_object_mut()
+                .unwrap()
+                .remove("resets_available");
+        }
         pane_snapshot["plan"] = snapshot
             .get("plan")
             .cloned()
@@ -717,7 +731,7 @@ fn merge_cli_pane(
                 pane_snapshot["credits"] = credits.clone();
             }
         }
-        if cli_id == "codex" && pane_snapshot.get("resets_available").is_none() {
+        if cli_id == "codex" && !pane_has_reset_metadata {
             if let Some(obj) = prior_reset_metadata.as_object() {
                 for (key, value) in obj {
                     pane_snapshot[key] = value.clone();
@@ -1372,6 +1386,18 @@ pub fn poll_once(
             headless_snapshot,
             hooks,
         );
+        if *cli_id == "codex" {
+            if let Some(reader) = hooks.codex_reset_reader.as_ref() {
+                snapshot = refresh_codex_reset_counts(snapshot, home, now, reader.as_ref());
+            } else {
+                let binary = resolve_cli_binary("codex", home);
+                snapshot =
+                    refresh_codex_reset_counts(snapshot, home, now, &|codex_home, account| {
+                        let path = binary.as_deref().ok_or("Codex CLI is unavailable")?;
+                        read_codex_reset_count(path, codex_home, account)
+                    });
+            }
+        }
         snapshot["enabled"] = json!(true);
         if snapshot.get("error").map(|e| !e.is_null()).unwrap_or(false) {
             let prev_err = last_cli.and_then(|l| l.get("error"));
@@ -1940,6 +1966,31 @@ mod tests {
     }
 
     #[test]
+    fn old_usage_pane_cannot_restore_a_redeemed_reset() {
+        let snapshot = json!({
+            "source": "codex_sessions",
+            "observed_at": 99.0,
+            "windows": [{"label": "week", "used_percent": 90.0, "resets_at": 200}],
+            "resets_available": 0,
+            "resets_checked_at": 100.0,
+            "reset_probe_at": 100.0
+        });
+        let merged = merge_cli_pane(
+            snapshot,
+            "codex",
+            "You have 1 usage limit reset available.\nWeekly limit: 10% left\n",
+            101.0,
+            "tmux",
+            1800,
+            None,
+            101.0,
+        );
+        assert_eq!(merged["resets_available"], json!(0));
+        assert_eq!(merged["resets_checked_at"], json!(100.0));
+        assert_eq!(merged["reset_probe_at"], json!(100.0));
+    }
+
+    #[test]
     fn deadline_is_measured_from_tick_start() {
         assert_eq!(next_tick_delay(0.0, 5, 1.5), 3.5);
         assert_eq!(next_tick_delay(0.0, 5, 5.0), 0.0);
@@ -2006,6 +2057,53 @@ mod tests {
             json!({"version": 1, "selected": selected, "instances": rows}).to_string(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn public_poll_replaces_redeemed_counts_for_both_codex_accounts() {
+        let sandbox = Sandbox::new();
+        configure(false);
+        let first = sandbox.home.join(".codex");
+        let third = sandbox.home.join(".codex-account-3");
+        write_instance_registry(&sandbox.home, &[(1, first.clone()), (3, third.clone())], 3);
+        for (home, account) in [(&first, "account-one"), (&third, "account-three")] {
+            fs::create_dir_all(home).unwrap();
+            fs::write(
+                home.join("auth.json"),
+                json!({"tokens": {"account_id": account}}).to_string(),
+            )
+            .unwrap();
+        }
+        let previous = json!({"clis": {"codex": {
+            "selected": 3,
+            "instances": [
+                {"id": 1, "home": first, "resets_available": 2, "resets_checked_at": 10.0},
+                {"id": 3, "home": third, "resets_available": 1, "resets_checked_at": 10.0}
+            ]
+        }}});
+        let hooks = PollHooks {
+            codex_reset_reader: Some(Arc::new(|_, account| {
+                Ok(if account == "account-one" { 1 } else { 0 })
+            })),
+            ..PollHooks::default()
+        };
+        let status = poll_once(
+            Some(&sandbox.home),
+            Some(&previous),
+            Some(NOW),
+            None,
+            None,
+            &hooks,
+        );
+        let codex = &status["clis"]["codex"];
+        assert_eq!(codex["instances"][0]["resets_available"], json!(1));
+        assert_eq!(codex["instances"][1]["resets_available"], json!(0));
+        assert_eq!(codex["resets_available"], json!(0));
+        let on_disk = load_previous_status(&sandbox.home).unwrap();
+        assert_eq!(
+            on_disk["clis"]["codex"]["instances"][1]["resets_available"],
+            json!(0)
+        );
     }
 
     #[test]

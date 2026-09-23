@@ -15,6 +15,8 @@ pub const CODEX_TRACKER_STATE_DIR: &str = "codex-agent-tracker";
 
 pub const CODEX_SCAN_DAYS: usize = 7;
 pub const CODEX_SAME_RESET_TOLERANCE_SECONDS: i64 = 60;
+/// Minimum interval between read-only per-account reset-credit reads.
+pub const CODEX_RESET_CREDITS_MIN_INTERVAL_SECONDS: f64 = 60.0;
 
 const WINDOW_DURATION_LABELS: [(f64, &str); 3] =
     [(300.0, "5h"), (10080.0, "week"), (43200.0, "month")];
@@ -253,7 +255,7 @@ fn instance_snapshot(row: &CodexAccountInstance, collected: Value, selected_id: 
         "credits": collected.get("credits").cloned().unwrap_or(Value::Null),
         "error": collected.get("error").cloned().unwrap_or(Value::Null),
     });
-    for key in ["resets_available", "resets_checked_at"] {
+    for key in ["resets_available", "resets_checked_at", "reset_probe_at"] {
         if let Some(value) = collected.get(key) {
             snap[key] = value.clone();
         }
@@ -381,6 +383,95 @@ pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value
     combined["selected"] = json!(selected_id);
     combined["instances"] = Value::Array(collected_rows);
     combined
+}
+
+/// Refresh manual-reset availability from Codex's read-only account metadata.
+/// The account ID from each home's auth file is checked against the response by
+/// `read`, so a selected-login change cannot attach one account's credits to
+/// another. Failed reads hide old counts until the next retry.
+pub fn refresh_codex_reset_counts(
+    mut snapshot: Value,
+    user_home: &Path,
+    now: f64,
+    read: &dyn Fn(&Path, &str) -> Result<i64, String>,
+) -> Value {
+    fn account_id(codex_home: &Path) -> Option<String> {
+        let text = std::fs::read_to_string(codex_home.join("auth.json")).ok()?;
+        let auth: Value = serde_json::from_str(&text).ok()?;
+        auth.pointer("/tokens/account_id")?
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    fn refresh_one(
+        row: &mut Value,
+        codex_home: &Path,
+        now: f64,
+        read: &dyn Fn(&Path, &str) -> Result<i64, String>,
+    ) {
+        let Some(account_id) = account_id(codex_home) else {
+            return;
+        };
+        if row["reset_probe_at"]
+            .as_f64()
+            .is_some_and(|last| now - last < CODEX_RESET_CREDITS_MIN_INTERVAL_SECONDS)
+        {
+            return;
+        }
+        row["reset_probe_at"] = json!(now);
+        match read(codex_home, &account_id) {
+            Ok(count) if count >= 0 => {
+                let old = row["resets_available"].as_i64();
+                row["resets_available"] = json!(count);
+                row["resets_checked_at"] = json!(now);
+                if old != Some(count) {
+                    logging::info(format!(
+                        "Codex reset allowance for {} changed from {old:?} to {count}",
+                        codex_home.display()
+                    ));
+                }
+            }
+            Ok(_) => {
+                row["resets_available"] = Value::Null;
+                row["resets_checked_at"] = Value::Null;
+                logging::warn(format!(
+                    "Codex reset availability for {} was negative",
+                    codex_home.display()
+                ));
+            }
+            Err(error) => {
+                row["resets_available"] = Value::Null;
+                row["resets_checked_at"] = Value::Null;
+                logging::warn(format!(
+                    "Codex reset availability for {}: {error}",
+                    codex_home.display()
+                ));
+            }
+        }
+    }
+
+    if let Some(rows) = snapshot.get_mut("instances").and_then(Value::as_array_mut) {
+        for row in rows {
+            if let Some(home) = row.get("home").and_then(Value::as_str).map(PathBuf::from) {
+                refresh_one(row, &home, now, read);
+            }
+        }
+        let selected = snapshot["selected"].as_i64();
+        if let Some(row) = snapshot["instances"].as_array().and_then(|rows| {
+            rows.iter()
+                .find(|row| row["id"].as_i64() == selected)
+                .cloned()
+        }) {
+            for key in ["resets_available", "resets_checked_at", "reset_probe_at"] {
+                if let Some(value) = row.get(key) {
+                    snapshot[key] = value.clone();
+                }
+            }
+        }
+    } else {
+        refresh_one(&mut snapshot, &user_home.join(".codex"), now, read);
+    }
+    snapshot
 }
 
 /// Return a file's modification time in epoch seconds, or 0 when unknown.
@@ -746,6 +837,62 @@ mod tests {
     /// timestamps and before every `resets_at` they carry, so window
     /// selection is exercised without the readings counting as expired.
     const FIXTURE_NOW: f64 = 1_783_075_290.0;
+
+    #[test]
+    fn reset_credit_reads_replace_stale_counts_for_each_account() {
+        let sandbox = Sandbox::new();
+        let one = sandbox.home.join("one");
+        let three = sandbox.home.join("three");
+        for (home, account) in [(&one, "account-one"), (&three, "account-three")] {
+            std::fs::create_dir_all(home).unwrap();
+            std::fs::write(
+                home.join("auth.json"),
+                json!({"tokens": {"account_id": account}}).to_string(),
+            )
+            .unwrap();
+        }
+        let first = json!({"id": 1, "home": one, "resets_available": 2, "resets_checked_at": 10.0});
+        let third =
+            json!({"id": 3, "home": three, "resets_available": 1, "resets_checked_at": 10.0});
+        let snapshot = json!({"selected": 3, "instances": [first, third], "resets_available": 1});
+        let calls = std::cell::RefCell::new(Vec::new());
+        let read = |home: &Path, id: &str| {
+            calls
+                .borrow_mut()
+                .push((home.to_path_buf(), id.to_string()));
+            Ok(if home.ends_with("one") { 1 } else { 0 })
+        };
+        let fresh = refresh_codex_reset_counts(snapshot, &sandbox.home, 1000.0, &read);
+        assert_eq!(fresh["instances"][0]["resets_available"], json!(1));
+        assert_eq!(fresh["instances"][1]["resets_available"], json!(0));
+        assert_eq!(fresh["resets_available"], json!(0));
+        assert_eq!(fresh["instances"][0]["resets_checked_at"], json!(1000.0));
+        assert_eq!(calls.borrow().len(), 2);
+        assert_eq!(calls.borrow()[0].1, "account-one");
+        assert_eq!(calls.borrow()[1].1, "account-three");
+        let held = refresh_codex_reset_counts(fresh, &sandbox.home, 1030.0, &read);
+        assert_eq!(calls.borrow().len(), 2);
+        assert_eq!(held["instances"][1]["resets_available"], json!(0));
+    }
+
+    #[test]
+    fn failed_reset_read_hides_stale_allowance_until_retry() {
+        let sandbox = Sandbox::new();
+        let one = sandbox.home.join("one");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::write(
+            one.join("auth.json"),
+            json!({"tokens": {"account_id": "account-one"}}).to_string(),
+        )
+        .unwrap();
+        let snapshot = json!({"selected": 1, "instances": [{"id": 1, "home": one, "resets_available": 2, "resets_checked_at": 10.0}]});
+        let failed = refresh_codex_reset_counts(snapshot, &sandbox.home, 1000.0, &|_, _| {
+            Err("offline".into())
+        });
+        assert!(failed["instances"][0]["resets_available"].is_null());
+        assert!(failed["resets_available"].is_null());
+        assert_eq!(failed["instances"][0]["reset_probe_at"], json!(1000.0));
+    }
 
     #[test]
     fn windows_whose_reset_already_passed_report_as_reset() {
