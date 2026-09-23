@@ -88,13 +88,15 @@ struct DatedCommitment {
 /// A vetted forecast source.
 ///
 /// `endpoint` is what the collector fetches; `url` is the human page shown as
-/// provenance. `min_interval_seconds` is this source's politeness floor.
+/// provenance. `min_interval_seconds` is this source's politeness floor;
+/// `display_order` places its row in the popup.
 pub struct ForecastSite {
     pub id: &'static str,
     pub name: &'static str,
     pub url: &'static str,
     pub endpoint: &'static str,
     pub min_interval_seconds: f64,
+    pub display_order: usize,
     pub parse: fn(&str) -> Result<SiteForecast, String>,
 }
 
@@ -117,6 +119,7 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         url: "https://codex-reset.com/",
         endpoint: "https://codex-reset.com/api/forecast",
         min_interval_seconds: 30.0,
+        display_order: 0,
         parse: parse_codex_reset,
     },
     ForecastSite {
@@ -125,6 +128,7 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         url: "https://codexreset.org/",
         endpoint: "https://codexreset.org/",
         min_interval_seconds: 300.0,
+        display_order: 3,
         parse: parse_codex_reset_monitor,
     },
     ForecastSite {
@@ -134,6 +138,7 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         endpoint:
             "https://gamma-api.polymarket.com/events/slug/openai-resets-codex-weekly-limit-onptptpt",
         min_interval_seconds: 30.0,
+        display_order: 1,
         parse: parse_polymarket,
     },
 ];
@@ -147,6 +152,7 @@ pub struct ResetReferenceSite {
     pub endpoint: &'static str,
     pub parse: fn(&str) -> Result<SiteForecast, String>,
     pub min_interval_seconds: f64,
+    pub display_order: usize,
 }
 
 /// Supplemental sources with live summaries, excluded from the consensus.
@@ -158,14 +164,7 @@ pub const RESET_REFERENCE_SITES: &[ResetReferenceSite] = &[
         endpoint: "https://whenreset.dev/api/reset-feed?provider=codex",
         parse: parse_whenreset_feed,
         min_interval_seconds: 300.0,
-    },
-    ResetReferenceSite {
-        id: "codex_resets",
-        name: "Codex Resets",
-        url: "https://codex-resets.com/",
-        endpoint: "https://codex-resets.com/api/v1/status",
-        parse: parse_codex_resets_status,
-        min_interval_seconds: 300.0,
+        display_order: 4,
     },
     ResetReferenceSite {
         id: "will_codex_reset",
@@ -174,6 +173,7 @@ pub const RESET_REFERENCE_SITES: &[ResetReferenceSite] = &[
         endpoint: "https://willcodexreset.org/",
         parse: parse_will_codex_reset_mirror,
         min_interval_seconds: 300.0,
+        display_order: 2,
     },
 ];
 
@@ -324,52 +324,6 @@ fn parse_whenreset_feed(body: &str) -> Result<SiteForecast, String> {
             event_time(date.timestamp())?
         )),
         observed_at: Some(date.timestamp() as f64),
-        ..SiteForecast::default()
-    })
-}
-
-/// Read the latest completed reset and any still scheduled reset separately.
-fn parse_codex_resets_status(body: &str) -> Result<SiteForecast, String> {
-    let root: Value = serde_json::from_str(body)
-        .map_err(|exc| format!("invalid Codex Resets status JSON ({exc})"))?;
-    let data = root.get("data").ok_or("Codex Resets status has no data")?;
-    let mut parts = Vec::new();
-    let mut observed_at = None;
-    if let Some(latest) = data.get("latest_reset").filter(|value| !value.is_null()) {
-        let kind = match latest.get("reset_type").and_then(Value::as_str) {
-            Some("banked") => "banked",
-            Some("regular") => "direct",
-            _ => return Err("Codex Resets latest event has unknown type".into()),
-        };
-        let epoch = latest
-            .get("announced_at")
-            .and_then(Value::as_str)
-            .and_then(parse_iso_epoch)
-            .ok_or("Codex Resets latest event has no valid time")?;
-        parts.push(format!("latest {kind} {}", event_time(epoch)?));
-        observed_at = Some(epoch as f64);
-    }
-    if let Some(scheduled) = data.get("scheduled_reset").filter(|value| !value.is_null()) {
-        if scheduled.get("status").and_then(Value::as_str) == Some("scheduled") {
-            let kind = match scheduled.get("reset_type").and_then(Value::as_str) {
-                Some("banked") => "banked",
-                Some("regular") => "direct",
-                _ => return Err("Codex Resets scheduled event has unknown type".into()),
-            };
-            let epoch = scheduled
-                .get("scheduled_for")
-                .and_then(Value::as_str)
-                .and_then(parse_iso_epoch)
-                .ok_or("Codex Resets scheduled event has no valid time")?;
-            parts.push(format!("{kind} scheduled {}", event_time(epoch)?));
-        }
-    }
-    if parts.is_empty() {
-        return Err("Codex Resets status published no reset event".into());
-    }
-    Ok(SiteForecast {
-        detail: Some(format!("{} UTC", parts.join(" · "))),
-        observed_at,
         ..SiteForecast::default()
     })
 }
@@ -860,6 +814,23 @@ pub fn collect_codex_reset_forecast(
         }
     }
 
+    // Sort the combined forecast and reference rows by their registry-owned
+    // popup positions. Fetch order remains independent of presentation.
+    rows.sort_by_key(|row| {
+        let id = row.get("id").and_then(Value::as_str).unwrap_or_default();
+        FORECAST_SITES
+            .iter()
+            .find(|site| site.id == id)
+            .map(|site| site.display_order)
+            .or_else(|| {
+                RESET_REFERENCE_SITES
+                    .iter()
+                    .find(|site| site.id == id)
+                    .map(|site| site.display_order)
+            })
+            .unwrap_or(usize::MAX)
+    });
+
     if let Some(current) = rows.iter().find(|row| row["id"] == "codex_reset") {
         let active = current["commitment_applied"].as_bool().unwrap_or(false);
         let was_active = previous
@@ -980,7 +951,6 @@ mod tests {
         let sites = result["sites"].as_array().unwrap();
         for (id, url) in [
             ("whenreset", "https://whenreset.dev/codex"),
-            ("codex_resets", "https://codex-resets.com/"),
             ("will_codex_reset", "https://willcodexreset.org/"),
         ] {
             let site = sites.iter().find(|site| site["id"] == id).expect(id);
@@ -1008,22 +978,6 @@ mod tests {
         );
         assert!(parsed.predictions.is_empty());
         assert!(parse_whenreset_feed("<rss><channel></channel></rss>").is_err());
-    }
-
-    #[test]
-    fn parses_codex_resets_status_and_keeps_scheduled_reset_distinct() {
-        let status = json!({"data": {
-            "latest_reset": {"reset_type": "banked", "announced_at": "2026-09-22T18:23:37Z"},
-            "scheduled_reset": {"status": "scheduled", "reset_type": "regular",
-                "scheduled_for": "2026-09-23T06:59:00Z"}
-        }});
-        let parsed = parse_codex_resets_status(&status.to_string()).expect("valid status");
-        assert_eq!(
-            parsed.detail.as_deref(),
-            Some("latest banked Sep 22 18:23 · direct scheduled Sep 23 06:59 UTC")
-        );
-        assert!(parsed.predictions.is_empty());
-        assert!(parse_codex_resets_status("{\"data\":{}}").is_err());
     }
 
     #[test]
@@ -1219,7 +1173,6 @@ mod tests {
                 ("codexreset.org".into(), Ok(monitor_html())),
                 ("gamma-api".into(), Ok(gamma_json())),
                 ("whenreset.dev".into(), Ok("<rss><channel><item><title>Tibo · Bonus reset</title><pubDate>Tue, 22 Sep 2026 18:23:37 GMT</pubDate></item></channel></rss>".into())),
-                ("codex-resets.com".into(), Ok(json!({"data":{"latest_reset":{"reset_type":"banked","announced_at":"2026-09-22T18:23:37Z"},"scheduled_reset":null}}).to_string())),
                 ("willcodexreset.org".into(), Ok("<span id=\"probability24\">20</span><span id=\"probability48\">35</span>".into())),
             ],
             calls,
@@ -1364,7 +1317,6 @@ mod tests {
             "codex_reset": {"enabled": false},
             "codex_reset_monitor": {"enabled": false},
             "whenreset": {"enabled": false},
-            "codex_resets": {"enabled": false},
             "will_codex_reset": {"enabled": false}
         });
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -1425,26 +1377,40 @@ mod tests {
         assert_eq!(result["consensus_percent_48h"], json!(40.5));
         assert_eq!(result["contributing_sites"], json!(2));
         assert_eq!(result["error"], Value::Null);
-        assert_eq!(result["sites"].as_array().unwrap().len(), 6);
-        assert_eq!(result["sites"][3]["id"], json!("whenreset"));
+        assert_eq!(result["sites"].as_array().unwrap().len(), 5);
+        assert_eq!(
+            result["sites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|site| site["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "codex_reset",
+                "polymarket",
+                "will_codex_reset",
+                "codex_reset_monitor",
+                "whenreset"
+            ]
+        );
         assert!(!result["sites"]
             .as_array()
             .unwrap()
             .iter()
             .any(|site| site["id"] == "nextreset"));
         assert_eq!(
-            result["sites"][2]["predictions"][0]["volume_usd"],
+            result["sites"][1]["predictions"][0]["volume_usd"],
             json!(78.9)
         );
         assert_eq!(
-            result["sites"][2]["predictions"][1]["volume_usd"],
+            result["sites"][1]["predictions"][1]["volume_usd"],
             json!(1234.56)
         );
         assert_eq!(
-            result["sites"][2]["url"],
+            result["sites"][1]["url"],
             json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
         );
-        assert_eq!(calls.lock().unwrap().len(), 6);
+        assert_eq!(calls.lock().unwrap().len(), 5);
     }
 
     #[test]
@@ -1472,7 +1438,6 @@ mod tests {
             "codex_reset_monitor": {"enabled": false},
             "polymarket": {"enabled": false},
             "whenreset": {"enabled": false},
-            "codex_resets": {"enabled": false},
             "will_codex_reset": {"enabled": false}
         });
         let result = collect_codex_reset_forecast(
@@ -1613,7 +1578,7 @@ mod tests {
         assert_eq!(failed["id"], json!("codex_reset"));
         assert_eq!(failed["error"], json!("connection refused"));
         assert_eq!(failed["predictions"][0]["percent"], json!(22.0));
-        let failed_market = &result["sites"][2];
+        let failed_market = &result["sites"][1];
         assert_eq!(failed_market["error"], json!("connection refused"));
         assert_eq!(failed_market["predictions"][0]["volume_usd"], json!(78.9));
         assert_eq!(
@@ -1663,7 +1628,6 @@ mod tests {
             "codex_reset_monitor": {"enabled": false},
             "polymarket": {"enabled": false},
             "whenreset": {"enabled": false},
-            "codex_resets": {"enabled": false},
             "will_codex_reset": {"enabled": false},
         });
         let result =
