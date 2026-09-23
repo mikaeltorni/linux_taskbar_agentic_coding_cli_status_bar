@@ -173,7 +173,6 @@ fn agentic_results() -> Option<Value> {
         "formatForecastPercent",
         "formatForecastVolume",
         "formatPolymarketDate",
-        "formatPolymarketLabel",
         "codexResetForecastMenuEntries",
         "openExternalUrl",
         "cursorBarMarkup",
@@ -417,7 +416,7 @@ fn gradient_and_segments() {
             {
                 "kind": "site",
                 "name": "Polymarket",
-                "text": "Polymarket — 22.9: 35.5% $1,235 · 24.9: 42% $0",
+                "text": "Polymarket — 23.9: 24% $1,235 · 24.9: 15% $0",
                 "url": "https://polymarket.com/",
             },
             {
@@ -449,11 +448,11 @@ fn gradient_and_segments() {
     assert_eq!(js["disabled_forecast_menu_entries"], serde_json::json!([]));
     assert_eq!(
         js["forecast_menu_weekly_questions"][1]["text"],
-        "Polymarket — at least 1 reset: 79%"
+        "Polymarket — unavailable"
     );
     assert_eq!(
         js["forecast_menu_count_market"][1]["text"],
-        "Polymarket — at least 1 reset: 86%"
+        "Polymarket — unavailable"
     );
     assert_eq!(
         js["forecast_menu_no_open_market"][1]["text"],
@@ -461,7 +460,7 @@ fn gradient_and_segments() {
     );
     assert_eq!(
         js["forecast_menu_stale_market"][1]["text"],
-        "Polymarket — 1 reset: 57% · last known"
+        "Polymarket — 23.9: 57% · last known"
     );
     assert_eq!(js["valid_forecast_launch"], true);
     assert_eq!(

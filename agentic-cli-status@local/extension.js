@@ -787,27 +787,16 @@ function formatForecastVolume(value) {
   })}`;
 }
 
-/** Shorten a Polymarket expiry such as `by September 22` to `22.9`. */
+/** Shorten a daily Polymarket date such as `September 23` to `23.9`. */
 function formatPolymarketDate(label) {
-  const withoutBy = label.replace(/^by\s+/i, '');
-  const match = /^([A-Za-z]+) (\d{1,2})$/.exec(withoutBy);
+  const match = /^([A-Za-z]+) (\d{1,2})$/.exec(label);
   if (!match)
-    return withoutBy;
+    return label;
   const months = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
   const month = months.indexOf(match[1]) + 1;
   const day = Number(match[2]);
-  return month > 0 && day >= 1 && day <= 31 ? `${day}.${month}` : withoutBy;
-}
-
-/** Show the current event's outcome; its linked market page supplies the date. */
-function formatPolymarketLabel(label) {
-  const match = /^Will there be (no|exactly \d+) Codex weekly usage limit resets? in the week of [A-Za-z]+ \d{1,2}\??$/i.exec(label);
-  if (!match)
-    return formatPolymarketDate(label);
-  const count = match[1].toLowerCase() === 'no'
-    ? 0 : Number(match[1].replace(/^exactly /i, ''));
-  return `${count} reset${count === 1 ? '' : 's'}`;
+  return month > 0 && day >= 1 && day <= 31 ? `${day}.${month}` : label;
 }
 
 /**
@@ -843,17 +832,12 @@ function codexResetForecastMenuEntries(forecast) {
   for (const site of forecast.sites ?? []) {
     const name = String(site?.name ?? site?.id ?? 'Unknown site').trim() ||
       'Unknown site';
-    // Older status snapshots carry every count-market question. Render those
-    // like the current collector until a successful refresh replaces them.
-    const noReset = site?.id === 'polymarket'
-      ? (site?.predictions ?? []).find(prediction =>
-        formatPolymarketLabel(String(prediction?.label ?? '')) === '0 resets' &&
-        Number.isFinite(prediction?.percent) &&
-        prediction.percent >= 0 && prediction.percent <= 100)
-      : null;
-    const sitePredictions = noReset
-      ? [{label: 'at least 1 reset', percent: 100 - noReset.percent,
-        volume_usd: noReset.volume_usd}]
+    // Ignore old weekly-count snapshots while the daily source refreshes.
+    const sitePredictions = site?.id === 'polymarket'
+      ? (site?.predictions ?? []).filter(prediction => {
+        const label = String(prediction?.label ?? '').trim();
+        return /^\d{1,2}\.\d{1,2}$/.test(formatPolymarketDate(label));
+      })
       : site?.predictions ?? [];
     const predictions = sitePredictions.flatMap(prediction => {
       const percent = formatForecastPercent(prediction?.percent);
@@ -861,7 +845,7 @@ function codexResetForecastMenuEntries(forecast) {
         return [];
       const rawLabel = String(prediction?.label ?? horizon).trim() || horizon;
       const label = site?.id === 'polymarket'
-        ? formatPolymarketLabel(rawLabel) : rawLabel;
+        ? formatPolymarketDate(rawLabel) : rawLabel;
       const volume = formatForecastVolume(prediction?.volume_usd);
       return [`${label}: ${percent}${volume ? ` ${volume}` : ''}`];
     });

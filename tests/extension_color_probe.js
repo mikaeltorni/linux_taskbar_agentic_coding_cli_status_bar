@@ -265,8 +265,8 @@ const results = {
       {name: 'codex-reset.com', url: 'https://codex-reset.com/', predictions: [
         {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
       {id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/', predictions: [
-        {label: 'by September 22', percent: 35.5, volume_usd: 1234.56},
-        {label: 'by September 24', percent: 42, volume_usd: 0}]},
+        {label: 'September 23', percent: 24, volume_usd: 1234.56},
+        {label: 'September 24', percent: 15, volume_usd: 0}]},
       {name: 'Unavailable tracker', url: 'https://example.com/', predictions: [], error: 'HTTP 503'},
       {name: 'WhenReset', url: 'https://whenreset.dev/codex',
         reference: true, detail: 'latest banked reset · Sep 22 18:23 UTC', predictions: []},
@@ -299,7 +299,7 @@ const results = {
   forecast_menu_stale_market: codexResetForecastMenuEntries({
     enabled: true,
     sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/',
-      error: 'network timeout', predictions: [{label: '1 reset', percent: 57}]}],
+      error: 'network timeout', predictions: [{label: 'September 23', percent: 57}]}],
   }),
   disabled_forecast_menu_entries: codexResetForecastMenuEntries({
     enabled: false,
