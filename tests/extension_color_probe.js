@@ -261,13 +261,13 @@ const results = {
     horizon: '24h',
     consensus_percent: 26,
     sites: [
-      {name: 'codex-reset.com', url: 'https://codex-reset.com/', predictions: [
-        {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
       {id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt', predictions: [
         {label: 'September 23', percent: 24, volume_usd: 1234.56},
         {label: 'September 24', percent: 15, volume_usd: 0}]},
+      {name: 'codex-reset.com', url: 'https://codex-reset.com/', predictions: [
+        {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
       {name: 'Will Codex Reset', url: 'https://willcodexreset.org/',
-        reference: true, detail: '24h 20% · 48h 35% · mirrored outlook', predictions: []},
+        reference: true, detail: '24h 20% · 48h 35%', predictions: []},
       {name: 'codexreset.org', url: 'https://codexreset.org/', predictions: [], error: 'HTTP 503'},
       {name: 'WhenReset', url: 'https://whenreset.dev/codex',
         reference: true, detail: 'latest banked reset · Sep 22 18:23 UTC', predictions: []},

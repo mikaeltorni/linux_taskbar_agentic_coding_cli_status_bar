@@ -179,9 +179,9 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 
 | Site | What it publishes | Available surface |
 | --- | --- | --- |
-| [Codex Reset](https://codex-reset.com/) | Source-linked reset history and a documented 24h/48h JSON forecast | Public forecast API |
 | [Polymarket](https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt) | Yes prices for the next two open daily Codex reset markets, with each date and volume | Public market API; daily odds differ from 24h/48h forecasts |
-| [Will Codex Reset](https://willcodexreset.org/) | 24h/48h outlook mirrored from Codex Reset | Public rendered page; shown as context, not a second consensus vote |
+| [Codex Reset](https://codex-reset.com/) | Source-linked reset history and a documented 24h/48h JSON forecast | Public forecast API |
+| [Will Codex Reset](https://willcodexreset.org/) | 24h/48h outlook based on Codex Reset | Public rendered page; shown as context, not a second consensus vote |
 | [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
 | [WhenReset](https://whenreset.dev/codex) | Latest direct or banked reset, with original posts and history | Public Codex RSS feed; shown as context, not a consensus vote |
 
