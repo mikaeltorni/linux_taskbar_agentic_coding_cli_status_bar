@@ -185,7 +185,7 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 | --- | --- | --- |
 | [Codex Reset](https://codex-reset.com/) | Source-linked reset history and a documented 24h/48h JSON forecast | Public forecast API |
 | [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
-| [Polymarket](https://polymarket.com/) | Prices for active Codex-reset markets: chance of any reset while the zero-reset contract is open, then active exact-count outcomes; shows no open market once all contracts close | Public market API; market odds differ from 24h/48h forecasts |
+| [Polymarket](https://polymarket.com/) | Yes prices for the next two open daily Codex reset markets, with each date and volume | Public market API; daily odds differ from 24h/48h forecasts |
 | [WhenReset](https://whenreset.dev/codex) | Latest direct or banked reset, with original posts and history | Public Codex RSS feed; shown as context, not a consensus vote |
 | [Codex Resets](https://codex-resets.com/) | Latest completed reset and any separately scheduled reset | Public status API; shown as context, not a consensus vote |
 | [Will Codex Reset](https://willcodexreset.org/) | 24h/48h outlook mirrored from Codex Reset | Public rendered page; shown as context, not a second consensus vote |
