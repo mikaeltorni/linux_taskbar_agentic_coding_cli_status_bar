@@ -455,6 +455,14 @@ fn gradient_and_segments() {
         js["forecast_menu_count_market"][1]["text"],
         "Polymarket — at least 1 reset: 86%"
     );
+    assert_eq!(
+        js["forecast_menu_no_open_market"][1]["text"],
+        "Polymarket — no open market"
+    );
+    assert_eq!(
+        js["forecast_menu_stale_market"][1]["text"],
+        "Polymarket — 1 reset: 57% · last known"
+    );
     assert_eq!(js["valid_forecast_launch"], true);
     assert_eq!(
         js["reference_forecast_launches"],

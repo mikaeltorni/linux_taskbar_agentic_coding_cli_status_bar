@@ -504,9 +504,38 @@ fn polymarket_event_url(event: &Value) -> Option<String> {
     Some(format!("https://polymarket.com/event/{slug}"))
 }
 
-/// Parse the newest matching Gamma event. Count markets use the No share of
-/// their zero-reset contract as the chance of at least one reset; dated markets
-/// continue to show the two nearest expiries.
+/// Identify an active count contract without carrying its long week question
+/// into the compact menu. The zero-reset No share has priority while open.
+fn count_market_contract(question: &str) -> Option<(i64, String, &'static str, bool)> {
+    let lower = question.to_ascii_lowercase();
+    let no_prefix = "will there be no codex weekly usage limit reset in the week of ";
+    if lower.starts_with(no_prefix) {
+        return Some((0, "at least 1 reset".into(), "no", true));
+    }
+    if !lower.contains(" codex weekly usage limit reset") || !lower.contains(" in the week of ") {
+        return None;
+    }
+    if let Some(rest) = lower.strip_prefix("will there be exactly ") {
+        let count = rest.split_whitespace().next()?.parse::<i64>().ok()?;
+        if !(1..=20).contains(&count) {
+            return None;
+        }
+        return Some((
+            count,
+            format!("{count} reset{}", if count == 1 { "" } else { "s" }),
+            "yes",
+            false,
+        ));
+    }
+    if lower.starts_with("will there be 4 or more codex weekly usage limit resets ") {
+        return Some((4, "4+ resets".into(), "yes", false));
+    }
+    None
+}
+
+/// Parse the newest matching Gamma event. Count markets use the zero-reset No
+/// share while open, then show active exact-count outcomes after it resolves.
+/// Dated markets show the two nearest expiries.
 fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
     let root: Value =
         serde_json::from_str(body).map_err(|exc| format!("invalid Gamma JSON ({exc})"))?;
@@ -516,7 +545,13 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
         .ok_or_else(|| "Gamma response has no events array".to_string())?;
 
     // Guard against the search returning an unrelated event.
-    let mut newest: Option<(i64, Option<String>, Vec<(i64, String, f64, Option<f64>)>)> = None;
+    let mut newest: Option<(
+        i64,
+        Option<String>,
+        bool,
+        Vec<(i64, String, f64, Option<f64>)>,
+    )> = None;
+    let mut saw_matching_event = false;
     for event in events {
         let title = event
             .get("title")
@@ -526,6 +561,7 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
         if !(title.contains("codex") && title.contains("reset")) {
             continue;
         }
+        saw_matching_event = true;
         if event.get("closed").and_then(Value::as_bool).unwrap_or(true)
             || !event
                 .get("active")
@@ -536,6 +572,7 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
         }
         let count_event = title.starts_with("how many codex resets");
         let mut open = Vec::new();
+        let mut zero_reset = None;
         for market in event
             .get("markets")
             .and_then(Value::as_array)
@@ -556,28 +593,45 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
                 continue;
             }
             let question = market.get("question").and_then(Value::as_str).unwrap_or("");
-            if count_event
-                && !question
-                    .to_ascii_lowercase()
-                    .starts_with("will there be no codex weekly usage limit reset in the week of ")
-            {
-                continue;
-            }
-            let outcome = if count_event { "no" } else { "yes" };
+            let contract = if count_event {
+                let Some(contract) = count_market_contract(question) else {
+                    continue;
+                };
+                Some(contract)
+            } else {
+                None
+            };
+            let outcome = contract
+                .as_ref()
+                .map_or("yes", |(_, _, outcome, _)| outcome);
             let Some(percent) = polymarket_outcome_percent(market, outcome) else {
                 continue;
             };
-            let end = market
-                .get("endDate")
-                .and_then(Value::as_str)
-                .and_then(parse_iso_epoch)
-                .unwrap_or(i64::MAX);
-            let label = if count_event {
-                "at least 1 reset".to_string()
+            let order = contract.as_ref().map_or_else(
+                || {
+                    market
+                        .get("endDate")
+                        .and_then(Value::as_str)
+                        .and_then(parse_iso_epoch)
+                        .unwrap_or(i64::MAX)
+                },
+                |(order, _, _, _)| *order,
+            );
+            let label = contract.as_ref().map_or_else(
+                || polymarket_label(question),
+                |(_, label, _, _)| label.clone(),
+            );
+            let quote = (order, label, percent, polymarket_volume_usd(market));
+            if contract.as_ref().is_some_and(|(_, _, _, is_zero)| *is_zero) {
+                zero_reset = Some(quote);
             } else {
-                polymarket_label(question)
-            };
-            open.push((end, label, percent, polymarket_volume_usd(market)));
+                open.push(quote);
+            }
+        }
+        if count_event {
+            if let Some(quote) = zero_reset {
+                open = vec![quote];
+            }
         }
         if open.is_empty() {
             continue;
@@ -589,16 +643,22 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
             .unwrap_or(i64::MIN);
         if newest
             .as_ref()
-            .map_or(true, |(current, _, _)| created > *current)
+            .map_or(true, |(current, _, _, _)| created > *current)
         {
-            newest = Some((created, polymarket_event_url(event), open));
+            newest = Some((created, polymarket_event_url(event), count_event, open));
         }
     }
-    let Some((_, url, mut open)) = newest else {
+    let Some((_, url, is_count_market, mut open)) = newest else {
+        if saw_matching_event {
+            return Ok(SiteForecast {
+                detail: Some("no open market".into()),
+                ..SiteForecast::default()
+            });
+        }
         return Err("no open Codex reset market in the Gamma response".into());
     };
 
-    // Nearest expiries first for dated markets; a count event has one selected contract.
+    // Nearest expiries for dated markets; lowest count first for count markets.
     open.sort_by_key(|(end, _, _, _)| *end);
     open.truncate(2);
     let count_event = open
@@ -618,6 +678,8 @@ fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
         detail: Some(
             if count_event {
                 "count market · zero-reset No share"
+            } else if is_count_market {
+                "count market · open outcome Yes shares"
             } else {
                 "nearest open markets · Yes price"
             }
@@ -1439,6 +1501,50 @@ mod tests {
             parsed.detail.as_deref(),
             Some("count market · zero-reset No share")
         );
+    }
+
+    #[test]
+    fn count_market_uses_live_exact_outcomes_after_zero_resets_close() {
+        let body = json!({"events": [{
+            "title": "How many Codex resets week of September 21?",
+            "slug": "how-many-codex-resets-week-of-september-21",
+            "active": true, "closed": false,
+            "creationDate": "2026-09-22T15:07:41Z",
+            "markets": [
+                {"question": "Will there be no Codex weekly usage limit reset in the week of September 21?",
+                 "active": true, "closed": true, "outcomes": "[\"Yes\",\"No\"]",
+                 "outcomePrices": "[\"0\",\"1\"]"},
+                {"question": "Will there be exactly 2 Codex weekly usage limit resets in the week of September 21?",
+                 "active": true, "closed": false, "outcomes": "[\"Yes\",\"No\"]",
+                 "outcomePrices": "[\"0.235\",\"0.765\"]"},
+                {"question": "Will there be exactly 1 Codex weekly usage limit reset in the week of September 21?",
+                 "active": true, "closed": false, "outcomes": "[\"Yes\",\"No\"]",
+                 "outcomePrices": "[\"0.57\",\"0.43\"]"}
+            ]
+        }]}).to_string();
+        let parsed = parse_polymarket(&body).expect("open count outcomes");
+        assert_eq!(
+            parsed
+                .predictions
+                .iter()
+                .map(|row| (row.label.as_str(), (row.percent * 10.0).round() / 10.0))
+                .collect::<Vec<_>>(),
+            vec![("1 reset", 57.0), ("2 resets", 23.5)]
+        );
+        assert_eq!(
+            parsed.detail.as_deref(),
+            Some("count market · open outcome Yes shares")
+        );
+    }
+
+    #[test]
+    fn closed_market_clears_its_old_quote() {
+        let body = json!({"events": [{"title": "How many Codex resets week of September 21?",
+            "active": true, "closed": true, "markets": []}]})
+        .to_string();
+        let parsed = parse_polymarket(&body).expect("valid search with no open market");
+        assert!(parsed.predictions.is_empty());
+        assert_eq!(parsed.detail.as_deref(), Some("no open market"));
     }
 
     #[test]
