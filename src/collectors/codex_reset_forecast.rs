@@ -119,7 +119,7 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         url: "https://codex-reset.com/",
         endpoint: "https://codex-reset.com/api/forecast",
         min_interval_seconds: 30.0,
-        display_order: 0,
+        display_order: 1,
         parse: parse_codex_reset,
     },
     ForecastSite {
@@ -138,7 +138,7 @@ pub const FORECAST_SITES: &[ForecastSite] = &[
         endpoint:
             "https://gamma-api.polymarket.com/events/slug/openai-resets-codex-weekly-limit-onptptpt",
         min_interval_seconds: 30.0,
-        display_order: 1,
+        display_order: 0,
         parse: parse_polymarket,
     },
 ];
@@ -344,7 +344,7 @@ fn parse_will_codex_reset_mirror(body: &str) -> Result<SiteForecast, String> {
         values.push(format!("{hours}h {percent}%"));
     }
     Ok(SiteForecast {
-        detail: Some(format!("{} · mirrored outlook", values.join(" · "))),
+        detail: Some(values.join(" · ")),
         ..SiteForecast::default()
     })
 }
@@ -606,13 +606,20 @@ fn reference_site_value(
     checked_at: f64,
     error: Option<String>,
 ) -> Value {
+    let detail = forecast.detail.as_deref().map(|detail| {
+        if site.id == "will_codex_reset" {
+            detail.replace(" · mirrored outlook", "")
+        } else {
+            detail.to_string()
+        }
+    });
     json!({
         "id": site.id,
         "name": site.name,
         "url": site.url,
         "reference": true,
         "predictions": [],
-        "detail": match (forecast.detail.as_deref(), error.as_deref()) {
+        "detail": match (detail.as_deref(), error.as_deref()) {
             (Some(detail), Some(_)) => {
                 format!("{} · last known", detail.trim_end_matches(" · last known"))
             },
@@ -795,8 +802,19 @@ pub fn collect_codex_reset_forecast(
         }
         let last_site = previous.get(site.id);
         let interval = min_interval.max(site.min_interval_seconds);
-        if checked_within_interval(last_site, now, interval).is_some() {
-            rows.push(last_site.cloned().unwrap_or(Value::Null));
+        if let Some(checked) = checked_within_interval(last_site, now, interval) {
+            if site.id == "will_codex_reset" {
+                // Re-serialize the cached row so the retired caption
+                // disappears immediately after upgrading, without losing data.
+                let carried = carried_forecast(last_site);
+                let error = last_site
+                    .and_then(|row| row.get("error"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                rows.push(reference_site_value(site, &carried, checked, error));
+            } else {
+                rows.push(last_site.cloned().unwrap_or(Value::Null));
+            }
             continue;
         }
         match fetch_site(site.endpoint, site.parse, opener) {
@@ -957,6 +975,9 @@ mod tests {
             assert_eq!(site["url"], json!(url));
             assert_eq!(site["reference"], json!(true));
             assert_eq!(site["predictions"], json!([]));
+            if id == "will_codex_reset" {
+                assert_eq!(site["detail"], json!("24h 20% · 48h 35%"));
+            }
             assert!(site["detail"]
                 .as_str()
                 .is_some_and(|detail| !detail.is_empty()));
@@ -966,6 +987,39 @@ mod tests {
             FORECAST_SITES.len() + RESET_REFERENCE_SITES.len()
         );
         assert_eq!(result["contributing_sites"], json!(2));
+    }
+
+    #[test]
+    fn cached_will_codex_reset_rows_drop_the_retired_caption() {
+        let previous = json!({"sites": [{
+            "id": "will_codex_reset",
+            "name": "Will Codex Reset",
+            "url": "https://willcodexreset.org/",
+            "reference": true,
+            "predictions": [],
+            "detail": "24h 20% · 48h 35% · mirrored outlook",
+            "observed_at": 998.0,
+            "checked_at": 999.0,
+            "error": null
+        }]});
+        let sites = json!({
+            "codex_reset": {"enabled": false},
+            "codex_reset_monitor": {"enabled": false},
+            "polymarket": {"enabled": false},
+            "whenreset": {"enabled": false}
+        });
+        let result = collect_codex_reset_forecast(
+            Some(&previous),
+            Some(1_000.0),
+            None,
+            None,
+            Some(&sites),
+            None,
+        );
+        assert_eq!(result["sites"].as_array().unwrap().len(), 1);
+        assert_eq!(result["sites"][0]["id"], json!("will_codex_reset"));
+        assert_eq!(result["sites"][0]["detail"], json!("24h 20% · 48h 35%"));
+        assert_eq!(result["sites"][0]["checked_at"], json!(999.0));
     }
 
     #[test]
@@ -1036,11 +1090,11 @@ mod tests {
             Some(&opener),
         );
         assert_eq!(
-            before_48h["sites"][0]["predictions"][0]["percent"],
+            before_48h["sites"][1]["predictions"][0]["percent"],
             json!(20.0)
         );
         assert_eq!(
-            before_48h["sites"][0]["predictions"][1]["percent"],
+            before_48h["sites"][1]["predictions"][1]["percent"],
             json!(93.0)
         );
         assert_eq!(before_48h["consensus_percent_24h"], json!(22.0));
@@ -1055,15 +1109,15 @@ mod tests {
             Some(&opener),
         );
         assert_eq!(
-            within_24h["sites"][0]["predictions"][0]["percent"],
+            within_24h["sites"][1]["predictions"][0]["percent"],
             json!(93.0)
         );
         assert_eq!(
-            within_24h["sites"][0]["predictions"][1]["percent"],
+            within_24h["sites"][1]["predictions"][1]["percent"],
             json!(93.0)
         );
         assert_eq!(
-            within_24h["sites"][0]["name"],
+            within_24h["sites"][1]["name"],
             json!("codex-reset.com (official commitment)")
         );
         assert_eq!(within_24h["consensus_percent_24h"], json!(58.5));
@@ -1090,14 +1144,14 @@ mod tests {
             }),
         );
         assert_eq!(
-            expired["sites"][0]["predictions"][0]["percent"],
+            expired["sites"][1]["predictions"][0]["percent"],
             json!(20.0)
         );
         assert_eq!(
-            expired["sites"][0]["predictions"][1]["percent"],
+            expired["sites"][1]["predictions"][1]["percent"],
             json!(35.0)
         );
-        assert_eq!(expired["sites"][0]["name"], json!("codex-reset.com"));
+        assert_eq!(expired["sites"][1]["name"], json!("codex-reset.com"));
         assert!(
             calls.lock().unwrap().is_empty(),
             "expiry needs no HTTP fetch"
@@ -1170,10 +1224,10 @@ mod tests {
         FakeOpener {
             bodies: vec![
                 ("codex-reset.com".into(), Ok(forecast_json())),
+                ("willcodexreset.org".into(), Ok("<span id=\"probability24\">20</span><span id=\"probability48\">35</span>".into())),
                 ("codexreset.org".into(), Ok(monitor_html())),
                 ("gamma-api".into(), Ok(gamma_json())),
                 ("whenreset.dev".into(), Ok("<rss><channel><item><title>Tibo · Bonus reset</title><pubDate>Tue, 22 Sep 2026 18:23:37 GMT</pubDate></item></channel></rss>".into())),
-                ("willcodexreset.org".into(), Ok("<span id=\"probability24\">20</span><span id=\"probability48\">35</span>".into())),
             ],
             calls,
         }
@@ -1386,8 +1440,8 @@ mod tests {
                 .map(|site| site["id"].as_str().unwrap())
                 .collect::<Vec<_>>(),
             vec![
-                "codex_reset",
                 "polymarket",
+                "codex_reset",
                 "will_codex_reset",
                 "codex_reset_monitor",
                 "whenreset"
@@ -1399,15 +1453,15 @@ mod tests {
             .iter()
             .any(|site| site["id"] == "nextreset"));
         assert_eq!(
-            result["sites"][1]["predictions"][0]["volume_usd"],
+            result["sites"][0]["predictions"][0]["volume_usd"],
             json!(78.9)
         );
         assert_eq!(
-            result["sites"][1]["predictions"][1]["volume_usd"],
+            result["sites"][0]["predictions"][1]["volume_usd"],
             json!(1234.56)
         );
         assert_eq!(
-            result["sites"][1]["url"],
+            result["sites"][0]["url"],
             json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
         );
         assert_eq!(calls.lock().unwrap().len(), 5);
@@ -1574,11 +1628,11 @@ mod tests {
             Some(&broken),
         );
 
-        let failed = &result["sites"][0];
+        let failed = &result["sites"][1];
         assert_eq!(failed["id"], json!("codex_reset"));
         assert_eq!(failed["error"], json!("connection refused"));
         assert_eq!(failed["predictions"][0]["percent"], json!(22.0));
-        let failed_market = &result["sites"][1];
+        let failed_market = &result["sites"][0];
         assert_eq!(failed_market["error"], json!("connection refused"));
         assert_eq!(failed_market["predictions"][0]["volume_usd"], json!(78.9));
         assert_eq!(

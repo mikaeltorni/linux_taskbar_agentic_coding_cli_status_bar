@@ -409,20 +409,20 @@ fn gradient_and_segments() {
             },
             {
                 "kind": "site",
-                "name": "codex-reset.com",
-                "text": "codex-reset.com — 24h: 24% · 48h: 42%",
-                "url": "https://codex-reset.com/",
-            },
-            {
-                "kind": "site",
                 "name": "Polymarket",
                 "text": "Polymarket — 23.9: 24% $1,235 · 24.9: 15% $0",
                 "url": "https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt",
             },
             {
                 "kind": "site",
+                "name": "codex-reset.com",
+                "text": "codex-reset.com — 24h: 24% · 48h: 42%",
+                "url": "https://codex-reset.com/",
+            },
+            {
+                "kind": "site",
                 "name": "Will Codex Reset",
-                "text": "Will Codex Reset — 24h 20% · 48h 35% · mirrored outlook",
+                "text": "Will Codex Reset — 24h 20% · 48h 35%",
                 "url": "https://willcodexreset.org/",
             },
             {
