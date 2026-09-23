@@ -120,7 +120,7 @@ fn compiled_regex(pattern: &'static str) -> &'static Regex {
 const PANE_PERCENT: &str = r"(\d+(?:\.\d+)?)\s*%";
 const CODEX_RESETS_AVAILABLE: &str = r"(?i)\b(\d+|no)\s+(?:usage\s+limit\s+)?resets?\s+available\b";
 const PANE_RESET: &str = r"(?i)\bresets?\b\s*(?:at\s+)?(.+)$";
-const PANE_RESET_CLOCK: &str = r"\b([01]?\d|2[0-3]):([0-5]\d)\b";
+const PANE_RESET_CLOCK: &str = r"(?i)\b([01]?\d|2[0-3]):([0-5]\d)(?:\s*([ap]m))?\b";
 const PANE_RESET_DATE: &str = r"(?i)\b(\d{1,2})\s+([A-Za-z]{3})";
 const PANE_RESET_IN: &str = r"(?i)\bresets?\s+in\s+(?:(\d+)d\s*)?(?:(\d+)h\s*)?(?:(\d+)m)?";
 const PANE_PERIOD_END: &str = r"(?i)\bperiod\s+ends?\b\s*(.+)$";
@@ -237,7 +237,8 @@ fn reset_within_window(epoch: i64, now: f64, max_seconds: Option<i64>) -> bool {
     }
 }
 
-/// Parse a "resets HH:MM" clock descriptor into an epoch.
+/// Parse a "resets HH:MM" clock descriptor into an epoch. Codex can emit
+/// either 24-hour times or 12-hour times with AM/PM.
 ///
 /// A bare clock time carries no date, so a time that already passed today
 /// normally means tomorrow. That inference is only valid when tomorrow still
@@ -252,7 +253,18 @@ fn pane_reset_epoch(line: &str, now: f64, max_seconds: Option<i64>) -> Option<i6
     let reset = re(PANE_RESET).captures(line)?;
     let descriptor = reset.get(1)?.as_str();
     let clock = re(PANE_RESET_CLOCK).captures(descriptor)?;
-    let hour: u32 = clock.get(1)?.as_str().parse().ok()?;
+    let mut hour: u32 = clock.get(1)?.as_str().parse().ok()?;
+    if let Some(meridiem) = clock.get(3) {
+        if hour == 0 || hour > 12 {
+            return None;
+        }
+        hour = hour % 12
+            + if meridiem.as_str().eq_ignore_ascii_case("pm") {
+                12
+            } else {
+                0
+            };
+    }
     let minute: u32 = clock.get(2)?.as_str().parse().ok()?;
     let base = local_from_timestamp(now);
     if let Some(day) = re(PANE_RESET_DATE).captures(descriptor) {
@@ -964,6 +976,20 @@ mod tests {
             result["windows"][0]["resets_at"],
             json!(local_ts_hms(2026, 7, 5, 20, 12, 0))
         );
+    }
+
+    #[test]
+    fn codex_pane_respects_am_and_pm_in_dated_reset_times() {
+        let now = local_ts(2026, 7, 3, 20, 0);
+        for (clock, hour) in [("12:16 AM", 0), ("12:16 PM", 12), ("1:16 PM", 13)] {
+            let text = format!("Weekly limit: 0% left (resets {clock} on 4 Jul)\n");
+            let result = parse_pane("codex", &text, Some(now));
+            assert_eq!(
+                result["windows"][0]["resets_at"],
+                json!(local_ts_hms(2026, 7, 4, hour, 16, 0)),
+                "{clock}"
+            );
+        }
     }
 
     #[test]
