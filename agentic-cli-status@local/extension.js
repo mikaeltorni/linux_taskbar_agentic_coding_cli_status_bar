@@ -698,6 +698,14 @@ function forecastPercentMarkup(percent) {
   return `<span foreground="${percentColor(percent)}">${percent}%</span>`;
 }
 
+/** Escape forecast menu text and color every displayed percentage. */
+function forecastMenuMarkup(text) {
+  return GLib.markup_escape_text(String(text), -1).replace(
+    /(\d+(?:\.\d+)?)%/g,
+    (_match, percent) => forecastPercentMarkup(Number(percent)),
+  );
+}
+
 /**
  * Pango 24-48h consensus: each side uses percentColor; the hyphen is neutral.
  *
@@ -1046,16 +1054,19 @@ class AgenticCliStatusButton extends PanelMenu.Button {
     const entries = codexResetForecastMenuEntries(forecast);
     for (const entry of entries) {
       if (entry.kind === 'heading') {
-        this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
-          entry.text, { reactive: false }));
+        const item = new PopupMenu.PopupMenuItem('', { reactive: false });
+        item.label.clutter_text.set_markup(forecastMenuMarkup(entry.text));
+        this.menu.addMenuItem(item);
         continue;
       }
       const hasUrl = typeof entry.url === 'string' &&
         entry.url.startsWith('https://');
-      const item = new PopupMenu.PopupMenuItem(`↗ ${entry.text}`, {
+      const item = new PopupMenu.PopupMenuItem('', {
         reactive: hasUrl,
         can_focus: hasUrl,
       });
+      item.label.clutter_text.set_markup(
+        forecastMenuMarkup(`↗ ${entry.text}`));
       item.label.add_style_class_name('acs-forecast-site-label');
       item.label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
       item.connect('activate', () => {

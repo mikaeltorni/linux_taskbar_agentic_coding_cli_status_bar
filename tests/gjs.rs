@@ -169,6 +169,7 @@ fn agentic_results() -> Option<Value> {
         "forecastHorizonPercents",
         "formatForecastConsensusPair",
         "forecastPercentMarkup",
+        "forecastMenuMarkup",
         "formatForecastConsensusMarkup",
         "formatForecastPercent",
         "formatForecastVolume",
@@ -344,8 +345,26 @@ fn gradient_and_segments() {
     let color_0 = js["color_0"].as_str().unwrap();
     let color_26 = js["color_26"].as_str().unwrap();
     let color_48 = js["color_48"].as_str().unwrap();
+    let color_50 = js["color_50"].as_str().unwrap();
     assert_eq!(color_100, "#8ff0a4");
     assert_eq!(color_0, "#ff0000");
+    let forecast_menu_markup = js["forecast_menu_markup"].as_str().unwrap();
+    assert!(
+        forecast_menu_markup.contains("Codex &amp; reset &lt;"),
+        "menu text must be escaped before adding Pango spans: {forecast_menu_markup}"
+    );
+    assert!(
+        forecast_menu_markup.contains(&format!(r#"<span foreground="{color_0}">0%</span>"#)),
+        "0% reset forecast must use the red endpoint: {forecast_menu_markup}"
+    );
+    assert!(
+        forecast_menu_markup.contains(&format!(r#"<span foreground="{color_50}">50%</span>"#)),
+        "midpoint reset forecast must use percentColor: {forecast_menu_markup}"
+    );
+    assert!(
+        forecast_menu_markup.contains(&format!(r#"<span foreground="{color_100}">100%</span>"#)),
+        "100% reset forecast must use the green endpoint: {forecast_menu_markup}"
+    );
     let forecast_100_0 = js["forecast_color_100_0"].as_str().unwrap();
     assert!(
         forecast_100_0.contains(&format!(r#"<span foreground="{color_100}">100%</span>"#)),
@@ -525,7 +544,8 @@ fn gradient_and_segments() {
         .unwrap();
     let cli_menu_index = render_source.find("const names = {").unwrap();
     assert!(forecast_menu_index < cli_menu_index);
-    assert!(source.contains("new PopupMenu.PopupMenuItem(`↗ ${entry.text}`"));
+    assert!(source.contains("forecastMenuMarkup(entry.text)"));
+    assert!(source.contains("forecastMenuMarkup(`↗ ${entry.text}`)"));
     assert!(source.contains("item.connect('activate', () =>"));
     assert!(source.contains("Gio.AppInfo.launch_default_for_uri_async"));
     assert!(source.contains("item.label.add_style_class_name('acs-forecast-site-label')"));

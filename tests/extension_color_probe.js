@@ -330,6 +330,7 @@ const results = {
     consensus_percent_24h: 0,
     consensus_percent_48h: 100,
   }),
+  forecast_menu_markup: forecastMenuMarkup('Codex & reset <0%-100%> · 50%'),
   valid_forecast_launch: validForecastLaunch,
   reference_forecast_launches: referenceForecastLaunches,
   rejected_forecast_launch: rejectedForecastLaunch,
