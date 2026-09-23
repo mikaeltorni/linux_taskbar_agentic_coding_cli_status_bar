@@ -209,6 +209,21 @@ pub fn resolve_cli_binary(cli_id: &str, home: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Newer Codex builds need this mode when the optional shared daemon package
+/// is absent. Probe the installed binary so older builds keep their CLI syntax.
+fn codex_supports_no_daemon(binary: &Path) -> bool {
+    match Command::new(binary).arg("--help").output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).contains("--no-daemon")
+        }
+        Ok(_) => false,
+        Err(error) => {
+            logging::warn(format!("cannot probe Codex console options: {error}"));
+            false
+        }
+    }
+}
+
 /// Build the `-e VAR=value` arguments a console window is created with.
 ///
 /// The `codex` launcher hands the run to ACC, which re-exports `CODEX_HOME`
@@ -624,17 +639,16 @@ pub fn ensure_console(
             note_missing_cli(cli_id);
             continue;
         };
+        let mut command = vec![binary.to_string_lossy().into_owned()];
+        if cli_id == "codex" && codex_supports_no_daemon(&binary) {
+            command.push("--no-daemon".into());
+        }
         let mut env_args = window_env_args(cli_id, codex_home.as_deref(), *instance_id);
         if !have_session {
             let mut args = vec!["new-session".into(), "-d".into()];
             args.append(&mut env_args);
-            args.extend([
-                "-s".into(),
-                session.into(),
-                "-n".into(),
-                window.clone(),
-                binary.to_string_lossy().into_owned(),
-            ]);
+            args.extend(["-s".into(), session.into(), "-n".into(), window.clone()]);
+            args.extend(command.clone());
             let result = tmux.run(&args);
             have_session = result.0 == 0;
             created_any = have_session;
@@ -648,13 +662,8 @@ pub fn ensure_console(
         } else {
             let mut args = vec!["new-window".into(), "-d".into()];
             args.append(&mut env_args);
-            args.extend([
-                "-t".into(),
-                session.into(),
-                "-n".into(),
-                window.clone(),
-                binary.to_string_lossy().into_owned(),
-            ]);
+            args.extend(["-t".into(), session.into(), "-n".into(), window.clone()]);
+            args.extend(command);
             let result = tmux.run(&args);
             if result.0 != 0 {
                 logging::error(format!(
@@ -938,6 +947,49 @@ mod tests {
         std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
         std::fs::write(&managed, "#!/bin/sh\n").unwrap();
         assert_eq!(resolve_cli_binary("codex", &sandbox.home), Some(managed));
+    }
+
+    #[test]
+    fn codex_console_uses_no_daemon_when_installed_cli_supports_it() {
+        let sandbox = Sandbox::new();
+        let bin = sandbox
+            .home
+            .join(".local/share/linux_codex_claude_code_setup/npm/bin/codex");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, "#!/bin/sh\nprintf '%s\\n' '  --no-daemon'\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&bin, permissions).unwrap();
+        let codex_home = sandbox.home.join(".codex-account-2");
+        write_codex_auth(&codex_home);
+        let tmux = FakeTmux {
+            calls: Mutex::new(Vec::new()),
+            has_session: true,
+            captures: Mutex::new(Vec::new()),
+            codex_home_env: None,
+        };
+        ensure_console(
+            "acs",
+            &["codex".into()],
+            &sandbox.home,
+            &tmux,
+            true,
+            &[CodexConsole {
+                window: "codex-2".into(),
+                home: codex_home,
+                instance_id: Some(2),
+            }],
+        );
+        let calls = tmux.calls.lock().unwrap();
+        let created = calls
+            .iter()
+            .find(|args| args.first().map(String::as_str) == Some("new-window"))
+            .unwrap();
+        assert_eq!(
+            created[created.len() - 2..],
+            [bin.display().to_string(), "--no-daemon".into()]
+        );
     }
 
     #[test]

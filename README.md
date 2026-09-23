@@ -47,6 +47,11 @@ the menu's “No usage limit resets available” as zero, replacing a prior coun
 When concurrent Codex sessions record several distinct rolling windows, the
 poller uses the most depleted active window and ignores exhausted candidates
 after their reset time, so an old pre-reset snapshot cannot mask current usage.
+Across account homes, shared hard-linked rollouts are ignored; the newest
+observed account-owned rollout wins even if an older file was touched later.
+The poller keeps a newer console reading for each account until fresh usage
+arrives. Codex debug consoles use `--no-daemon` when the installed CLI supports
+it, so an incomplete optional background-server package cannot stop `/status`.
 
 ## How It Works
 
