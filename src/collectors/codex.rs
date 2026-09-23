@@ -1,6 +1,7 @@
 //! Codex collector: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
 
 use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -42,7 +43,7 @@ pub fn codex_window_label(window_minutes: Option<f64>, key: &str) -> String {
     }
 }
 
-/// Collect Codex rate limits from the newest session rollout file.
+/// Collect Codex rate limits from this account's newest observed rollout.
 pub fn collect_codex(home: &Path, now: Option<f64>) -> Value {
     collect_codex_at(&home.join(".codex"), now)
 }
@@ -63,10 +64,36 @@ pub fn collect_codex_at(codex_home: &Path, now: Option<f64>) -> Value {
             Some(format!("no {}/sessions directory", codex_home.display())),
         );
     }
+    let mut best: Option<Value> = None;
     for rollout in recent_rollouts(&sessions) {
-        if let Some(found) = codex_last_rate_limits(&rollout, now) {
-            return found;
+        let observed = best
+            .as_ref()
+            .and_then(|snap| snap["observed_at"].as_f64())
+            .unwrap_or(0.0);
+        if file_mtime(&rollout) < observed {
+            break;
         }
+        // ACC can hard-link a resumed rollout into another CODEX_HOME. Its
+        // inode then contains one login's events under multiple account names.
+        let Ok(metadata) = rollout.symlink_metadata() else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || metadata.nlink() > 1 {
+            logging::debug(format!(
+                "ignoring shared Codex rollout {}",
+                rollout.display()
+            ));
+            continue;
+        }
+        if let Some(found) = codex_last_rate_limits(&rollout, now) {
+            let found_at = found["observed_at"].as_f64().unwrap_or(0.0);
+            if found_at > observed {
+                best = Some(found);
+            }
+        }
+    }
+    if let Some(found) = best {
+        return found;
     }
     snapshot(
         "codex_sessions",
@@ -314,6 +341,29 @@ pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value
         let last_inst = last_instance_by_id(last, row.id);
         let mut snap = collect_codex_at(&row.home, now);
         snap = carry_last_reading(snap, last_inst);
+        if let Some(previous) = last_inst {
+            let previous_at = previous["observed_at"].as_f64().unwrap_or(0.0);
+            let current_at = snap["observed_at"].as_f64().unwrap_or(0.0);
+            if previous_at > current_at
+                && previous["windows"]
+                    .as_array()
+                    .is_some_and(|w| !w.is_empty())
+            {
+                for key in [
+                    "source",
+                    "observed_at",
+                    "windows",
+                    "plan",
+                    "credits",
+                    "error",
+                    "pane_checked_at",
+                ] {
+                    if let Some(value) = previous.get(key) {
+                        snap[key] = value.clone();
+                    }
+                }
+            }
+        }
         snap = carry_reset_metadata(snap, last_inst);
         collected_rows.push(instance_snapshot(row, snap, selected_id));
     }
@@ -621,7 +671,10 @@ fn codex_last_rate_limits(rollout: &Path, now: f64) -> Option<Value> {
                     Candidate {
                         used_percent: 0.0,
                         resets_at: None,
-                        observed_at: expired_at,
+                        observed_at: label_candidates
+                            .iter()
+                            .map(|c| c.observed_at)
+                            .fold(0.0, f64::max),
                         order: 0,
                     },
                 ));
@@ -747,6 +800,36 @@ mod tests {
         );
         let observed = result["observed_at"].as_f64().unwrap();
         assert!((observed - 1_783_075_285.0).abs() < 2.0);
+    }
+
+    #[test]
+    fn newest_observation_wins_when_an_old_rollout_was_touched_later() {
+        let sandbox = Sandbox::new();
+        write_codex_rollout(
+            &sandbox.home,
+            "2026/07/03",
+            "rollout-recent.jsonl",
+            &[codex_token_count_event_at(
+                80.0,
+                90.0,
+                "2026-07-03T10:41:25Z",
+                "plus",
+            )],
+        );
+        write_codex_rollout(
+            &sandbox.home,
+            "2026/07/03",
+            "rollout-touched.jsonl",
+            &[codex_token_count_event_at(
+                10.0,
+                20.0,
+                "2026-07-03T09:41:25Z",
+                "plus",
+            )],
+        );
+        let result = collect_codex(&sandbox.home, Some(FIXTURE_NOW));
+        assert_eq!(result["windows"][0]["used_percent"], json!(80.0));
+        assert_eq!(result["windows"][1]["used_percent"], json!(90.0));
     }
 
     #[test]
@@ -1273,6 +1356,95 @@ mod tests {
         assert_eq!(instances[1]["windows"][0]["label"], json!("month"));
         assert_eq!(instances[1]["windows"][0]["used_percent"], json!(12.0));
         assert_eq!(selected_codex_home(&sandbox.home), extra);
+    }
+
+    #[test]
+    fn shared_rollout_cannot_replace_an_accounts_own_limits() {
+        let sandbox = Sandbox::new();
+        let first = sandbox.home.join(".codex");
+        let third = sandbox.home.join(".codex-account-3");
+        write_rollout_at(
+            &first,
+            "2026/07/03",
+            "rollout-first.jsonl",
+            &[codex_token_count_event(70.0, 80.0)],
+        );
+        let shared = write_codex_rollout(
+            &sandbox.home,
+            "2026/07/03",
+            "rollout-shared.jsonl",
+            &[codex_token_count_event(3.0, 96.0)],
+        );
+        let target = third.join("sessions/2026/07/03/rollout-shared.jsonl");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::hard_link(shared, target).unwrap();
+        write_rollout_at(
+            &third,
+            "2026/07/03",
+            "rollout-third.jsonl",
+            &[codex_token_count_event(4.0, 95.0)],
+        );
+        write_registry(
+            &sandbox.home,
+            &json!([
+                {"id": 1, "home": first.to_string_lossy()},
+                {"id": 3, "home": third.to_string_lossy()}
+            ]),
+            3,
+        );
+        let result = collect_codex_accounts(&sandbox.home, Some(FIXTURE_NOW), None);
+        assert_eq!(
+            result["instances"][0]["windows"][0]["used_percent"],
+            json!(70.0)
+        );
+        assert_eq!(
+            result["instances"][1]["windows"][0]["used_percent"],
+            json!(4.0)
+        );
+    }
+
+    #[test]
+    fn newer_console_weekly_reset_is_kept_for_its_own_account() {
+        let sandbox = Sandbox::new();
+        let first = sandbox.home.join(".codex");
+        let second = sandbox.home.join(".codex-account-2");
+        write_rollout_at(
+            &first,
+            "2026/07/03",
+            "rollout-first.jsonl",
+            &[codex_token_count_event(1.0, 2.0)],
+        );
+        write_rollout_at(
+            &second,
+            "2026/07/03",
+            "rollout-second.jsonl",
+            &[codex_token_count_event(3.0, 12.0)],
+        );
+        write_registry(
+            &sandbox.home,
+            &json!([
+                {"id": 1, "home": first.to_string_lossy()},
+                {"id": 2, "home": second.to_string_lossy()}
+            ]),
+            1,
+        );
+        let previous = json!({"instances": [
+            {"id": 1, "observed_at": FIXTURE_NOW + 20.0, "source": "codex_pane", "windows": [{"label": "week", "used_percent": 50.0, "resets_at": 1783577400_i64}]},
+            {"id": 2, "observed_at": FIXTURE_NOW + 20.0, "source": "codex_pane", "windows": [{"label": "week", "used_percent": 100.0, "resets_at": 1783577400_i64}]}
+        ]});
+        let result = collect_codex_accounts(&sandbox.home, Some(FIXTURE_NOW), Some(&previous));
+        assert_eq!(
+            result["instances"][0]["windows"][0]["used_percent"],
+            json!(50.0)
+        );
+        assert_eq!(
+            result["instances"][1]["windows"][0]["used_percent"],
+            json!(100.0)
+        );
+        assert_eq!(
+            result["instances"][1]["windows"][0]["resets_at"],
+            json!(1783577400_i64)
+        );
     }
 
     #[test]
