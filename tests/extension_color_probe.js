@@ -291,6 +291,16 @@ const results = {
       {label: 'at least 1 reset', percent: 86},
     ]}],
   }),
+  forecast_menu_no_open_market: codexResetForecastMenuEntries({
+    enabled: true,
+    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/',
+      detail: 'no open market', predictions: []}],
+  }),
+  forecast_menu_stale_market: codexResetForecastMenuEntries({
+    enabled: true,
+    sites: [{id: 'polymarket', name: 'Polymarket', url: 'https://polymarket.com/',
+      error: 'network timeout', predictions: [{label: '1 reset', percent: 57}]}],
+  }),
   disabled_forecast_menu_entries: codexResetForecastMenuEntries({
     enabled: false,
     horizon: '24h',

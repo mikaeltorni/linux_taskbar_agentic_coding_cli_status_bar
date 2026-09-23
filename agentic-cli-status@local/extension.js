@@ -871,8 +871,10 @@ function codexResetForecastMenuEntries(forecast) {
       text: site?.reference === true
         ? `${name} — ${String(site?.detail ?? 'reset history')}`
         : predictions.length
-          ? `${name} — ${predictions.join(' · ')}`
-          : `${name} — unavailable`,
+          ? `${name} — ${predictions.join(' · ')}${site?.error ? ' · last known' : ''}`
+          : site?.id === 'polymarket' && site?.detail === 'no open market'
+            ? `${name} — no open market`
+            : `${name} — unavailable`,
       url: site?.url ?? null,
     });
   }
