@@ -277,6 +277,7 @@ fn model_status_extension_contract() {
         "const attention = agents.filter(agent =>",
         "providers.push({...provider, agents, live: agents.length, running, attention})",
         "groupWorkspaceEntries(workspaceEntries)",
+        "orderedGroups.sort((left, right) => workspaceSortValue(left.workspace) -",
         "for (const entry of group.entries)",
         "Workspace ${workspace}",
         "current ? ' — current' : ''",
