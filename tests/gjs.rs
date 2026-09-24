@@ -648,7 +648,7 @@ fn credit_state_is_visible_on_the_bar_and_in_the_menu() {
 }
 
 #[test]
-fn model_status_entries_sort_by_monitor_before_workspace() {
+fn model_status_entries_keep_workspace_groups_and_sort_by_monitor() {
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");
         return;
@@ -663,6 +663,7 @@ fn model_status_entries_sort_by_monitor_before_workspace() {
         extract_function(&source, "monitorSortValue"),
         extract_function(&source, "workspaceSortValue"),
         extract_function(&source, "compareWorkspaceEntries"),
+        extract_function(&source, "groupWorkspaceEntries"),
     ];
     let js = run_gjs(
         &snippets,
@@ -671,26 +672,31 @@ const entries = [
   {provider: {label: 'Codex'}, agent: {title: 'monitor 2 workspace 1', monitor: 1, workspace: 1}},
   {provider: {label: 'Claude'}, agent: {title: 'monitor 1 workspace 2', monitor: 0, workspace: 2}},
   {provider: {label: 'Codex'}, agent: {title: 'monitor 1 workspace 1', monitor: 0, workspace: 1}},
+  {provider: {label: 'Codex'}, agent: {title: 'monitor 3 workspace 2', monitor: 2, workspace: 2}},
+  {provider: {label: 'Codex'}, agent: {title: 'monitor 2 workspace 3', monitor: 1, workspace: 3}},
+  {provider: {label: 'Codex'}, agent: {title: 'monitor 1 workspace 4', monitor: 0, workspace: 4}},
   {provider: {label: 'Codex'}, agent: {title: 'unknown monitor', monitor: -1, workspace: 1}},
 ];
-entries.sort(compareWorkspaceEntries);
-print(JSON.stringify({titles: entries.map(entry => entry.agent.title)}));
+const groups = groupWorkspaceEntries(entries);
+print(JSON.stringify({
+  workspaces: groups.map(group => group.workspace),
+  titles: groups.map(group => group.entries.map(entry => entry.agent.title)),
+}));
 "#,
     );
-    let titles: Vec<_> = js["titles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|title| title.as_str().unwrap())
-        .collect();
+    assert_eq!(js["workspaces"], serde_json::json!([1, 2, 4, 3]));
     assert_eq!(
-        titles,
-        vec![
-            "monitor 1 workspace 1",
-            "monitor 1 workspace 2",
-            "monitor 2 workspace 1",
-            "unknown monitor",
-        ]
+        js["titles"],
+        serde_json::json!([
+            [
+                "monitor 1 workspace 1",
+                "monitor 2 workspace 1",
+                "unknown monitor"
+            ],
+            ["monitor 1 workspace 2", "monitor 3 workspace 2"],
+            ["monitor 1 workspace 4"],
+            ["monitor 2 workspace 3"]
+        ])
     );
 }
 
