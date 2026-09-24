@@ -648,6 +648,53 @@ fn credit_state_is_visible_on_the_bar_and_in_the_menu() {
 }
 
 #[test]
+fn model_status_entries_sort_by_monitor_before_workspace() {
+    if !gjs_available() {
+        eprintln!("gjs not installed; skipping");
+        return;
+    }
+    let source = fs::read_to_string(
+        repo_root()
+            .join("acc-model-status@local")
+            .join("extension.js"),
+    )
+    .unwrap();
+    let snippets = vec![
+        extract_function(&source, "monitorSortValue"),
+        extract_function(&source, "workspaceSortValue"),
+        extract_function(&source, "compareWorkspaceEntries"),
+    ];
+    let js = run_gjs(
+        &snippets,
+        r#"
+const entries = [
+  {provider: {label: 'Codex'}, agent: {title: 'monitor 2 workspace 1', monitor: 1, workspace: 1}},
+  {provider: {label: 'Claude'}, agent: {title: 'monitor 1 workspace 2', monitor: 0, workspace: 2}},
+  {provider: {label: 'Codex'}, agent: {title: 'monitor 1 workspace 1', monitor: 0, workspace: 1}},
+  {provider: {label: 'Codex'}, agent: {title: 'unknown monitor', monitor: -1, workspace: 1}},
+];
+entries.sort(compareWorkspaceEntries);
+print(JSON.stringify({titles: entries.map(entry => entry.agent.title)}));
+"#,
+    );
+    let titles: Vec<_> = js["titles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|title| title.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        titles,
+        vec![
+            "monitor 1 workspace 1",
+            "monitor 1 workspace 2",
+            "monitor 2 workspace 1",
+            "unknown monitor",
+        ]
+    );
+}
+
+#[test]
 fn workspace_attention_badges() {
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");

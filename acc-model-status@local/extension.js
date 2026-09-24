@@ -257,14 +257,28 @@ function agentWindowMatchScore(agent, title) {
     return score;
 }
 
+/** Return a numeric monitor sort key, placing unknown monitors last. */
+function monitorSortValue(monitor) {
+    if (monitor === null || monitor === undefined)
+        return Number.MAX_SAFE_INTEGER;
+    const number = Number(monitor);
+    return Number.isInteger(number) && number >= 0
+        ? number
+        : Number.MAX_SAFE_INTEGER;
+}
+
 /** Return a numeric workspace sort key, placing unknown workspaces last. */
 function workspaceSortValue(workspace) {
     const number = Number(workspace) || 0;
     return number > 0 ? number : Number.MAX_SAFE_INTEGER;
 }
 
-/** Sort workspace-menu entries by real workspace, then provider and title. */
+/** Sort workspace-menu entries by monitor, workspace, provider, and title. */
 function compareWorkspaceEntries(left, right) {
+    const monitorDifference = monitorSortValue(left.agent.monitor) -
+        monitorSortValue(right.agent.monitor);
+    if (monitorDifference !== 0)
+        return monitorDifference;
     const workspaceDifference = workspaceSortValue(left.agent.workspace) -
         workspaceSortValue(right.agent.workspace);
     if (workspaceDifference !== 0)
@@ -324,6 +338,7 @@ function scopePayloadToWindows(payload, windows) {
                 const match = selected.get(agent);
                 return {
                     ...agent,
+                    monitor: match.monitor,
                     workspace: match.workspace,
                     current_workspace: match.current,
                 };
@@ -453,7 +468,8 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Track identity/workspace changes for one window until it is unmanaged.
+     * Track identity, workspace, and position changes until a window is
+     * unmanaged.
      *
      * @param {Meta.Window} win - live Shell window.
      */
@@ -462,6 +478,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             return;
         const ids = [
             win.connect('workspace-changed', () => this._queueRefresh()),
+            win.connect('position-changed', () => this._queueRefresh()),
             win.connect('notify::title', () => this._queueRefresh()),
             win.connect('unmanaged', () => {
                 const stored = this._windowSignals.get(win) || [];
@@ -475,9 +492,10 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Return every open window's title, actual workspace, and current marker.
+     * Return every open window's title, monitor, actual workspace, and marker.
      *
-     * GNOME workspace indexes are zero-based; menu headings are one-based.
+     * GNOME monitor and workspace indexes are zero-based; workspace menu
+     * headings are one-based. Sorting by monitor index puts monitor 1 first.
      * A sticky window is considered part of the current workspace because
      * that is where it is presently visible.
      */
@@ -494,11 +512,12 @@ class AccModelStatusButton extends PanelMenu.Button {
                 continue;
             const workspaceObject = win.get_workspace();
             let workspace = workspaceObject ? workspaceObject.index() + 1 : 0;
+            const monitor = win.get_monitor();
             const current = win.located_on_workspace(activeWorkspace);
             if (current && typeof win.is_on_all_workspaces === 'function' &&
                 win.is_on_all_workspaces())
                 workspace = activeWorkspaceNumber;
-            windows.push({title, workspace, current});
+            windows.push({title, monitor, workspace, current});
         }
         return windows;
     }
@@ -702,7 +721,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Build the drop-down: all open agents grouped in workspace order.
+     * Build the drop-down from entries ordered by monitor, then workspace.
      *
      * @param {object} payload - normalized payload.
      * @param {boolean} stale - whether the payload is stale.
