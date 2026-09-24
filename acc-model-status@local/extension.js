@@ -290,6 +290,27 @@ function compareWorkspaceEntries(left, right) {
     return String(left.agent.title || '').localeCompare(String(right.agent.title || ''));
 }
 
+/** Group once per workspace, ordering groups and rows by their first monitor. */
+function groupWorkspaceEntries(entries) {
+    const groups = new Map();
+    for (const entry of entries) {
+        const workspace = Number(entry.agent.workspace) || 0;
+        let group = groups.get(workspace);
+        if (!group) {
+            group = {workspace, entries: []};
+            groups.set(workspace, group);
+        }
+        group.entries.push(entry);
+    }
+
+    const orderedGroups = Array.from(groups.values());
+    for (const group of orderedGroups)
+        group.entries.sort(compareWorkspaceEntries);
+    orderedGroups.sort((left, right) => compareWorkspaceEntries(
+        left.entries[0], right.entries[0]));
+    return orderedGroups;
+}
+
 /**
  * Match the ACC payload to every open agent window, preserving real workspace.
  *
@@ -721,7 +742,8 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Build the drop-down from entries ordered by monitor, then workspace.
+     * Build one menu section per workspace, with monitor-ordered sections and
+     * entries.
      *
      * @param {object} payload - normalized payload.
      * @param {boolean} stale - whether the payload is stale.
@@ -735,44 +757,43 @@ class AccModelStatusButton extends PanelMenu.Button {
             for (const agent of agents)
                 workspaceEntries.push({provider, agent});
         }
-        workspaceEntries.sort(compareWorkspaceEntries);
+        const workspaceGroups = groupWorkspaceEntries(workspaceEntries);
         // Same counts the panel badges show, keyed for the workspace headings.
         const attentionByWorkspace = new Map(
             (attention || []).map(entry => [entry.workspace, entry]));
 
-        let previousWorkspace = null;
         let workspaceSection = null;
-        for (const entry of workspaceEntries) {
-            const workspace = Number(entry.agent.workspace) || 0;
-            if (workspace !== previousWorkspace) {
-                if (previousWorkspace !== null)
-                    this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-                const current = Boolean(entry.agent.current_workspace);
-                const headingText = workspace > 0
-                    ? `Workspace ${workspace}${current ? ' — current' : ''}`
-                    : 'Workspace unknown';
-                const heading = new PopupMenu.PopupMenuItem(headingText, {reactive: false});
-                heading.label.add_style_class_name('ams-menu-heading');
-                const waiting = attentionByWorkspace.get(workspace);
-                if (waiting) {
-                    // Mirror the flashing panel badge inside the drop-down.
-                    const badge = new St.Label({
-                        text: waiting.label,
-                        style_class: 'ams-ws-attn',
-                        y_align: Clutter.ActorAlign.CENTER,
-                    });
-                    heading.add_child(badge);
-                    this._flashActors.push(badge);
-                }
-                workspaceSection = new PopupMenu.PopupMenuSection();
-                workspaceSection.actor.add_style_class_name('ams-workspace-block');
-                if (current)
-                    workspaceSection.actor.add_style_class_name('ams-current-workspace-block');
-                workspaceSection.addMenuItem(heading);
-                this.menu.addMenuItem(workspaceSection);
-                previousWorkspace = workspace;
+        for (let groupIndex = 0; groupIndex < workspaceGroups.length; groupIndex++) {
+            const group = workspaceGroups[groupIndex];
+            const workspace = group.workspace;
+            if (groupIndex > 0)
+                this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            const current = group.entries.some(entry =>
+                Boolean(entry.agent.current_workspace));
+            const headingText = workspace > 0
+                ? `Workspace ${workspace}${current ? ' — current' : ''}`
+                : 'Workspace unknown';
+            const heading = new PopupMenu.PopupMenuItem(headingText, {reactive: false});
+            heading.label.add_style_class_name('ams-menu-heading');
+            const waiting = attentionByWorkspace.get(workspace);
+            if (waiting) {
+                // Mirror the flashing panel badge inside the drop-down.
+                const badge = new St.Label({
+                    text: waiting.label,
+                    style_class: 'ams-ws-attn',
+                    y_align: Clutter.ActorAlign.CENTER,
+                });
+                heading.add_child(badge);
+                this._flashActors.push(badge);
             }
-            workspaceSection.addMenuItem(this._agentMenuItem(entry.agent, entry.provider));
+            workspaceSection = new PopupMenu.PopupMenuSection();
+            workspaceSection.actor.add_style_class_name('ams-workspace-block');
+            if (current)
+                workspaceSection.actor.add_style_class_name('ams-current-workspace-block');
+            workspaceSection.addMenuItem(heading);
+            this.menu.addMenuItem(workspaceSection);
+            for (const entry of group.entries)
+                workspaceSection.addMenuItem(this._agentMenuItem(entry.agent, entry.provider));
         }
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
