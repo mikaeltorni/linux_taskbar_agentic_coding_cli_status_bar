@@ -290,7 +290,7 @@ function compareWorkspaceEntries(left, right) {
     return String(left.agent.title || '').localeCompare(String(right.agent.title || ''));
 }
 
-/** Group once per workspace, ordering groups and rows by their first monitor. */
+/** Group once per workspace, sorting groups numerically and rows by monitor. */
 function groupWorkspaceEntries(entries) {
     const groups = new Map();
     for (const entry of entries) {
@@ -306,8 +306,8 @@ function groupWorkspaceEntries(entries) {
     const orderedGroups = Array.from(groups.values());
     for (const group of orderedGroups)
         group.entries.sort(compareWorkspaceEntries);
-    orderedGroups.sort((left, right) => compareWorkspaceEntries(
-        left.entries[0], right.entries[0]));
+    orderedGroups.sort((left, right) => workspaceSortValue(left.workspace) -
+        workspaceSortValue(right.workspace));
     return orderedGroups;
 }
 
@@ -742,8 +742,8 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Build one menu section per workspace, with monitor-ordered sections and
-     * entries.
+     * Build one menu section per numerically ordered workspace, with
+     * monitor-ordered entries.
      *
      * @param {object} payload - normalized payload.
      * @param {boolean} stale - whether the payload is stale.

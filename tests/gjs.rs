@@ -648,7 +648,7 @@ fn credit_state_is_visible_on_the_bar_and_in_the_menu() {
 }
 
 #[test]
-fn model_status_entries_keep_workspace_groups_and_sort_by_monitor() {
+fn model_status_entries_sort_workspaces_and_monitor_rows() {
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");
         return;
@@ -684,7 +684,7 @@ print(JSON.stringify({
 }));
 "#,
     );
-    assert_eq!(js["workspaces"], serde_json::json!([1, 2, 4, 3]));
+    assert_eq!(js["workspaces"], serde_json::json!([1, 2, 3, 4]));
     assert_eq!(
         js["titles"],
         serde_json::json!([
@@ -694,8 +694,8 @@ print(JSON.stringify({
                 "unknown monitor"
             ],
             ["monitor 1 workspace 2", "monitor 3 workspace 2"],
-            ["monitor 1 workspace 4"],
-            ["monitor 2 workspace 3"]
+            ["monitor 2 workspace 3"],
+            ["monitor 1 workspace 4"]
         ])
     );
 }
