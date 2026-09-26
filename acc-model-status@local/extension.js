@@ -201,19 +201,31 @@ function readPayload(file) {
  * @param {object} row - published harness_rates entry.
  * @returns {string} one menu line, e.g. ``Codex 12/s  80/min  900/h``.
  */
+function formatCompactTokens(value) {
+    if (value === null || value === undefined)
+        return 'n/a';
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0)
+        return 'n/a';
+    const amount = Math.trunc(number);
+    if (amount < 1000)
+        return String(amount);
+    const suffixes = ['k', 'M', 'B', 'T'];
+    let scaled = amount;
+    let index = -1;
+    while (scaled >= 1000 && index < suffixes.length - 1) {
+        scaled /= 1000;
+        index += 1;
+    }
+    const text = scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '');
+    return `${text}${suffixes[index]}`;
+}
+
 function formatHarnessRateText(row) {
     const label = String(row?.label || row?.kind || '?');
-    const format = value => {
-        if (value === null || value === undefined)
-            return 'n/a';
-        const number = Number(value);
-        if (Number.isNaN(number))
-            return 'n/a';
-        return String(Math.trunc(number));
-    };
     if (row?.tokens_per_second === null || row?.tokens_per_second === undefined)
         return `${label} n/a`;
-    return `${label} ${format(row.tokens_per_second)}/s  ${format(row.tokens_per_minute)}/min  ${format(row.tokens_per_hour)}/h`;
+    return `${label} ${formatCompactTokens(row.tokens_per_second)}/s  ${formatCompactTokens(row.tokens_per_minute)}/min  ${formatCompactTokens(row.tokens_per_hour)}/h`;
 }
 
 /**
@@ -252,10 +264,10 @@ function formatHarnessPanelRateText(row) {
         return '';
     const perSecond = Number(row?.tokens_per_second);
     if (Number.isFinite(perSecond) && perSecond > 0)
-        return `${Math.trunc(perSecond)}/s`;
+        return `${formatCompactTokens(perSecond)}/s`;
     const perMinute = Number(row?.tokens_per_minute);
     if (Number.isFinite(perMinute) && perMinute > 0)
-        return `${Math.max(1, Math.round(perMinute / 60))}/s`;
+        return `${formatCompactTokens(Math.max(1, Math.round(perMinute / 60)))}/s`;
     return '';
 }
 
