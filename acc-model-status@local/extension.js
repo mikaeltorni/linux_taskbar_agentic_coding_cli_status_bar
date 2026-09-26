@@ -1,8 +1,9 @@
 /* extension.js — acc-model-status@local
  *
  * Optional GNOME Shell taskbar indicator for Agent Command Center. It renders
- * one icon per agent provider (Claude, Codex, Grok, Qwen, …) together with the
- * number of agents of that provider that are currently RUNNING.
+ * one running-agent amount to the left of each provider icon (Claude, Codex,
+ * Grok, Qwen, …), with a compact tok/s chip on the right when that harness is
+ * producing tokens.
  *
  * Separation of concerns (same contract as agentic-cli-status@local):
  *   - Agent Command Center's monitor OWNS the data: it publishes the document
@@ -800,14 +801,14 @@ class AccModelStatusButton extends PanelMenu.Button {
     /** Render the "no agent terminals" placeholder (payload absent or empty). */
     _renderEmpty(payload) {
         const segment = new St.BoxLayout({style_class: 'ams-segment ams-empty'});
-        segment.add_child(new St.Icon({
-            gicon: this._icon(FALLBACK_ICON),
-            style_class: 'ams-icon system-status-icon',
-        }));
         segment.add_child(new St.Label({
             text: '0',
             style_class: 'ams-count',
             y_align: Clutter.ActorAlign.CENTER,
+        }));
+        segment.add_child(new St.Icon({
+            gicon: this._icon(FALLBACK_ICON),
+            style_class: 'ams-icon system-status-icon',
         }));
         this._box.add_child(segment);
         this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
@@ -816,7 +817,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Render one provider segment: icon, running count, and tok/s when active.
+     * Render one provider segment: running count, icon, and tok/s when active.
      *
      * @param {object} provider - payload provider entry.
      * @param {boolean} stale - whether the whole payload is stale.
@@ -834,14 +835,14 @@ class AccModelStatusButton extends PanelMenu.Button {
         const segment = new St.BoxLayout({
             style_class: `ams-segment ${state}${stale ? ' ams-stale' : ''}`,
         });
-        segment.add_child(new St.Icon({
-            gicon: this._icon(provider.icon),
-            style_class: 'ams-icon system-status-icon',
-        }));
         segment.add_child(new St.Label({
             text: `${running}`,
             style_class: 'ams-count',
             y_align: Clutter.ActorAlign.CENTER,
+        }));
+        segment.add_child(new St.Icon({
+            gicon: this._icon(provider.icon),
+            style_class: 'ams-icon system-status-icon',
         }));
         const rateRow = panelHarnessRateRows(payload).find(row => row.kind === provider.kind);
         const rateText = formatHarnessPanelRateText(rateRow);
