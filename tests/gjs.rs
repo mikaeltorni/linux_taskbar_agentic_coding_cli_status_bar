@@ -37,6 +37,54 @@ fn extract_function(source: &str, name: &str) -> String {
     panic!("unbalanced braces extracting {name}");
 }
 
+fn extract_method(source: &str, name: &str) -> String {
+    let needle = format!("\n    {name}(");
+    let start = source
+        .find(&needle)
+        .map(|i| i + 1)
+        .unwrap_or_else(|| panic!("method {name} not found"));
+    let mut depth = 0i32;
+    for (offset, ch) in source[start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return source[start..=start + offset].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unbalanced braces extracting method {name}");
+}
+
+/// Style-class tokens of `segment.add_child(...)` widgets, in source order.
+fn segment_add_child_classes(body: &str) -> Vec<String> {
+    let mut classes = Vec::new();
+    let mut rest = body;
+    while let Some(idx) = rest.find("segment.add_child(") {
+        rest = &rest[idx + "segment.add_child(".len()..];
+        let Some(cls_idx) = rest.find("style_class:") else {
+            continue;
+        };
+        let after = rest[cls_idx + "style_class:".len()..].trim_start();
+        let Some(quote) = after.chars().next().filter(|c| matches!(c, '\'' | '"' | '`')) else {
+            continue;
+        };
+        let inner = &after[1..];
+        let Some(end) = inner.find(quote) else {
+            continue;
+        };
+        let token = inner[..end]
+            .split_whitespace()
+            .next()
+            .unwrap_or(&inner[..end]);
+        classes.push(token.to_string());
+    }
+    classes
+}
+
 fn extract_constant(source: &str, name: &str) -> String {
     for line in source.lines() {
         if line.starts_with(&format!("const {name} = ")) && line.ends_with(';') {
@@ -714,6 +762,35 @@ fn model_status_omits_session_worktree_mark() {
     assert!(
         !source.contains("providerCountText"),
         "panel count must stay the running-agent integer"
+    );
+}
+
+#[test]
+fn panel_running_count_is_left_of_icon() {
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let empty = extract_method(&source, "_renderEmpty");
+    let provider = extract_method(&source, "_renderProvider");
+    let orphans = extract_method(&source, "_renderPanelHarnessRates");
+    assert_eq!(
+        segment_add_child_classes(&empty),
+        ["ams-count", "ams-icon"],
+        "empty-state 0 must sit left of the placeholder icon"
+    );
+    let provider_classes = segment_add_child_classes(&provider);
+    assert_eq!(
+        &provider_classes[..2],
+        ["ams-count", "ams-icon"],
+        "running-agent amount must sit left of the provider icon"
+    );
+    assert_eq!(
+        provider_classes.last().map(String::as_str),
+        Some("ams-rate"),
+        "token-rate chip must stay to the right of the icon"
+    );
+    assert_eq!(
+        segment_add_child_classes(&orphans),
+        ["ams-icon", "ams-rate"],
+        "orphan rate chips stay icon-then-rate with no running-count"
     );
 }
 

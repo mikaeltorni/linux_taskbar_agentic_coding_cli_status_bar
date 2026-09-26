@@ -2,10 +2,10 @@
  *
  * Layout and state styling for the per-provider model status segments.
  *   ams-box       the panel button's horizontal segment container
- *   ams-segment   one provider segment (icon + count)
+ *   ams-segment   one provider segment (count + icon [+ rate])
  *   ams-icon      provider icon sizing
- *   ams-count     the running-agent count next to the icon
- *   ams-rate      compact panel tok/s (or tok/min) next to a provider icon
+ *   ams-count     the running-agent count to the left of the icon
+ *   ams-rate      compact panel tok/s (or tok/min) to the right of the icon
  *   ams-active    at least one agent of that provider is running
  *   ams-idle      the provider has live agents but none running
  *   ams-attention an agent of that provider needs user input
@@ -42,6 +42,7 @@
 
 .ams-count {
   font-weight: bold;
+  margin-right: 2px;
 }
 
 .ams-rate {
