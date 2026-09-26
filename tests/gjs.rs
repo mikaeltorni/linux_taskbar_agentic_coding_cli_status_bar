@@ -887,7 +887,7 @@ print(JSON.stringify({
     assert_eq!(js["idle"], false);
     assert_eq!(js["missing"], false);
     assert_eq!(js["panelLive"], "12/s");
-    assert_eq!(js["panelMinute"], "10/m");
+    assert_eq!(js["panelMinute"], "1/s");
     assert_eq!(js["panelIdle"], "");
     let lines = js["lines"].as_array().unwrap();
     assert_eq!(lines.len(), 2);

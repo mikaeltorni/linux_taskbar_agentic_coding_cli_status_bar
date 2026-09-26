@@ -255,7 +255,7 @@ function formatHarnessPanelRateText(row) {
         return `${Math.trunc(perSecond)}/s`;
     const perMinute = Number(row?.tokens_per_minute);
     if (Number.isFinite(perMinute) && perMinute > 0)
-        return `${Math.trunc(perMinute)}/m`;
+        return `${Math.max(1, Math.round(perMinute / 60))}/s`;
     return '';
 }
 
