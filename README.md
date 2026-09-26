@@ -294,6 +294,10 @@ It joins those agent rows to GNOME's live window titles and actual workspace
 metadata; no subprocess or tmux polling is involved. Segments are green while
 agents run, yellow when an agent needs input, gray when idle, and dimmed when
 the payload stops being refreshed.
+In the Agent Command Center menu, a Codex row queued for auto-continue shows
+ACC's negative reset countdown (such as `-1:22`) in yellow-green. The menu
+updates the clock locally from `queued_reset_at`, including for terminals with
+no Phrase Automation note.
 
 ## Usage
 

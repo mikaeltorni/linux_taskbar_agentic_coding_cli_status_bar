@@ -65,6 +65,7 @@ const PHASE_COLORS = {
     WAITING: '#ffb454',
     DONE: '#22c55e',
     DRAFT: '#84c32f',
+    QUEUED_RESET: '#b5d747',
     STOPPED: '#ef4444',
     INTERRUPTED: '#c084fc',
     TRANSFERRED: '#c45c5c',
@@ -105,8 +106,8 @@ function formatRunTimer(seconds) {
 /**
  * Visible badge text for one click-menu agent row.
  *
- * A live run with a known start shows the compact yellow clock instead of the
- * word ``RUNNING``. Other phases keep their phase word (``DONE``, ``ATTN``, …).
+ * A queued auto-continue shows a negative reset clock; a live run with a known
+ * start shows the elapsed clock. Other phases keep their phase word.
  *
  * @param {object} agent - payload agent row.
  * @param {number} [nowMs] - clock override in milliseconds (tests).
@@ -114,6 +115,12 @@ function formatRunTimer(seconds) {
  */
 function agentPhaseBadgeText(agent, nowMs) {
     const phase = String(agent && agent.phase || 'UNKNOWN').trim().toUpperCase();
+    const resetAt = Date.parse(agent && agent.queued_reset_at || '');
+    if (!Number.isNaN(resetAt)) {
+        const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+        if (resetAt > now)
+            return `-${formatRunTimer(Math.ceil((resetAt - now) / 1000))}`;
+    }
     const started = Date.parse(agent && agent.run_started_at || '');
     const active = Boolean(agent && agent.run_active);
     if (phase === 'RUNNING' && active && !Number.isNaN(started)) {
@@ -126,13 +133,16 @@ function agentPhaseBadgeText(agent, nowMs) {
 /**
  * Color for one click-menu agent badge.
  *
- * Live-run clocks use RUNNING yellow even though the visible text is the
- * elapsed clock rather than the word ``RUNNING``.
+ * Queued reset clocks use their distinct yellow-green; live-run clocks use
+ * RUNNING yellow even though the visible text is an elapsed clock.
  *
  * @param {object} agent - payload agent row.
  * @returns {string} CSS color from {@link PHASE_COLORS}.
  */
-function agentPhaseBadgeColor(agent) {
+function agentPhaseBadgeColor(agent, nowMs) {
+    const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+    if (agent && agent.queued_reset_at && Date.parse(agent.queued_reset_at) > now)
+        return PHASE_COLORS.QUEUED_RESET;
     const phase = String(agent && agent.phase || '').trim().toUpperCase();
     if (phase === 'RUNNING')
         return PHASE_COLORS.RUNNING;
@@ -1014,7 +1024,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             y_align: Clutter.ActorAlign.CENTER,
         });
         badge.set_style(`color: ${agentPhaseBadgeColor(agent)};`);
-        if (agent.run_active && String(agent.phase || '').trim().toUpperCase() === 'RUNNING') {
+        if ((agent.run_active && String(agent.phase || '').trim().toUpperCase() === 'RUNNING') ||
+            agent.queued_reset_at) {
             badge._amsAgent = agent;
             this._runClockActors.push(badge);
         }

@@ -884,12 +884,15 @@ const done = {{
     run_started_at: new Date({started_ms}).toISOString(),
 }};
 const attn = {{phase: 'ATTN'}};
+const queued = {{phase: 'STOPPED', queued_reset_at: new Date({now_ms} + 82_000).toISOString()}};
 print(JSON.stringify({{
     live_text: agentPhaseBadgeText(live, {now_ms}),
     live_color: agentPhaseBadgeColor(live),
     done_text: agentPhaseBadgeText(done, {now_ms}),
     done_color: agentPhaseBadgeColor(done),
     attn_text: agentPhaseBadgeText(attn, {now_ms}),
+    queued_text: agentPhaseBadgeText(queued, {now_ms}),
+    queued_color: agentPhaseBadgeColor(queued, {now_ms}),
     clock: formatRunTimer(754),
     hour_clock: formatRunTimer(7509),
 }}));
@@ -904,6 +907,8 @@ print(JSON.stringify({{
     assert_eq!(js["done_text"], "DONE");
     assert_eq!(js["done_color"], "#22c55e");
     assert_eq!(js["attn_text"], "ATTN");
+    assert_eq!(js["queued_text"], "-1:22");
+    assert_eq!(js["queued_color"], "#b5d747");
     assert!(source.contains("agentPhaseBadgeText(agent)"));
     assert!(source.contains("agentPhaseBadgeColor(agent)"));
 }
