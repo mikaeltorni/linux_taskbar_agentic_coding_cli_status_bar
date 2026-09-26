@@ -261,12 +261,13 @@ re-reads it every tick, so changes apply without a service restart.
 
 A second, independent taskbar extension (`acc-model-status@local`) shows one
 icon per agent provider with the number of Agent Command Center agents of that
-provider that are **currently running in open terminal windows**, plus a menu
-that starts with per-harness estimated tokens-per-second, tokens-per-minute,
-and tokens-per-hour for harnesses that reported tokens in the last minute
-(aggregated by harness, not by numbered instance such as `ca1`/`ca2`; idle
-0 tok/s rows and missing counters are omitted) and then lists those windows
-across every GNOME workspace. When a visible agent used
+provider that are **currently running in open terminal windows**. The panel
+prints a compact tok/s figure next to each active harness (`12/s`, or `10/m`
+when the 1-second window is 0 but the last minute had tokens). The drop-down
+starts with per-harness tok/s, tok/min, and tok/hour for those same active
+harnesses (aggregated by harness, not by numbered instance such as `ca1`/`ca2`;
+idle 0 tok/s rows and missing counters are omitted) and then lists those
+windows across every GNOME workspace. When a visible agent used
 two or more distinct linked Git worktrees, the panel count and that agent's
 menu origin show `·N` next to the worktree identity. Each workspace appears in
 one contiguous section, ordered by ascending workspace number; rows within

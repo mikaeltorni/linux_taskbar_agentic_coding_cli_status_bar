@@ -875,6 +875,8 @@ fn harness_rate_strip_formats_counts_and_na() {
         extract_function(&source, "formatHarnessRateText"),
         extract_function(&source, "harnessHasMinuteActivity"),
         extract_function(&source, "harnessRateLines"),
+        extract_function(&source, "formatHarnessPanelRateText"),
+        extract_function(&source, "panelHarnessRateRows"),
     ];
     let js = run_gjs(
         &snippets,
@@ -890,12 +892,20 @@ print(JSON.stringify({
     active: harnessHasMinuteActivity({tokens_per_second: 0, tokens_per_minute: 10}),
     idle: harnessHasMinuteActivity({tokens_per_second: 0, tokens_per_minute: 0, tokens_per_hour: 50}),
     missing: harnessHasMinuteActivity({tokens_per_second: null}),
+    panelLive: formatHarnessPanelRateText({tokens_per_second: 12, tokens_per_minute: 80}),
+    panelMinute: formatHarnessPanelRateText({tokens_per_second: 0, tokens_per_minute: 10}),
+    panelIdle: formatHarnessPanelRateText({tokens_per_second: 0, tokens_per_minute: 0}),
     lines: harnessRateLines({harnessRates: [
         {label: 'Claude', tokens_per_second: 0, tokens_per_minute: 10, tokens_per_hour: 10},
         {label: 'Grok', tokens_per_second: null},
         {label: 'Qwen', tokens_per_second: 0, tokens_per_minute: 0, tokens_per_hour: 50},
         {label: 'Codex', tokens_per_second: 12, tokens_per_minute: 80, tokens_per_hour: 900},
     ]}),
+    panelRows: panelHarnessRateRows({harnessRates: [
+        {kind: 'claude', tokens_per_second: 0, tokens_per_minute: 10},
+        {kind: 'grok', tokens_per_second: null},
+        {kind: 'codex', tokens_per_second: 12, tokens_per_minute: 80},
+    ]}).map(row => row.kind),
 }));
 "#,
     );
@@ -904,14 +914,21 @@ print(JSON.stringify({
     assert_eq!(js["active"], true);
     assert_eq!(js["idle"], false);
     assert_eq!(js["missing"], false);
+    assert_eq!(js["panelLive"], "12/s");
+    assert_eq!(js["panelMinute"], "10/m");
+    assert_eq!(js["panelIdle"], "");
     let lines = js["lines"].as_array().unwrap();
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0], "Claude 0/s  10/min  10/h");
     assert_eq!(lines[1], "Codex 12/s  80/min  900/h");
+    let kinds: Vec<_> = js["panelRows"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(kinds, ["claude", "codex"]);
     let rate_pos = source.find("this._renderHarnessRates(payload)").unwrap();
     let workspace_pos = source.find("groupWorkspaceEntries(workspaceEntries)").unwrap();
     assert!(rate_pos < workspace_pos, "harness rates must render above workspaces");
     assert!(source.contains("ams-harness-rates"));
+    assert!(source.contains("this._renderPanelHarnessRates(payload"));
+    assert!(source.contains("style_class: 'ams-rate'"));
     assert!(source.contains("Workspace ${workspace}"));
 }
 
