@@ -844,6 +844,7 @@ fn harness_rate_strip_formats_counts_and_na() {
     )
     .unwrap();
     let snippets = vec![
+        extract_function(&source, "formatCompactTokens"),
         extract_function(&source, "formatHarnessRateText"),
         extract_function(&source, "harnessHasMinuteActivity"),
         extract_function(&source, "harnessRateLines"),
@@ -855,6 +856,17 @@ fn harness_rate_strip_formats_counts_and_na() {
         r#"
 print(JSON.stringify({
     na: formatHarnessRateText({kind: 'grok', label: 'Grok', tokens_per_second: null}),
+    compact: {
+        small: formatCompactTokens(12),
+        k: formatCompactTokens(130681),
+        m: formatCompactTokens(6758015),
+    },
+    huge: formatHarnessRateText({
+        label: 'Codex',
+        tokens_per_second: 130681,
+        tokens_per_minute: 945695,
+        tokens_per_hour: 6758015,
+    }),
     counts: formatHarnessRateText({
         label: 'Codex',
         tokens_per_second: 12,
@@ -882,6 +894,10 @@ print(JSON.stringify({
 "#,
     );
     assert_eq!(js["na"], "Grok n/a");
+    assert_eq!(js["compact"]["small"], "12");
+    assert_eq!(js["compact"]["k"], "131k");
+    assert_eq!(js["compact"]["m"], "6.8M");
+    assert_eq!(js["huge"], "Codex 131k/s  946k/min  6.8M/h");
     assert_eq!(js["counts"], "Codex 12/s  80/min  900/h");
     assert_eq!(js["active"], true);
     assert_eq!(js["idle"], false);
