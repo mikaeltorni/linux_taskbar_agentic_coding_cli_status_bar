@@ -380,75 +380,6 @@ function scopePayloadToWindows(payload, windows) {
 }
 
 /**
- * Return the session worktree mark ``·N`` carried by an ACC agent row.
- *
- * ACC owns the count: the payload's ``worktree_mark`` is ``·N`` when that
- * session used two or more distinct linked Git worktrees, and empty otherwise.
- * ``worktree_count`` is the fallback when an older poller omitted the mark.
- *
- * @param {object} agent - one payload agent row.
- * @returns {string} ``·N`` or ``''``.
- */
-function agentWorktreeMark(agent) {
-    const supplied = String((agent && agent.worktree_mark) || '').trim();
-    if (supplied)
-        return supplied;
-    const count = Number((agent && agent.worktree_count) || 0);
-    return count >= 2 ? `·${count}` : '';
-}
-
-/**
- * Return the origin label for one agent menu row, including ``·N``.
- *
- * @param {object} agent - one payload agent row.
- * @returns {string} project, branch, worktree slug, and optional ``·N``.
- */
-function agentOriginText(agent) {
-    const origin = [];
-    if (agent.project)
-        origin.push(`${agent.project}`);
-    if (agent.branch)
-        origin.push(`(${agent.branch})`);
-    const worktree = String(agent.worktree || '').replace(/\/+$/, '');
-    const slug = worktree.split('/').filter(Boolean).pop();
-    if (slug)
-        origin.push(slug);
-    const mark = agentWorktreeMark(agent);
-    if (mark)
-        origin.push(mark);
-    return origin.join(' ');
-}
-
-/**
- * Return the largest per-session ``·N`` mark among a provider's agents.
- *
- * @param {object} provider - payload provider entry.
- * @returns {string} ``·N`` or ``''``.
- */
-function providerWorktreeMark(provider) {
-    let max = 0;
-    for (const agent of provider.agents || []) {
-        const mark = agentWorktreeMark(agent);
-        const count = mark.startsWith('·') ? Number(mark.slice(1)) : 0;
-        if (count > max)
-            max = count;
-    }
-    return max >= 2 ? `·${max}` : '';
-}
-
-/**
- * Return the panel count label for one provider, with ``·N`` when needed.
- *
- * @param {object} provider - payload provider entry.
- * @returns {string} running count, plus `` ·N`` for a multi-worktree session.
- */
-function providerCountText(provider) {
-    const running = Number(provider.running) || 0;
-    const mark = providerWorktreeMark(provider);
-    return mark ? `${running} ${mark}` : `${running}`;
-}
-
-/**
  * Count the agents waiting on the user, grouped by workspace.
  *
  * Drives the flashing `W<n>:<count>` badges in the panel and the matching
@@ -803,7 +734,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             style_class: 'ams-icon system-status-icon',
         }));
         segment.add_child(new St.Label({
-            text: providerCountText(provider),
+            text: `${running}`,
             style_class: 'ams-count',
             y_align: Clutter.ActorAlign.CENTER,
         }));
@@ -929,10 +860,14 @@ class AccModelStatusButton extends PanelMenu.Button {
             }));
         }
 
-        const origin = agentOriginText(agent);
-        if (origin) {
+        const origin = [];
+        if (agent.project)
+            origin.push(`${agent.project}`);
+        if (agent.branch)
+            origin.push(`(${agent.branch})`);
+        if (origin.length > 0) {
             row.add_child(new St.Label({
-                text: origin,
+                text: origin.join(' '),
                 style_class: 'ams-agent-origin',
                 y_align: Clutter.ActorAlign.CENTER,
             }));
