@@ -217,14 +217,28 @@ function formatHarnessRateText(row) {
 }
 
 /**
- * Return menu lines for every published harness rate row.
+ * True when the harness reported tokens in the last minute.
+ *
+ * @param {object} row - published harness_rates entry.
+ * @returns {boolean} whether the menu should list this harness.
+ */
+function harnessHasMinuteActivity(row) {
+    const value = Number(row?.tokens_per_minute);
+    return Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Return menu lines for harnesses with tokens-per-minute activity.
+ *
+ * Idle 0 tok/s rows and missing counters are omitted. A harness that
+ * finished a turn in the last minute still appears (tok/s may be 0).
  *
  * @param {object} payload - normalized payload from {@link readPayload}.
- * @returns {string[]} one line per harness, in payload order.
+ * @returns {string[]} one line per active harness, in payload order.
  */
 function harnessRateLines(payload) {
     const rows = Array.isArray(payload?.harnessRates) ? payload.harnessRates : [];
-    return rows.map(formatHarnessRateText);
+    return rows.filter(harnessHasMinuteActivity).map(formatHarnessRateText);
 }
 
 /**

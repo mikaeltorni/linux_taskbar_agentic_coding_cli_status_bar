@@ -287,6 +287,7 @@ fn model_status_extension_contract() {
         "workspaceSection.actor.add_style_class_name('ams-current-workspace-block')",
         "this._renderHarnessRates(payload)",
         "function formatHarnessRateText(row)",
+        "function harnessHasMinuteActivity(row)",
         "function harnessRateLines(payload)",
         "Harness token rates",
         "parsed.harness_rates",
