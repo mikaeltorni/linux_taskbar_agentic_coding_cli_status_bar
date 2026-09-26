@@ -289,6 +289,10 @@ fn model_status_extension_contract() {
         "function formatHarnessRateText(row)",
         "function harnessHasMinuteActivity(row)",
         "function harnessRateLines(payload)",
+        "function formatHarnessPanelRateText(row)",
+        "function panelHarnessRateRows(payload)",
+        "this._renderPanelHarnessRates(payload",
+        "style_class: 'ams-rate'",
         "Harness token rates",
         "parsed.harness_rates",
         "this._shellSignals",
@@ -342,6 +346,7 @@ fn model_status_metadata_and_styles() {
         "ams-stale",
         "ams-harness-rates",
         "ams-harness-rate",
+        "ams-rate",
     ] {
         assert!(css.contains(&format!(".{style}")), "{style}");
         assert!(js.contains(style), "{style}");

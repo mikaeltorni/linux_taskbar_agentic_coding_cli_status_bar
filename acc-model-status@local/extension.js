@@ -242,6 +242,35 @@ function harnessRateLines(payload) {
 }
 
 /**
+ * Compact panel rate: live tok/s, or tok/min when the 1s window is 0.
+ *
+ * @param {object} row - published harness_rates entry.
+ * @returns {string} ``12/s``, ``80/m``, or ``''`` when idle.
+ */
+function formatHarnessPanelRateText(row) {
+    if (!harnessHasMinuteActivity(row))
+        return '';
+    const perSecond = Number(row?.tokens_per_second);
+    if (Number.isFinite(perSecond) && perSecond > 0)
+        return `${Math.trunc(perSecond)}/s`;
+    const perMinute = Number(row?.tokens_per_minute);
+    if (Number.isFinite(perMinute) && perMinute > 0)
+        return `${Math.trunc(perMinute)}/m`;
+    return '';
+}
+
+/**
+ * Return minute-active harness rows in payload order.
+ *
+ * @param {object} payload - normalized payload from {@link readPayload}.
+ * @returns {object[]} published rate rows with tokens in the last minute.
+ */
+function panelHarnessRateRows(payload) {
+    const rows = Array.isArray(payload?.harnessRates) ? payload.harnessRates : [];
+    return rows.filter(harnessHasMinuteActivity);
+}
+
+/**
  * Age of an ISO-8601 timestamp in seconds.
  *
  * @param {string} iso - timestamp from the payload.
@@ -635,7 +664,15 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._renderHarnessRates(payload);
 
         if (!payload || payload.providers.length === 0) {
-            this._renderEmpty(payload);
+            const stale = payload ? ageSeconds(payload.updatedAt) > STALE_SECONDS : false;
+            const rateRows = panelHarnessRateRows(payload);
+            if (rateRows.length === 0)
+                this._renderEmpty(payload);
+            else {
+                this._renderPanelHarnessRates(payload, stale, new Set());
+                this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
+                    'No open agent terminals', {reactive: false}));
+            }
             this._syncFlashTimer();
             this._syncRunClockTimer();
             return;
@@ -644,8 +681,12 @@ class AccModelStatusButton extends PanelMenu.Button {
         const stale = ageSeconds(payload.updatedAt) > STALE_SECONDS;
         // Counted once and shared, so the bar and the drop-down never disagree.
         const attention = workspaceAttentionCounts(payload);
-        for (const provider of payload.providers)
-            this._renderProvider(provider, stale);
+        const shownKinds = new Set();
+        for (const provider of payload.providers) {
+            shownKinds.add(provider.kind);
+            this._renderProvider(provider, stale, payload);
+        }
+        this._renderPanelHarnessRates(payload, stale, shownKinds);
         this._renderWorkspaceAttention(attention, stale);
         this._renderMenu(payload, stale, attention);
         this._syncFlashTimer();
@@ -763,12 +804,13 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Render one provider segment: icon plus its running-agent count.
+     * Render one provider segment: icon, running count, and tok/s when active.
      *
      * @param {object} provider - payload provider entry.
      * @param {boolean} stale - whether the whole payload is stale.
+     * @param {object} payload - normalized payload with ``harnessRates``.
      */
-    _renderProvider(provider, stale) {
+    _renderProvider(provider, stale, payload) {
         const running = Number(provider.running) || 0;
         const attention = Number(provider.attention) || 0;
         let state = 'ams-idle';
@@ -789,7 +831,46 @@ class AccModelStatusButton extends PanelMenu.Button {
             style_class: 'ams-count',
             y_align: Clutter.ActorAlign.CENTER,
         }));
+        const rateRow = panelHarnessRateRows(payload).find(row => row.kind === provider.kind);
+        const rateText = formatHarnessPanelRateText(rateRow);
+        if (rateText) {
+            segment.add_child(new St.Label({
+                text: rateText,
+                style_class: 'ams-rate',
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
+        }
         this._box.add_child(segment);
+    }
+
+    /**
+     * Render panel tok/s chips for active harnesses not already in the bar.
+     *
+     * @param {object} payload - normalized payload with ``harnessRates``.
+     * @param {boolean} stale - whether the payload is stale.
+     * @param {Set<string>} shownKinds - provider kinds already drawn.
+     */
+    _renderPanelHarnessRates(payload, stale, shownKinds) {
+        for (const row of panelHarnessRateRows(payload)) {
+            if (shownKinds.has(row.kind))
+                continue;
+            const rateText = formatHarnessPanelRateText(row);
+            if (!rateText)
+                continue;
+            const segment = new St.BoxLayout({
+                style_class: `ams-segment ams-idle${stale ? ' ams-stale' : ''}`,
+            });
+            segment.add_child(new St.Icon({
+                gicon: this._icon(row.icon || `acc-provider-${row.kind}-symbolic`),
+                style_class: 'ams-icon system-status-icon',
+            }));
+            segment.add_child(new St.Label({
+                text: rateText,
+                style_class: 'ams-rate',
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
+            this._box.add_child(segment);
+        }
     }
 
     /**
