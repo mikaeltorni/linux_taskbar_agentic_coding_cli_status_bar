@@ -262,9 +262,7 @@ re-reads it every tick, so changes apply without a service restart.
 A second, independent taskbar extension (`acc-model-status@local`) shows one
 icon per agent provider with the number of Agent Command Center agents of that
 provider that are **currently running in open terminal windows**, plus a menu
-listing those windows across every GNOME workspace. When a visible agent used
-two or more distinct linked Git worktrees, the panel count and that agent's
-menu origin show `·N` next to the worktree identity. Each workspace appears in
+listing those windows across every GNOME workspace. Each workspace appears in
 one contiguous section, ordered by ascending workspace number; rows within
 each section are ordered by monitor. Each row starts with the compact project
 label from Phrase Automation's project catalog (for example `INS`), followed by

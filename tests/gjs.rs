@@ -701,48 +701,20 @@ print(JSON.stringify({
 }
 
 #[test]
-fn model_status_renders_session_worktree_mark() {
-    if !gjs_available() {
-        eprintln!("gjs not installed; skipping");
-        return;
-    }
+fn model_status_omits_session_worktree_mark() {
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
-    let js = run_gjs(
-        &[
-            extract_function(&source, "agentWorktreeMark"),
-            extract_function(&source, "agentOriginText"),
-            extract_function(&source, "providerWorktreeMark"),
-            extract_function(&source, "providerCountText"),
-        ],
-        r#"
-print(JSON.stringify({
-    mark: agentWorktreeMark({worktree_mark: '·2', worktree_count: 2}),
-    origin: agentOriginText({
-        project: 'acc',
-        branch: 'feat/x',
-        worktree: '/projects/.worktrees/acc/acc_feat-x',
-        worktree_mark: '·2',
-        worktree_count: 2,
-    }),
-    panel: providerCountText({
-        running: 1,
-        agents: [{worktree_mark: '·2', worktree_count: 2}],
-    }),
-    single: providerCountText({
-        running: 1,
-        agents: [{worktree_mark: '', worktree_count: 1}],
-    }),
-    fallback: agentWorktreeMark({worktree_count: 3}),
-}));
-"#,
+    assert!(
+        !source.contains("worktree_mark"),
+        "agent status taskbar must not render the session worktree mark"
     );
-    assert_eq!(js["mark"], "·2");
-    let origin = js["origin"].as_str().unwrap();
-    assert!(origin.contains("·2"), "origin={origin}");
-    assert!(origin.contains("acc_feat-x"), "origin={origin}");
-    assert_eq!(js["panel"], "1 ·2");
-    assert_eq!(js["single"], "1");
-    assert_eq!(js["fallback"], "·3");
+    assert!(
+        !source.contains("agentWorktreeMark"),
+        "agent status taskbar must not format ·N"
+    );
+    assert!(
+        !source.contains("providerCountText"),
+        "panel count must stay the running-agent integer"
+    );
 }
 
 #[test]
