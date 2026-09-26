@@ -859,6 +859,52 @@ print(JSON.stringify({{
     assert!(source.contains("agentPhaseBadgeColor(agent)"));
 }
 
+#[test]
+fn harness_rate_strip_formats_counts_and_na() {
+    if !gjs_available() {
+        eprintln!("gjs not installed; skipping");
+        return;
+    }
+    let source = fs::read_to_string(
+        repo_root()
+            .join("acc-model-status@local")
+            .join("extension.js"),
+    )
+    .unwrap();
+    let snippets = vec![
+        extract_function(&source, "formatHarnessRateText"),
+        extract_function(&source, "harnessRateLines"),
+    ];
+    let js = run_gjs(
+        &snippets,
+        r#"
+print(JSON.stringify({
+    na: formatHarnessRateText({kind: 'grok', label: 'Grok', tokens_per_second: null}),
+    counts: formatHarnessRateText({
+        label: 'Codex',
+        tokens_per_second: 12,
+        tokens_per_minute: 80,
+        tokens_per_hour: 900,
+    }),
+    lines: harnessRateLines({harnessRates: [
+        {label: 'Claude', tokens_per_second: 0, tokens_per_minute: 10, tokens_per_hour: 10},
+        {label: 'Grok', tokens_per_second: null},
+    ]}),
+}));
+"#,
+    );
+    assert_eq!(js["na"], "Grok n/a");
+    assert_eq!(js["counts"], "Codex 12/s  80/min  900/h");
+    let lines = js["lines"].as_array().unwrap();
+    assert_eq!(lines[0], "Claude 0/s  10/min  10/h");
+    assert_eq!(lines[1], "Grok n/a");
+    let rate_pos = source.find("this._renderHarnessRates(payload)").unwrap();
+    let workspace_pos = source.find("groupWorkspaceEntries(workspaceEntries)").unwrap();
+    assert!(rate_pos < workspace_pos, "harness rates must render above workspaces");
+    assert!(source.contains("ams-harness-rates"));
+    assert!(source.contains("Workspace ${workspace}"));
+}
+
 fn code_only(text: &str) -> String {
     let no_block = regex::Regex::new(r"(?s)/\*.*?\*/")
         .unwrap()

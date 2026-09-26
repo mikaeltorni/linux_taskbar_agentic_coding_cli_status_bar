@@ -185,12 +185,46 @@ function readPayload(file) {
         return null;
 
     const providers = Array.isArray(parsed.providers) ? parsed.providers : [];
+    const harnessRates = Array.isArray(parsed.harness_rates) ? parsed.harness_rates : [];
     return {
         providers: providers.filter(entry => entry && typeof entry === 'object'),
+        harnessRates: harnessRates.filter(entry => entry && typeof entry === 'object'),
         totalLive: Number(parsed.total_live) || 0,
         totalRunning: Number(parsed.total_running) || 0,
         updatedAt: typeof parsed.updated_at === 'string' ? parsed.updated_at : '',
     };
+}
+
+/**
+ * Format one harness rate row. Missing counters render as ``n/a``.
+ *
+ * @param {object} row - published harness_rates entry.
+ * @returns {string} one menu line, e.g. ``Codex 12/s  80/min  900/h``.
+ */
+function formatHarnessRateText(row) {
+    const label = String(row?.label || row?.kind || '?');
+    const format = value => {
+        if (value === null || value === undefined)
+            return 'n/a';
+        const number = Number(value);
+        if (Number.isNaN(number))
+            return 'n/a';
+        return String(Math.trunc(number));
+    };
+    if (row?.tokens_per_second === null || row?.tokens_per_second === undefined)
+        return `${label} n/a`;
+    return `${label} ${format(row.tokens_per_second)}/s  ${format(row.tokens_per_minute)}/min  ${format(row.tokens_per_hour)}/h`;
+}
+
+/**
+ * Return menu lines for every published harness rate row.
+ *
+ * @param {object} payload - normalized payload from {@link readPayload}.
+ * @returns {string[]} one line per harness, in payload order.
+ */
+function harnessRateLines(payload) {
+    const rows = Array.isArray(payload?.harnessRates) ? payload.harnessRates : [];
+    return rows.map(formatHarnessRateText);
 }
 
 /**
@@ -652,6 +686,9 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._flashActors = [];
         this._runClockActors = [];
 
+        if (payload)
+            this._renderHarnessRates(payload);
+
         if (!payload || payload.providers.length === 0) {
             this._renderEmpty(payload);
             this._syncFlashTimer();
@@ -808,6 +845,29 @@ class AccModelStatusButton extends PanelMenu.Button {
             y_align: Clutter.ActorAlign.CENTER,
         }));
         this._box.add_child(segment);
+    }
+
+    /**
+     * Render per-harness tok/s, tok/min, and tok/hour above workspace groups.
+     *
+     * @param {object} payload - normalized payload with ``harnessRates``.
+     */
+    _renderHarnessRates(payload) {
+        const lines = harnessRateLines(payload);
+        if (lines.length === 0)
+            return;
+        const section = new PopupMenu.PopupMenuSection();
+        section.actor.add_style_class_name('ams-harness-rates');
+        const heading = new PopupMenu.PopupMenuItem('Harness token rates', {reactive: false});
+        heading.label.add_style_class_name('ams-menu-heading');
+        section.addMenuItem(heading);
+        for (const line of lines) {
+            const item = new PopupMenu.PopupMenuItem(line, {reactive: false});
+            item.label.add_style_class_name('ams-harness-rate');
+            section.addMenuItem(item);
+        }
+        this.menu.addMenuItem(section);
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     }
 
     /**

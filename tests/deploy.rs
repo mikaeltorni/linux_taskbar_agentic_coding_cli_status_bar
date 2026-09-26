@@ -285,6 +285,11 @@ fn model_status_extension_contract() {
         "workspaceSection.addMenuItem(heading)",
         "workspaceSection.addMenuItem(this._agentMenuItem",
         "workspaceSection.actor.add_style_class_name('ams-current-workspace-block')",
+        "this._renderHarnessRates(payload)",
+        "function formatHarnessRateText(row)",
+        "function harnessRateLines(payload)",
+        "Harness token rates",
+        "parsed.harness_rates",
         "this._shellSignals",
         "this._windowSignals",
     ] {
@@ -334,6 +339,8 @@ fn model_status_metadata_and_styles() {
         "ams-attention",
         "ams-empty",
         "ams-stale",
+        "ams-harness-rates",
+        "ams-harness-rate",
     ] {
         assert!(css.contains(&format!(".{style}")), "{style}");
         assert!(js.contains(style), "{style}");

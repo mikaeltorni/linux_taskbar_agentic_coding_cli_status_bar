@@ -22,6 +22,8 @@
  *                      agents waiting on the user (panel and menu headings)
  *   ams-ws-attn-current the badge points at the workspace you are already on
  *   ams-ws-attn-dim    the faded half of the flash cycle
+ *   ams-harness-rates  per-harness tok/s / tok/min / tok/hour strip at the top
+ *   ams-harness-rate   one harness rate line
  */
 
 .ams-box {
@@ -64,6 +66,14 @@
 
 .ams-menu-heading {
   font-weight: bold;
+}
+
+.ams-harness-rates {
+  padding-bottom: 2px;
+}
+
+.ams-harness-rate {
+  font-size: 0.95em;
 }
 
 .ams-agent-row {
