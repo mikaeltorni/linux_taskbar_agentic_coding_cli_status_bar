@@ -551,7 +551,8 @@ function scopePayloadToWindows(payload, windows) {
  *
  * A DONE row first seen while focused starts acknowledged. Repeated payload
  * writes preserve that decision even if pane activity changes afterward. A
- * later RUNNING phase arms the next completion.
+ * later RUNNING phase or a new ACC work-history completion time arms the next
+ * completion; older payloads without that time still use phase transitions.
  * Keep the state by session identity so sorting and workspace moves cannot
  * transfer an unread mark to another terminal.
  *
@@ -569,11 +570,15 @@ function unreadCompletionCount(payload, states) {
                 continue;
             }
             const phase = String(agent.phase || '').trim().toUpperCase();
+            const completedAt = String(agent.last_worked_at || '');
             const previous = states.get(key);
+            const sameCompletion = previous?.phase === 'DONE' &&
+                (!completedAt || !previous.completedAt ||
+                    previous.completedAt === completedAt);
             const unread = phase === 'DONE' && !agent.focused &&
-                (previous?.phase === 'DONE' ? previous.unread : true);
+                (sameCompletion ? previous.unread : true);
             agent.unread_completion = unread;
-            states.set(key, {phase, unread});
+            states.set(key, {phase, unread, completedAt});
             if (unread)
                 count += 1;
         }
