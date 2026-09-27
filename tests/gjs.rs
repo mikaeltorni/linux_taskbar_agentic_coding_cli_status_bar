@@ -927,9 +927,11 @@ const states = new Map([['session-1', {{phase: 'DONE', unread: false,
     completionAt: '2026-09-27T10:00:00Z'}}]]);
 saveUnreadStates(file, states);
 const loaded = readUnreadStates(file);
+const mode = file.query_info('unix::mode', Gio.FileQueryInfoFlags.NONE, null)
+    .get_attribute_uint32('unix::mode') & 0o777;
 GLib.file_set_contents(file.get_path(), '{{');
 const corrupt = readUnreadStates(file);
-print(JSON.stringify({{loaded: [...loaded], corrupt: [...corrupt]}}));
+print(JSON.stringify({{loaded: [...loaded], corrupt: [...corrupt], mode}}));
 "#
     );
     let js = run_gjs(
@@ -943,6 +945,7 @@ print(JSON.stringify({{loaded: [...loaded], corrupt: [...corrupt]}}));
     assert_eq!(js["loaded"][0][0], "session-1");
     assert_eq!(js["loaded"][0][1]["unread"], false);
     assert_eq!(js["corrupt"].as_array().unwrap().len(), 0);
+    assert_eq!(js["mode"], 0o600);
 }
 
 #[test]

@@ -251,6 +251,7 @@ function saveUnreadStates(file, states) {
     try {
         GLib.mkdir_with_parents(file.get_parent().get_path(), 0o700);
         GLib.file_set_contents(file.get_path(), JSON.stringify([...states]));
+        GLib.chmod(file.get_path(), 0o600);
     } catch (error) {
         logError(error, 'acc-model-status: could not save unread completion state');
     }
