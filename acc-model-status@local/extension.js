@@ -53,6 +53,9 @@ const ATTENTION_PHASES = new Set(['WAITING', 'INTERRUPTED']);
 const NEEDS_USER_PHASES = new Set(['ATTN', 'WAITING', 'INTERRUPTED', 'STOPPED', 'DONE']);
 /** Flash half-period of the per-workspace attention badges (milliseconds). */
 const FLASH_INTERVAL_MS = 650;
+/** Keep the CX identity endpoints in sync with agentic-cli-status@local. */
+const INSTANCE_TAG_FIRST_RGB = [0x7e, 0xc8, 0xff];
+const INSTANCE_TAG_LAST_RGB = [0xa8, 0x56, 0xe8];
 /**
  * Agent phase palette — the SAME colors the phrase automation notes menu uses
  * for its agent badges (AGENT_PHASE_BADGE_COLORS in
@@ -202,8 +205,29 @@ function readPayload(file) {
         harnessRates: harnessRates.filter(entry => entry && typeof entry === 'object'),
         totalLive: Number(parsed.total_live) || 0,
         totalRunning: Number(parsed.total_running) || 0,
+        codexInstanceCount: Math.max(1, Number(parsed.codex_instance_count) || 1),
         updatedAt: typeof parsed.updated_at === 'string' ? parsed.updated_at : '',
     };
+}
+
+/** Return the same blue-to-purple CX identity color as the rate-limit bar. */
+function instanceTagColor(id, count) {
+    const n = Math.max(1, Number(count) || 1);
+    const index = Math.max(1, Number(id) || 1);
+    const t = n <= 1 ? 0 : Math.min(1, (index - 1) / (n - 1));
+    const hex = INSTANCE_TAG_FIRST_RGB.map((start, i) => {
+        const channel = Math.round(start + (INSTANCE_TAG_LAST_RGB[i] - start) * t);
+        return channel.toString(16).padStart(2, '0');
+    }).join('');
+    return `#${hex}`;
+}
+
+/** Return a Codex menu label and identity color when its account is known. */
+function codexInstanceLabel(agent, count) {
+    const id = Number(agent?.codex_instance);
+    if (agent?.kind !== 'codex' || !Number.isInteger(id) || id < 1)
+        return null;
+    return [`CX${id}`, instanceTagColor(id, count)];
 }
 
 /**
@@ -971,7 +995,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             workspaceSection.addMenuItem(heading);
             this.menu.addMenuItem(workspaceSection);
             for (const entry of group.entries)
-                workspaceSection.addMenuItem(this._agentMenuItem(entry.agent, entry.provider));
+                workspaceSection.addMenuItem(this._agentMenuItem(entry.agent, entry.provider, payload.codexInstanceCount));
         }
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -993,9 +1017,10 @@ class AccModelStatusButton extends PanelMenu.Button {
      *
      * @param {object} agent - agent entry enriched from its live window.
      * @param {object} provider - provider metadata owning the agent.
+     * @param {number} codexInstanceCount - registered accounts for CX tag colors.
      * @returns {PopupMenu.PopupBaseMenuItem} the non-reactive row.
      */
-    _agentMenuItem(agent, provider) {
+    _agentMenuItem(agent, provider, codexInstanceCount) {
         const item = new PopupMenu.PopupBaseMenuItem({
             reactive: false,
             can_focus: false,
@@ -1017,6 +1042,17 @@ class AccModelStatusButton extends PanelMenu.Button {
             accessible_name: `${provider.label || provider.kind || 'Agent'}`,
             y_align: Clutter.ActorAlign.CENTER,
         }));
+
+        const instanceLabel = codexInstanceLabel(agent, codexInstanceCount);
+        if (instanceLabel) {
+            const tag = new St.Label({
+                text: instanceLabel[0],
+                style_class: 'ams-instance-tag',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            tag.set_style(`color: ${instanceLabel[1]};`);
+            row.add_child(tag);
+        }
 
         const badge = new St.Label({
             text: agentPhaseBadgeText(agent),

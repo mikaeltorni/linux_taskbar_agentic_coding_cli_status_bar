@@ -16,6 +16,7 @@
  *   ams-current-workspace-block continuous highlight for the active workspace
  *   ams-project-tag Phrase Automation's compact project label leading the row
  *   ams-menu-provider-icon harness icon within a workspace-grouped row
+ *   ams-instance-tag CX account identity immediately after the Codex icon
  *   ams-phase     the phase badge (inline color from the notes palette)
  *   ams-agent-title    the summarized agent title
  *   ams-agent-origin   project/branch the agent runs in (muted)
@@ -103,6 +104,10 @@
 
 .ams-menu-provider-icon {
   icon-size: 16px;
+}
+
+.ams-instance-tag {
+  font-weight: bold;
 }
 
 .ams-phase {

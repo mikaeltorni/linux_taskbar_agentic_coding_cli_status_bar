@@ -1036,6 +1036,27 @@ fn model_status_extension_contract() {
 }
 
 #[test]
+fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
+    let model = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let taskbar = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    for name in ["INSTANCE_TAG_FIRST_RGB", "INSTANCE_TAG_LAST_RGB"] {
+        assert_eq!(extract_constant(&model, name), extract_constant(&taskbar, name));
+    }
+    let label = extract_function(&model, "codexInstanceLabel");
+    let color = extract_function(&model, "instanceTagColor");
+    let result = run_gjs(&[
+        extract_constant(&model, "INSTANCE_TAG_FIRST_RGB"),
+        extract_constant(&model, "INSTANCE_TAG_LAST_RGB"),
+        color,
+        label,
+    ], "print(JSON.stringify([codexInstanceLabel({kind: 'codex', codex_instance: 1}, 3), codexInstanceLabel({kind: 'codex', codex_instance: 2}, 3), codexInstanceLabel({kind: 'codex', codex_instance: 3}, 3), codexInstanceLabel({kind: 'claude', codex_instance: 1}, 3)]))");
+    assert_eq!(result, serde_json::json!([["CX1", "#7ec8ff"], ["CX2", "#938ff4"], ["CX3", "#a856e8"], null]));
+
+    let menu = extract_method(&model, "_agentMenuItem");
+    assert!(menu.find("ams-menu-provider-icon").unwrap() < menu.find("ams-instance-tag").unwrap());
+}
+
+#[test]
 fn opt_in_clis_stay_off_the_bar_until_enabled() {
     let Some(js) = agentic_results() else {
         return;

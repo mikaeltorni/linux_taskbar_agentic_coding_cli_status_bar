@@ -274,7 +274,10 @@ menu origin show `·N` next to the worktree identity. Each workspace appears in
 one contiguous section, ordered by ascending workspace number; rows within
 each section are ordered by monitor. Each row starts with the compact project
 label from Phrase Automation's project catalog (for example `INS`), followed by
-the harness's symbolic icon instead of a repeated provider name. The active
+the harness's symbolic icon instead of a repeated provider name. Codex rows
+place their `CX1`, `CX2`, … account name immediately to the right
+of that icon, using the same blue-to-purple identity color as the main
+rate-limit indicator. Other harness rows keep their existing layout. The active
 workspace's heading plus all of its rows share one continuous translucent teal
 block. Switching workspaces, moving a terminal, opening or closing one, and
 changing its ACC-managed title updates the bar immediately. Detached tmux
