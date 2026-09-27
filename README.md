@@ -282,9 +282,11 @@ workspace's heading plus all of its rows share one continuous translucent teal
 block. A finished agent that has not been opened since its turn ended makes
 only this indicator's background pulse green. Focusing that agent's CLI window
 clears its unread completion; a turn that finishes while its window is focused
-starts acknowledged. Each new turn can raise a new pulse. Switching workspaces,
-moving a terminal, opening or closing one, and
-changing its ACC-managed title updates the bar immediately. Detached tmux
+starts acknowledged. The extension keeps acknowledgements in
+`~/.local/state/codex-agent-tracker/model-status-unread.json` so a Shell reload
+does not revive an opened completion. Each new turn can raise a new pulse.
+Switching workspaces, moving a terminal, opening or closing one, and changing
+its ACC-managed title updates the bar immediately. Detached tmux
 sessions remain in ACC but are not shown until their terminal window is opened.
 The extension is opt-in and unrelated to the rate-limit indicator or the CLI
 status line:

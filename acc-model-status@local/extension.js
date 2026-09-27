@@ -32,6 +32,8 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 /** Document published by the Agent Command Center monitor. */
 const PAYLOAD_FILENAME = 'model_status_bar.json';
+/** Local acknowledgement state for finished turns. */
+const UNREAD_FILENAME = 'model-status-unread.json';
 /** Tracker state directory relative to the user's state home. */
 const STATE_DIR_NAME = 'codex-agent-tracker';
 /** Environment override honored by the tracker (and therefore by us). */
@@ -213,6 +215,45 @@ function readPayload(file) {
         codexInstanceCount: Math.max(1, Number(parsed.codex_instance_count) || 1),
         updatedAt: typeof parsed.updated_at === 'string' ? parsed.updated_at : '',
     };
+}
+
+/**
+ * Load unread completion decisions from the tracker state directory.
+ *
+ * @param {Gio.File} file - local state file next to the published payload.
+ * @returns {Map<string, object>} prior phase and acknowledgement by session.
+ */
+function readUnreadStates(file) {
+    try {
+        if (!file.query_exists(null))
+            return new Map();
+        const [ok, bytes] = file.load_contents(null);
+        if (!ok)
+            return new Map();
+        const rows = JSON.parse(new TextDecoder().decode(bytes));
+        if (!Array.isArray(rows))
+            return new Map();
+        return new Map(rows.filter(row => Array.isArray(row) && row.length === 2 &&
+            typeof row[0] === 'string' && row[1] && typeof row[1] === 'object'));
+    } catch (error) {
+        logError(error, 'acc-model-status: unread completion state unavailable');
+        return new Map();
+    }
+}
+
+/**
+ * Save completion decisions only when a phase or acknowledgement changes.
+ *
+ * @param {Gio.File} file - local state file next to the published payload.
+ * @param {Map<string, object>} states - current decisions by session.
+ */
+function saveUnreadStates(file, states) {
+    try {
+        GLib.mkdir_with_parents(file.get_parent().get_path(), 0o700);
+        GLib.file_set_contents(file.get_path(), JSON.stringify([...states]));
+    } catch (error) {
+        logError(error, 'acc-model-status: could not save unread completion state');
+    }
 }
 
 /** Return the same blue-to-purple CX identity color as the rate-limit bar. */
@@ -513,7 +554,8 @@ function scopePayloadToWindows(payload, windows) {
  * Count completed turns whose terminal has not received focus since finishing.
  *
  * A DONE row first seen while focused starts acknowledged. Repeated payload
- * writes preserve that decision; a later RUNNING turn arms the next completion.
+ * writes preserve that decision. The activity timestamp distinguishes a later
+ * completion, including when the Shell missed that turn's RUNNING phase.
  * Keep the state by session identity so sorting and workspace moves cannot
  * transfer an unread mark to another terminal.
  *
@@ -529,10 +571,14 @@ function unreadCompletionCount(payload, states) {
             if (!key)
                 continue;
             const phase = String(agent.phase || '').trim().toUpperCase();
+            const completionAt = phase === 'DONE'
+                ? String(agent.last_activity_at || '') : '';
             const previous = states.get(key);
+            const sameCompletion = previous?.phase === 'DONE' &&
+                previous.completionAt === completionAt;
             const unread = phase === 'DONE' && !agent.focused &&
-                (previous?.phase === 'DONE' ? previous.unread : true);
-            states.set(key, {phase, unread});
+                (sameCompletion ? previous.unread : true);
+            states.set(key, {phase, unread, completionAt});
             if (unread)
                 count += 1;
         }
@@ -591,6 +637,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         super._init(0.5, 'ACC Model Status');
         this._iconsDir = extension.dir.get_child('icons');
         this._file = payloadFile();
+        this._unreadFile = this._file.get_parent().get_child(UNREAD_FILENAME);
         this._monitor = null;
         this._pollId = 0;
         this._refreshId = 0;
@@ -598,7 +645,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._runClockId = 0;
         this._flashOn = true;
         this._flashActors = [];
-        this._unreadStates = new Map();
+        this._unreadStates = readUnreadStates(this._unreadFile);
         this._unreadCount = 0;
         this._runClockActors = [];
         this._shellSignals = [];
@@ -744,9 +791,12 @@ class AccModelStatusButton extends PanelMenu.Button {
         const payload = published
             ? scopePayloadToWindows(published, windows)
             : null;
+        const previousUnreadState = JSON.stringify([...this._unreadStates]);
         this._unreadCount = payload
             ? unreadCompletionCount(payload, this._unreadStates)
             : 0;
+        if (previousUnreadState !== JSON.stringify([...this._unreadStates]))
+            saveUnreadStates(this._unreadFile, this._unreadStates);
         this._box.destroy_all_children();
         this.menu.removeAll();
         // Actors are re-collected on every repaint; never keep stale ones.
