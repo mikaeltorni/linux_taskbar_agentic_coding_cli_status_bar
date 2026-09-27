@@ -873,7 +873,8 @@ fn finished_agent_glows_until_its_terminal_is_focused() {
 const states = new Map();
 const agent = {session_id: 'session-1', phase: 'RUNNING', focused: false,
     workspace: 3, current_workspace: false,
-    last_activity_at: '2026-09-27T10:00:00Z'};
+    last_activity_at: '2026-09-27T10:00:00Z',
+    last_worked_at: '2026-09-27T10:00:00Z'};
 const payload = {providers: [{agents: [agent]}]};
 const count = () => unreadCompletionCount(payload, states);
 const running = count();
@@ -890,9 +891,15 @@ agent.last_activity_at = '2026-09-27T10:01:00Z';
 const afterActivity = count();
 const afterReload = unreadCompletionCount({providers: [{agents: [agent]}]},
     new Map(JSON.parse(JSON.stringify([...states]))));
+agent.last_worked_at = '2026-09-27T10:03:00Z';
+const missedRunning = count();
+agent.focused = true;
+count();
+agent.focused = false;
 agent.phase = 'RUNNING';
 count();
 agent.phase = 'DONE';
+agent.last_worked_at = '2026-09-27T10:05:00Z';
 agent.last_activity_at = '2026-09-27T10:05:00Z';
 const nextTurn = count();
 agent.focused = true;
@@ -904,7 +911,7 @@ const finishedWhileFocused = count();
 agent.focused = false;
 const remainsRead = count();
 print(JSON.stringify({running, finished, marked, repeated, opened, cleared,
-    stillRead, afterActivity, afterReload,
+    stillRead, afterActivity, afterReload, missedRunning,
     nextTurn, nextTurnOpened, finishedWhileFocused, remainsRead}));
 "#,
     );
@@ -917,6 +924,7 @@ print(JSON.stringify({running, finished, marked, repeated, opened, cleared,
     assert_eq!(js["stillRead"], 0);
     assert_eq!(js["afterActivity"], 0);
     assert_eq!(js["afterReload"], 0);
+    assert_eq!(js["missedRunning"], 1);
     assert_eq!(js["nextTurn"], 1);
     assert_eq!(js["nextTurnOpened"], 0);
     assert_eq!(js["finishedWhileFocused"], 0);

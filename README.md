@@ -288,6 +288,8 @@ clears all three highlights; a turn that finishes while its window is focused
 starts acknowledged. The extension keeps acknowledgements in
 `~/.local/state/codex-agent-tracker/model-status-unread.json` so a Shell reload
 does not revive an opened completion. Each new turn can raise a new highlight.
+ACC's published `last_worked_at` distinguishes new completions even when a
+brief RUNNING phase was missed; older payloads still use phase transitions.
 Switching workspaces, moving a terminal, opening or closing one, and changing
 its ACC-managed title updates the bar immediately. Detached tmux
 sessions remain in ACC but are not shown until their terminal window is opened.
