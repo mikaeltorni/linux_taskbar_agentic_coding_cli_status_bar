@@ -878,6 +878,8 @@ const live = {{
     run_active: true,
     run_started_at: new Date({started_ms}).toISOString(),
 }};
+const goal = {{...live, goal_active: true}};
+const pausedGoal = {{...live, goal_active: false}};
 const done = {{
     phase: 'DONE',
     run_active: false,
@@ -888,6 +890,8 @@ const queued = {{phase: 'STOPPED', queued_reset_at: new Date({now_ms} + 82_000).
 print(JSON.stringify({{
     live_text: agentPhaseBadgeText(live, {now_ms}),
     live_color: agentPhaseBadgeColor(live),
+    goal_color: agentPhaseBadgeColor(goal),
+    paused_goal_color: agentPhaseBadgeColor(pausedGoal),
     done_text: agentPhaseBadgeText(done, {now_ms}),
     done_color: agentPhaseBadgeColor(done),
     attn_text: agentPhaseBadgeText(attn, {now_ms}),
@@ -903,6 +907,8 @@ print(JSON.stringify({{
     assert_eq!(js["hour_clock"], "2:05:09");
     assert_eq!(js["live_text"], "12:34");
     assert_eq!(js["live_color"], "#e6c200");
+    assert_eq!(js["goal_color"], "#a855f7");
+    assert_eq!(js["paused_goal_color"], "#e6c200");
     assert_ne!(js["live_text"], "RUNNING");
     assert_eq!(js["done_text"], "DONE");
     assert_eq!(js["done_color"], "#22c55e");

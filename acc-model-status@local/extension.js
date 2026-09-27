@@ -61,6 +61,7 @@ const FLASH_INTERVAL_MS = 650;
  */
 const PHASE_COLORS = {
     RUNNING: '#e6c200',
+    GOAL: '#a855f7',
     ATTN: '#ffb454',
     WAITING: '#ffb454',
     DONE: '#22c55e',
@@ -134,7 +135,7 @@ function agentPhaseBadgeText(agent, nowMs) {
  * Color for one click-menu agent badge.
  *
  * Queued reset clocks use their distinct yellow-green; live-run clocks use
- * RUNNING yellow even though the visible text is an elapsed clock.
+ * RUNNING yellow, or goal purple while a live goal timer is shown.
  *
  * @param {object} agent - payload agent row.
  * @returns {string} CSS color from {@link PHASE_COLORS}.
@@ -144,8 +145,12 @@ function agentPhaseBadgeColor(agent, nowMs) {
     if (agent && agent.queued_reset_at && Date.parse(agent.queued_reset_at) > now)
         return PHASE_COLORS.QUEUED_RESET;
     const phase = String(agent && agent.phase || '').trim().toUpperCase();
-    if (phase === 'RUNNING')
+    if (phase === 'RUNNING') {
+        if (agent && agent.goal_active && agent.run_active &&
+            !Number.isNaN(Date.parse(agent.run_started_at || '')))
+            return PHASE_COLORS.GOAL;
         return PHASE_COLORS.RUNNING;
+    }
     return phaseColor(phase);
 }
 
@@ -989,7 +994,8 @@ class AccModelStatusButton extends PanelMenu.Button {
      * (for example ``INS`` for installation_scripts), omitted when ACC could
      * not match the agent path to a project. Workspace numbers stay in the
      * group headings. A live run shows the compact ACC clock in RUNNING
-     * yellow instead of the word RUNNING; other phases keep their word.
+     * yellow or goal purple instead of the word RUNNING; other phases keep
+     * their word.
      *
      * @param {object} agent - agent entry enriched from its live window.
      * @param {object} provider - provider metadata owning the agent.
