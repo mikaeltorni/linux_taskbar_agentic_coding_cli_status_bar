@@ -813,16 +813,16 @@ const PAYLOAD = {providers: [
     {phase: 'ATTN', workspace: 4, current_workspace: false}]},
   {kind: 'codex', agents: [
     {phase: 'DRAFT', workspace: 4, current_workspace: false},
-    {phase: 'DONE', workspace: 2, current_workspace: false},
-    {phase: 'done', workspace: 2, current_workspace: false},
+    {phase: 'DONE', unread_completion: true, workspace: 2, current_workspace: false},
+    {phase: 'done', unread_completion: false, workspace: 2, current_workspace: false},
     {phase: 'INTERRUPTED', workspace: 5, current_workspace: true},
-    {phase: 'DONE', workspace: 0, current_workspace: false}]},
+    {phase: 'DONE', unread_completion: true, workspace: 0, current_workspace: false}]},
   {kind: 'grok', agents: [
-    {phase: 'STOPPED', workspace: 5, current_workspace: true}]},
+    {phase: 'STOPPED', workspace: 5, current_workspace: true},
+    {phase: 'DONE', unread_completion: true, workspace: 5, current_workspace: true}]},
 ]};
 "#;
     let snippets = vec![
-        extract_constant(&source, "NEEDS_USER_PHASES"),
         extract_function(&source, "workspaceAttentionCounts"),
         payload.to_string(),
     ];
@@ -836,17 +836,24 @@ const PAYLOAD = {providers: [
         .iter()
         .map(|e| e["label"].as_str().unwrap())
         .collect();
-    assert_eq!(labels, ["W2:2", "W4:1", "W5:2"]);
+    assert_eq!(labels, ["W2:1", "W5:1"]);
     assert!(source.contains("this._renderWorkspaceAttention("));
-    assert!(source.contains("FLASH_INTERVAL_MS"));
+    assert!(source.contains("agent.unread_completion = unread"));
+    assert!(source.contains("this._box.add_style_class_name('ams-unread-glow')"));
+    assert!(!source.contains("ams-ws-attn-dim"));
+    assert!(!source.contains("ams-unread-glow-dim"));
+    assert!(source.contains("item.actor.add_style_class_name('ams-agent-unread')"));
     let css = fs::read_to_string(
         repo_root()
             .join("acc-model-status@local")
             .join("stylesheet.css"),
     )
     .unwrap();
-    for style in ["ams-ws-attn", "ams-ws-attn-dim", "ams-ws-attn-current"] {
+    for style in ["ams-ws-attn", "ams-ws-attn-current", "ams-agent-unread"] {
         assert!(css.contains(&format!(".{style} {{")), "{style}");
+    }
+    for phase in 0..4 {
+        assert!(css.contains(&format!(".ams-unread-flow-{phase} {{")));
     }
 }
 
@@ -858,18 +865,25 @@ fn finished_agent_glows_until_its_terminal_is_focused() {
     }
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let js = run_gjs(
-        &[extract_function(&source, "unreadCompletionCount")],
+        &[
+            extract_function(&source, "unreadCompletionCount"),
+            extract_function(&source, "workspaceAttentionCounts"),
+        ],
         r#"
 const states = new Map();
 const agent = {session_id: 'session-1', phase: 'RUNNING', focused: false,
+    workspace: 3, current_workspace: false,
     last_activity_at: '2026-09-27T10:00:00Z'};
-const count = () => unreadCompletionCount({providers: [{agents: [agent]}]}, states);
+const payload = {providers: [{agents: [agent]}]};
+const count = () => unreadCompletionCount(payload, states);
 const running = count();
 agent.phase = 'DONE';
 const finished = count();
+const marked = workspaceAttentionCounts(payload).map(entry => entry.label);
 const repeated = count();
 agent.focused = true;
 const opened = count();
+const cleared = workspaceAttentionCounts(payload).map(entry => entry.label);
 agent.focused = false;
 const stillRead = count();
 const afterReload = unreadCompletionCount({providers: [{agents: [agent]}]},
@@ -887,14 +901,17 @@ agent.phase = 'DONE';
 const finishedWhileFocused = count();
 agent.focused = false;
 const remainsRead = count();
-print(JSON.stringify({running, finished, repeated, opened, stillRead, afterReload,
+print(JSON.stringify({running, finished, marked, repeated, opened, cleared,
+    stillRead, afterReload,
     nextTurn, nextTurnOpened, finishedWhileFocused, remainsRead}));
 "#,
     );
     assert_eq!(js["running"], 0);
     assert_eq!(js["finished"], 1);
+    assert_eq!(js["marked"][0], "W3:1");
     assert_eq!(js["repeated"], 1);
     assert_eq!(js["opened"], 0);
+    assert_eq!(js["cleared"].as_array().unwrap().len(), 0);
     assert_eq!(js["stillRead"], 0);
     assert_eq!(js["afterReload"], 0);
     assert_eq!(js["nextTurn"], 1);
@@ -907,7 +924,7 @@ print(JSON.stringify({running, finished, repeated, opened, stillRead, afterReloa
     assert!(source.contains("focused: match.focused"));
     assert!(source.contains("this._box.add_style_class_name('ams-unread-glow')"));
     assert!(css.contains(".ams-unread-glow {"));
-    assert!(css.contains(".ams-unread-glow-dim {"));
+    assert!(css.contains(".ams-unread-flow-0 {"));
 }
 
 #[test]

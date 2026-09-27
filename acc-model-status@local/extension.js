@@ -47,14 +47,9 @@ const FALLBACK_ICON = 'acc-provider-generic-symbolic';
 /** Phases contributing to the scoped provider counters. */
 const RUNNING_PHASES = new Set(['RUNNING']);
 const ATTENTION_PHASES = new Set(['WAITING', 'INTERRUPTED']);
-/**
- * Phases meaning the agent is waiting on the user: it asked a question
- * (ATTN/WAITING), its run was interrupted or stopped, or it finished its turn
- * (DONE). These raise the per-workspace badges; RUNNING and DRAFT never do.
- */
-const NEEDS_USER_PHASES = new Set(['ATTN', 'WAITING', 'INTERRUPTED', 'STOPPED', 'DONE']);
-/** Flash half-period of the per-workspace attention badges (milliseconds). */
-const FLASH_INTERVAL_MS = 650;
+/** A gentle green gradient step; four phases make one left-to-right flow. */
+const GLOW_INTERVAL_MS = 400;
+const GLOW_PHASES = 4;
 /** Keep the CX identity endpoints in sync with agentic-cli-status@local. */
 const INSTANCE_TAG_FIRST_RGB = [0x7e, 0xc8, 0xff];
 const INSTANCE_TAG_LAST_RGB = [0xa8, 0x56, 0xe8];
@@ -569,8 +564,10 @@ function unreadCompletionCount(payload, states) {
     for (const provider of payload.providers || []) {
         for (const agent of provider.agents || []) {
             const key = String(agent.session_id || agent.tmux_name || agent.key || '');
-            if (!key)
+            if (!key) {
+                agent.unread_completion = false;
                 continue;
+            }
             const phase = String(agent.phase || '').trim().toUpperCase();
             const completionAt = phase === 'DONE'
                 ? String(agent.last_activity_at || '') : '';
@@ -579,6 +576,7 @@ function unreadCompletionCount(payload, states) {
                 previous.completionAt === completionAt;
             const unread = phase === 'DONE' && !agent.focused &&
                 (sameCompletion ? previous.unread : true);
+            agent.unread_completion = unread;
             states.set(key, {phase, unread, completionAt});
             if (unread)
                 count += 1;
@@ -588,16 +586,16 @@ function unreadCompletionCount(payload, states) {
 }
 
 /**
- * Count the agents waiting on the user, grouped by workspace.
+ * Count finished, unopened agents by workspace.
  *
- * Drives the flashing `W<n>:<count>` badges in the panel and the matching
- * badges in the drop-down's workspace headings, so the bar answers "where do
- * I have to go?" without opening the menu.
+ * Drives steady green `W<n>:<count>` badges in the panel and matching menu
+ * headings. A finished turn disappears from both as soon as its terminal gets
+ * focus; waiting, stopped, and already opened turns do not raise a marker.
  *
  * @param {object} payload - payload already scoped to live windows, so every
  *     agent carries the `workspace`/`current_workspace` of its own window.
  * @returns {Array<{workspace: number, count: number, current: boolean,
- *     label: string}>} one entry per workspace with at least one waiting
+ *     label: string}>} one entry per workspace with at least one unread
  *     agent, in ascending workspace order. Agents whose window could not be
  *     resolved (workspace 0) are skipped — there is nowhere to switch to.
  */
@@ -607,8 +605,8 @@ function workspaceAttentionCounts(payload) {
     for (const provider of providers) {
         const agents = Array.isArray(provider.agents) ? provider.agents : [];
         for (const agent of agents) {
-            const phase = String(agent.phase || '').trim().toUpperCase();
-            if (!NEEDS_USER_PHASES.has(phase))
+            if (!agent.unread_completion ||
+                String(agent.phase || '').trim().toUpperCase() !== 'DONE')
                 continue;
             const workspace = Number(agent.workspace) || 0;
             if (workspace <= 0)
@@ -642,10 +640,9 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._monitor = null;
         this._pollId = 0;
         this._refreshId = 0;
-        this._flashId = 0;
+        this._glowId = 0;
         this._runClockId = 0;
-        this._flashOn = true;
-        this._flashActors = [];
+        this._glowPhase = 0;
         this._unreadStates = readUnreadStates(this._unreadFile);
         this._unreadCount = 0;
         this._runClockActors = [];
@@ -800,8 +797,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             saveUnreadStates(this._unreadFile, this._unreadStates);
         this._box.destroy_all_children();
         this.menu.removeAll();
-        // Actors are re-collected on every repaint; never keep stale ones.
-        this._flashActors = [];
+        // Run clocks are re-collected on every repaint; never keep stale ones.
         this._runClockActors = [];
 
         if (payload)
@@ -817,7 +813,7 @@ class AccModelStatusButton extends PanelMenu.Button {
                 this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
                     'No open agent terminals', {reactive: false}));
             }
-            this._syncFlashTimer();
+            this._syncGlowTimer();
             this._syncRunClockTimer();
             return;
         }
@@ -833,14 +829,13 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._renderPanelHarnessRates(payload, stale, shownKinds);
         this._renderWorkspaceAttention(attention, stale);
         this._renderMenu(payload, stale, attention);
-        this._syncFlashTimer();
+        this._syncGlowTimer();
         this._syncRunClockTimer();
     }
 
     /**
-     * Render the flashing per-workspace attention badges at the right end of
-     * the panel, e.g. `W4:1` when workspace 4 holds one agent that needs the
-     * user. Clicking the bar still opens the menu, which repeats the badges.
+     * Render steady green workspace badges for finished, unopened turns.
+     * The menu repeats these badges beside their corresponding workspaces.
      *
      * @param {Array<object>} entries - result of {@link workspaceAttentionCounts}.
      * @param {boolean} stale - whether the payload is stale (dims the badges).
@@ -857,54 +852,42 @@ class AccModelStatusButton extends PanelMenu.Button {
             if (stale)
                 badge.add_style_class_name('ams-stale');
             this._box.add_child(badge);
-            this._flashActors.push(badge);
         }
     }
 
     /**
-     * Tick while workspace badges or unread completion glow need a pulse.
-     *
-     * Both alternate every {@link FLASH_INTERVAL_MS}; the timer is removed
-     * when neither visual needs it so an idle panel costs nothing.
+     * Shift a subtle green gradient across this indicator while work is unread.
+     * Workspace badges and menu rows stay steady. An idle panel has no timer.
      */
-    _syncFlashTimer() {
-        if (this._flashActors.length === 0 && this._unreadCount === 0) {
-            if (this._flashId) {
-                GLib.source_remove(this._flashId);
-                this._flashId = 0;
+    _syncGlowTimer() {
+        if (this._unreadCount === 0) {
+            if (this._glowId) {
+                GLib.source_remove(this._glowId);
+                this._glowId = 0;
             }
-            this._flashOn = true;
-            this._applyFlashState();
+            this._glowPhase = 0;
+            this._applyGlowState();
             return;
         }
-        // A fresh repaint must not inherit a half-faded state.
-        this._applyFlashState();
-        if (this._flashId)
+        this._applyGlowState();
+        if (this._glowId)
             return;
-        this._flashId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FLASH_INTERVAL_MS, () => {
-            this._flashOn = !this._flashOn;
-            this._applyFlashState();
+        this._glowId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, GLOW_INTERVAL_MS, () => {
+            this._glowPhase = (this._glowPhase + 1) % GLOW_PHASES;
+            this._applyGlowState();
             return GLib.SOURCE_CONTINUE;
         });
     }
 
-    /** Push the pulse phase onto this indicator's background and live badges. */
-    _applyFlashState() {
+    /** Keep the indicator green while moving the brighter edge across it. */
+    _applyGlowState() {
+        for (let phase = 0; phase < GLOW_PHASES; phase++)
+            this._box.remove_style_class_name(`ams-unread-flow-${phase}`);
         if (this._unreadCount > 0) {
             this._box.add_style_class_name('ams-unread-glow');
-            if (this._flashOn)
-                this._box.remove_style_class_name('ams-unread-glow-dim');
-            else
-                this._box.add_style_class_name('ams-unread-glow-dim');
+            this._box.add_style_class_name(`ams-unread-flow-${this._glowPhase}`);
         } else {
             this._box.remove_style_class_name('ams-unread-glow');
-            this._box.remove_style_class_name('ams-unread-glow-dim');
-        }
-        for (const actor of this._flashActors) {
-            if (this._flashOn)
-                actor.remove_style_class_name('ams-ws-attn-dim');
-            else
-                actor.add_style_class_name('ams-ws-attn-dim');
         }
     }
 
@@ -1086,14 +1069,13 @@ class AccModelStatusButton extends PanelMenu.Button {
             heading.label.add_style_class_name('ams-menu-heading');
             const waiting = attentionByWorkspace.get(workspace);
             if (waiting) {
-                // Mirror the flashing panel badge inside the drop-down.
+                // Mirror the steady panel badge inside the drop-down.
                 const badge = new St.Label({
                     text: waiting.label,
                     style_class: 'ams-ws-attn',
                     y_align: Clutter.ActorAlign.CENTER,
                 });
                 heading.add_child(badge);
-                this._flashActors.push(badge);
             }
             workspaceSection = new PopupMenu.PopupMenuSection();
             workspaceSection.actor.add_style_class_name('ams-workspace-block');
@@ -1133,6 +1115,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             reactive: false,
             can_focus: false,
         });
+        if (agent.unread_completion)
+            item.actor.add_style_class_name('ams-agent-unread');
         const row = new St.BoxLayout({style_class: 'ams-agent-row'});
 
         const projectTag = String(agent.project_tag || '').trim();
@@ -1210,15 +1194,14 @@ class AccModelStatusButton extends PanelMenu.Button {
             GLib.source_remove(this._pollId);
             this._pollId = 0;
         }
-        if (this._flashId) {
-            GLib.source_remove(this._flashId);
-            this._flashId = 0;
+        if (this._glowId) {
+            GLib.source_remove(this._glowId);
+            this._glowId = 0;
         }
         if (this._runClockId) {
             GLib.source_remove(this._runClockId);
             this._runClockId = 0;
         }
-        this._flashActors = [];
         this._runClockActors = [];
         if (this._monitor) {
             this._monitor.cancel();
