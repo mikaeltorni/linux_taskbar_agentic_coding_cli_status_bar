@@ -550,8 +550,8 @@ function scopePayloadToWindows(payload, windows) {
  * Count completed turns whose terminal has not received focus since finishing.
  *
  * A DONE row first seen while focused starts acknowledged. Repeated payload
- * writes preserve that decision. The activity timestamp distinguishes a later
- * completion, including when the Shell missed that turn's RUNNING phase.
+ * writes preserve that decision even if pane activity changes afterward. A
+ * later RUNNING phase arms the next completion.
  * Keep the state by session identity so sorting and workspace moves cannot
  * transfer an unread mark to another terminal.
  *
@@ -569,15 +569,11 @@ function unreadCompletionCount(payload, states) {
                 continue;
             }
             const phase = String(agent.phase || '').trim().toUpperCase();
-            const completionAt = phase === 'DONE'
-                ? String(agent.last_activity_at || '') : '';
             const previous = states.get(key);
-            const sameCompletion = previous?.phase === 'DONE' &&
-                previous.completionAt === completionAt;
             const unread = phase === 'DONE' && !agent.focused &&
-                (sameCompletion ? previous.unread : true);
+                (previous?.phase === 'DONE' ? previous.unread : true);
             agent.unread_completion = unread;
-            states.set(key, {phase, unread, completionAt});
+            states.set(key, {phase, unread});
             if (unread)
                 count += 1;
         }
