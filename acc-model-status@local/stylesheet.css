@@ -20,13 +20,11 @@
  *   ams-phase     the phase badge (inline color from the notes palette)
  *   ams-agent-title    the summarized agent title
  *   ams-agent-origin   project/branch the agent runs in (muted)
- *   ams-ws-attn        flashing purple W<n>:<count> badge — that workspace has
- *                      agents waiting on the user (panel and menu headings)
+ *   ams-ws-attn        steady green W<n>:<count> badge for unread completions
  *   ams-ws-attn-current the badge points at the workspace you are already on
- *   ams-ws-attn-dim    the faded half of the flash cycle
- *   ams-unread-glow    pulsing background behind this indicator only when a
- *                      finished agent terminal has not been focused
- *   ams-unread-glow-dim the low-light half of that background pulse
+ *   ams-unread-glow    gentle green background behind this indicator only
+ *   ams-unread-flow-N four small gradient shifts across that background
+ *   ams-agent-unread  steady green glow on each unread agent menu row
  *   ams-harness-rates  per-harness tok/s / tok/min / tok/hour strip at the top
  *   ams-harness-rate   one harness rate line
  */
@@ -37,13 +35,29 @@
 
 .ams-unread-glow {
   border-radius: 7px;
-  background-color: rgba(34, 197, 94, 0.38);
-  box-shadow: 0 0 10px 3px rgba(34, 197, 94, 0.65);
+  background-color: rgba(34, 197, 94, 0.10);
+  background-gradient-direction: horizontal;
+  box-shadow: 0 0 5px 1px rgba(34, 197, 94, 0.24);
 }
 
-.ams-unread-glow-dim {
-  background-color: rgba(34, 197, 94, 0.08);
-  box-shadow: 0 0 3px 1px rgba(34, 197, 94, 0.18);
+.ams-unread-flow-0 {
+  background-gradient-start: rgba(34, 197, 94, 0.22);
+  background-gradient-end: rgba(34, 197, 94, 0.08);
+}
+
+.ams-unread-flow-1 {
+  background-gradient-start: rgba(34, 197, 94, 0.17);
+  background-gradient-end: rgba(34, 197, 94, 0.14);
+}
+
+.ams-unread-flow-2 {
+  background-gradient-start: rgba(34, 197, 94, 0.08);
+  background-gradient-end: rgba(34, 197, 94, 0.22);
+}
+
+.ams-unread-flow-3 {
+  background-gradient-start: rgba(34, 197, 94, 0.14);
+  background-gradient-end: rgba(34, 197, 94, 0.17);
 }
 
 .ams-segment {
@@ -103,6 +117,12 @@
   spacing: 8px;
 }
 
+.ams-agent-unread {
+  border-radius: 6px;
+  background-color: rgba(34, 197, 94, 0.16);
+  box-shadow: 0 0 5px 1px rgba(34, 197, 94, 0.34);
+}
+
 .ams-workspace-block {
   border-radius: 6px;
 }
@@ -136,22 +156,17 @@
   color: #9aa3b2;
 }
 
-/* Workspace attention badge: bright purple, flashed by a timer in extension.js
-   (GNOME's stylesheet parser has no keyframe animations, so the dim half of
-   the cycle is a class the extension toggles). */
+/* Workspace badges stay lit until each completed terminal is focused. */
 .ams-ws-attn {
   font-weight: bold;
-  color: #ffffff;
-  background-color: #c061cb;
+  color: #d6ffe3;
+  background-color: rgba(34, 197, 94, 0.34);
   border-radius: 6px;
   padding: 0 6px;
   margin: 0 2px;
+  box-shadow: 0 0 5px 1px rgba(34, 197, 94, 0.34);
 }
 
 .ams-ws-attn-current {
-  background-color: #9141ac;
-}
-
-.ams-ws-attn-dim {
-  opacity: 0.35;
+  background-color: rgba(34, 197, 94, 0.46);
 }
