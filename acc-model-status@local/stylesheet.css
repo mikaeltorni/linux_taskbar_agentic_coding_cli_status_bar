@@ -24,12 +24,26 @@
  *                      agents waiting on the user (panel and menu headings)
  *   ams-ws-attn-current the badge points at the workspace you are already on
  *   ams-ws-attn-dim    the faded half of the flash cycle
+ *   ams-unread-glow    pulsing background behind this indicator only when a
+ *                      finished agent terminal has not been focused
+ *   ams-unread-glow-dim the low-light half of that background pulse
  *   ams-harness-rates  per-harness tok/s / tok/min / tok/hour strip at the top
  *   ams-harness-rate   one harness rate line
  */
 
 .ams-box {
   spacing: 2px;
+}
+
+.ams-unread-glow {
+  border-radius: 7px;
+  background-color: rgba(34, 197, 94, 0.38);
+  box-shadow: 0 0 10px 3px rgba(34, 197, 94, 0.65);
+}
+
+.ams-unread-glow-dim {
+  background-color: rgba(34, 197, 94, 0.08);
+  box-shadow: 0 0 3px 1px rgba(34, 197, 94, 0.18);
 }
 
 .ams-segment {

@@ -491,6 +491,7 @@ function scopePayloadToWindows(payload, windows) {
                     monitor: match.monitor,
                     workspace: match.workspace,
                     current_workspace: match.current,
+                    focused: match.focused,
                 };
             })
             .sort((left, right) => compareWorkspaceEntries(
@@ -506,6 +507,37 @@ function scopePayloadToWindows(payload, windows) {
         totalRunning += running;
     }
     return {...payload, providers, totalLive, totalRunning};
+}
+
+/**
+ * Count completed turns whose terminal has not received focus since finishing.
+ *
+ * A DONE row first seen while focused starts acknowledged. Repeated payload
+ * writes preserve that decision; a later RUNNING turn arms the next completion.
+ * Keep the state by session identity so sorting and workspace moves cannot
+ * transfer an unread mark to another terminal.
+ *
+ * @param {object} payload - agent rows scoped to open windows.
+ * @param {Map<string, object>} states - prior phase and unread state by session.
+ * @returns {number} completed turns still waiting to be opened.
+ */
+function unreadCompletionCount(payload, states) {
+    let count = 0;
+    for (const provider of payload.providers || []) {
+        for (const agent of provider.agents || []) {
+            const key = String(agent.session_id || agent.tmux_name || agent.key || '');
+            if (!key)
+                continue;
+            const phase = String(agent.phase || '').trim().toUpperCase();
+            const previous = states.get(key);
+            const unread = phase === 'DONE' && !agent.focused &&
+                (previous?.phase === 'DONE' ? previous.unread : true);
+            states.set(key, {phase, unread});
+            if (unread)
+                count += 1;
+        }
+    }
+    return count;
 }
 
 /**
@@ -566,6 +598,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._runClockId = 0;
         this._flashOn = true;
         this._flashActors = [];
+        this._unreadStates = new Map();
+        this._unreadCount = 0;
         this._runClockActors = [];
         this._shellSignals = [];
         this._windowSignals = new Map();
@@ -605,6 +639,8 @@ class AccModelStatusButton extends PanelMenu.Button {
 
     /** Watch active-workspace changes and the lifecycle of every Shell window. */
     _startWindowWatching() {
+        this._connectShell(global.display, 'notify::focus-window', () =>
+            this._queueRefresh());
         this._connectShell(global.workspace_manager, 'active-workspace-changed', () =>
             this._queueRefresh());
         this._connectShell(global.display, 'window-created', (_display, win) => {
@@ -652,6 +688,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     _openWindowDescriptors() {
         const activeWorkspace = global.workspace_manager.get_active_workspace();
         const activeWorkspaceNumber = activeWorkspace.index() + 1;
+        const focusedWindow = global.display.focus_window;
         const windows = [];
         for (const actor of global.get_window_actors()) {
             const win = actor.meta_window;
@@ -667,7 +704,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             if (current && typeof win.is_on_all_workspaces === 'function' &&
                 win.is_on_all_workspaces())
                 workspace = activeWorkspaceNumber;
-            windows.push({title, monitor, workspace, current});
+            windows.push({title, monitor, workspace, current,
+                focused: win === focusedWindow});
         }
         return windows;
     }
@@ -706,6 +744,9 @@ class AccModelStatusButton extends PanelMenu.Button {
         const payload = published
             ? scopePayloadToWindows(published, windows)
             : null;
+        this._unreadCount = payload
+            ? unreadCompletionCount(payload, this._unreadStates)
+            : 0;
         this._box.destroy_all_children();
         this.menu.removeAll();
         // Actors are re-collected on every repaint; never keep stale ones.
@@ -770,19 +811,19 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Start or stop the flash timer so it only ticks while badges exist.
+     * Tick while workspace badges or unread completion glow need a pulse.
      *
-     * Badges alternate between full and dim opacity every
-     * {@link FLASH_INTERVAL_MS}; the timer is removed as soon as the last
-     * badge disappears so an idle panel costs nothing.
+     * Both alternate every {@link FLASH_INTERVAL_MS}; the timer is removed
+     * when neither visual needs it so an idle panel costs nothing.
      */
     _syncFlashTimer() {
-        if (this._flashActors.length === 0) {
+        if (this._flashActors.length === 0 && this._unreadCount === 0) {
             if (this._flashId) {
                 GLib.source_remove(this._flashId);
                 this._flashId = 0;
             }
             this._flashOn = true;
+            this._applyFlashState();
             return;
         }
         // A fresh repaint must not inherit a half-faded state.
@@ -796,8 +837,18 @@ class AccModelStatusButton extends PanelMenu.Button {
         });
     }
 
-    /** Push the current flash phase onto every live badge actor. */
+    /** Push the pulse phase onto this indicator's background and live badges. */
     _applyFlashState() {
+        if (this._unreadCount > 0) {
+            this._box.add_style_class_name('ams-unread-glow');
+            if (this._flashOn)
+                this._box.remove_style_class_name('ams-unread-glow-dim');
+            else
+                this._box.add_style_class_name('ams-unread-glow-dim');
+        } else {
+            this._box.remove_style_class_name('ams-unread-glow');
+            this._box.remove_style_class_name('ams-unread-glow-dim');
+        }
         for (const actor of this._flashActors) {
             if (this._flashOn)
                 actor.remove_style_class_name('ams-ws-attn-dim');
