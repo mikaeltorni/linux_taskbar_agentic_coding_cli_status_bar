@@ -851,6 +851,61 @@ const PAYLOAD = {providers: [
 }
 
 #[test]
+fn finished_agent_glows_until_its_terminal_is_focused() {
+    if !gjs_available() {
+        eprintln!("gjs not installed; skipping");
+        return;
+    }
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let js = run_gjs(
+        &[extract_function(&source, "unreadCompletionCount")],
+        r#"
+const states = new Map();
+const agent = {session_id: 'session-1', phase: 'RUNNING', focused: false};
+const count = () => unreadCompletionCount({providers: [{agents: [agent]}]}, states);
+const running = count();
+agent.phase = 'DONE';
+const finished = count();
+const repeated = count();
+agent.focused = true;
+const opened = count();
+agent.focused = false;
+const stillRead = count();
+agent.phase = 'RUNNING';
+count();
+agent.phase = 'DONE';
+const nextTurn = count();
+agent.focused = true;
+const nextTurnOpened = count();
+agent.phase = 'RUNNING';
+count();
+agent.phase = 'DONE';
+const finishedWhileFocused = count();
+agent.focused = false;
+const remainsRead = count();
+print(JSON.stringify({running, finished, repeated, opened, stillRead,
+    nextTurn, nextTurnOpened, finishedWhileFocused, remainsRead}));
+"#,
+    );
+    assert_eq!(js["running"], 0);
+    assert_eq!(js["finished"], 1);
+    assert_eq!(js["repeated"], 1);
+    assert_eq!(js["opened"], 0);
+    assert_eq!(js["stillRead"], 0);
+    assert_eq!(js["nextTurn"], 1);
+    assert_eq!(js["nextTurnOpened"], 0);
+    assert_eq!(js["finishedWhileFocused"], 0);
+    assert_eq!(js["remainsRead"], 0);
+
+    let css = fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
+    assert!(source.contains("'notify::focus-window'"));
+    assert!(source.contains("focused: match.focused"));
+    assert!(source.contains("this._box.add_style_class_name('ams-unread-glow')"));
+    assert!(css.contains(".ams-unread-glow {"));
+    assert!(css.contains(".ams-unread-glow-dim {"));
+}
+
+#[test]
 fn live_agent_badge_is_elapsed_clock_not_running() {
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");
