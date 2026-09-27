@@ -886,6 +886,8 @@ const opened = count();
 const cleared = workspaceAttentionCounts(payload).map(entry => entry.label);
 agent.focused = false;
 const stillRead = count();
+agent.last_activity_at = '2026-09-27T10:01:00Z';
+const afterActivity = count();
 const afterReload = unreadCompletionCount({providers: [{agents: [agent]}]},
     new Map(JSON.parse(JSON.stringify([...states]))));
 agent.phase = 'RUNNING';
@@ -902,7 +904,7 @@ const finishedWhileFocused = count();
 agent.focused = false;
 const remainsRead = count();
 print(JSON.stringify({running, finished, marked, repeated, opened, cleared,
-    stillRead, afterReload,
+    stillRead, afterActivity, afterReload,
     nextTurn, nextTurnOpened, finishedWhileFocused, remainsRead}));
 "#,
     );
@@ -913,6 +915,7 @@ print(JSON.stringify({running, finished, marked, repeated, opened, cleared,
     assert_eq!(js["opened"], 0);
     assert_eq!(js["cleared"].as_array().unwrap().len(), 0);
     assert_eq!(js["stillRead"], 0);
+    assert_eq!(js["afterActivity"], 0);
     assert_eq!(js["afterReload"], 0);
     assert_eq!(js["nextTurn"], 1);
     assert_eq!(js["nextTurnOpened"], 0);
