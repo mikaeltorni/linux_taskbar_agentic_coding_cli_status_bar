@@ -466,7 +466,7 @@ fn model_status_phase_palette_and_rows() {
             "{phase}"
         );
     }
-    let row = Regex::new(r"    _agentMenuItem\(agent, provider\) \{(?s)(.*?)\n    \}")
+    let row = Regex::new(r"    _agentMenuItem\(agent, provider, codexInstanceCount\) \{(?s)(.*?)\n    \}")
         .unwrap()
         .captures(&js)
         .unwrap();
@@ -478,6 +478,7 @@ fn model_status_phase_palette_and_rows() {
     assert!(body.find("ams-project-tag").unwrap() < body.find("ams-phase").unwrap());
     assert!(body.contains("gicon: this._icon(provider.icon)"));
     assert!(body.contains("ams-menu-provider-icon"));
+    assert!(body.contains("codexInstanceLabel(agent, codexInstanceCount)"));
     assert!(!body.contains("text: `${provider.label"));
     assert!(!body.contains("ams-current-workspace-block"));
     assert!(body.contains("agentPhaseBadgeText(agent)"));
