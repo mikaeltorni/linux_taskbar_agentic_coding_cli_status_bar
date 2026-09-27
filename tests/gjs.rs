@@ -861,7 +861,8 @@ fn finished_agent_glows_until_its_terminal_is_focused() {
         &[extract_function(&source, "unreadCompletionCount")],
         r#"
 const states = new Map();
-const agent = {session_id: 'session-1', phase: 'RUNNING', focused: false};
+const agent = {session_id: 'session-1', phase: 'RUNNING', focused: false,
+    last_activity_at: '2026-09-27T10:00:00Z'};
 const count = () => unreadCompletionCount({providers: [{agents: [agent]}]}, states);
 const running = count();
 agent.phase = 'DONE';
@@ -871,9 +872,12 @@ agent.focused = true;
 const opened = count();
 agent.focused = false;
 const stillRead = count();
+const afterReload = unreadCompletionCount({providers: [{agents: [agent]}]},
+    new Map(JSON.parse(JSON.stringify([...states]))));
 agent.phase = 'RUNNING';
 count();
 agent.phase = 'DONE';
+agent.last_activity_at = '2026-09-27T10:05:00Z';
 const nextTurn = count();
 agent.focused = true;
 const nextTurnOpened = count();
@@ -883,7 +887,7 @@ agent.phase = 'DONE';
 const finishedWhileFocused = count();
 agent.focused = false;
 const remainsRead = count();
-print(JSON.stringify({running, finished, repeated, opened, stillRead,
+print(JSON.stringify({running, finished, repeated, opened, stillRead, afterReload,
     nextTurn, nextTurnOpened, finishedWhileFocused, remainsRead}));
 "#,
     );
@@ -892,6 +896,7 @@ print(JSON.stringify({running, finished, repeated, opened, stillRead,
     assert_eq!(js["repeated"], 1);
     assert_eq!(js["opened"], 0);
     assert_eq!(js["stillRead"], 0);
+    assert_eq!(js["afterReload"], 0);
     assert_eq!(js["nextTurn"], 1);
     assert_eq!(js["nextTurnOpened"], 0);
     assert_eq!(js["finishedWhileFocused"], 0);
@@ -903,6 +908,41 @@ print(JSON.stringify({running, finished, repeated, opened, stillRead,
     assert!(source.contains("this._box.add_style_class_name('ams-unread-glow')"));
     assert!(css.contains(".ams-unread-glow {"));
     assert!(css.contains(".ams-unread-glow-dim {"));
+}
+
+#[test]
+fn unread_completion_acknowledgement_survives_shell_reload() {
+    if !gjs_available() {
+        eprintln!("gjs not installed; skipping");
+        return;
+    }
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("model-status-unread.json");
+    let path_json = serde_json::to_string(&path.to_string_lossy().to_string()).unwrap();
+    let probe = format!(
+        r#"
+const file = Gio.File.new_for_path({path_json});
+const states = new Map([['session-1', {{phase: 'DONE', unread: false,
+    completionAt: '2026-09-27T10:00:00Z'}}]]);
+saveUnreadStates(file, states);
+const loaded = readUnreadStates(file);
+GLib.file_set_contents(file.get_path(), '{{');
+const corrupt = readUnreadStates(file);
+print(JSON.stringify({{loaded: [...loaded], corrupt: [...corrupt]}}));
+"#
+    );
+    let js = run_gjs(
+        &[
+            "const Gio = imports.gi.Gio; const GLib = imports.gi.GLib;".into(),
+            extract_function(&source, "saveUnreadStates"),
+            extract_function(&source, "readUnreadStates"),
+        ],
+        &probe,
+    );
+    assert_eq!(js["loaded"][0][0], "session-1");
+    assert_eq!(js["loaded"][0][1]["unread"], false);
+    assert_eq!(js["corrupt"].as_array().unwrap().len(), 0);
 }
 
 #[test]
