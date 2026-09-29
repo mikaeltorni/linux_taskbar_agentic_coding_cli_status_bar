@@ -947,6 +947,79 @@ print(JSON.stringify({running, finished, marked, repeated, opened, cleared,
 }
 
 #[test]
+fn confirmed_completions_do_not_rearm_after_redraw_or_state_loss() {
+    if !gjs_available() {
+        eprintln!("gjs not installed; skipping");
+        return;
+    }
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let js = run_gjs(
+        &[extract_function(&source, "unreadCompletionCount")],
+        r#"
+const now = Date.parse('2026-09-29T12:00:00Z');
+const old = '2026-09-25T10:00:00Z';
+const recent = '2026-09-29T11:59:55Z';
+const agent = {session_id: 'session-1', phase: 'DONE', focused: false,
+    last_worked_at: old, ready_completed_at: ''};
+const payload = {providers: [{agents: [agent]}]};
+let states = new Map([['session-1', {phase: 'DONE', unread: true, completedAt: old}]]);
+const count = () => unreadCompletionCount(payload, states, now);
+const unconfirmed = count();
+agent.ready_completed_at = old;
+const historical = count();
+states = new Map();
+const lostStateOld = count();
+agent.ready_completed_at = recent;
+const fresh = count();
+const repeated = count();
+states = new Map(JSON.parse(JSON.stringify([...states])));
+const reloadUnread = unreadCompletionCount(payload, states, now + 300000);
+agent.focused = true;
+const opened = count();
+agent.focused = false;
+agent.phase = 'RUNNING';
+agent.ready_completed_at = '';
+count();
+states = new Map(JSON.parse(JSON.stringify([...states])));
+agent.phase = 'DONE';
+agent.ready_completed_at = recent;
+agent.last_worked_at = '2026-09-29T12:00:00Z';
+const redraw = count();
+agent.last_worked_at = '2026-09-29T12:01:00Z';
+const changedHistory = count();
+agent.ready_completed_at = old;
+const olderPayload = count();
+agent.ready_completed_at = recent;
+const restoredPayload = count();
+agent.ready_completed_at = '2026-09-29T12:00:00Z';
+const newCompletion = count();
+agent.focused = true;
+count();
+agent.ready_completed_at = '2026-09-29T12:00:01Z';
+const finishedFocused = count();
+agent.focused = false;
+const noReplay = count();
+agent.ready_completed_at = 'invalid';
+const invalid = count();
+agent.ready_completed_at = '2026-09-30T12:00:00Z';
+states = new Map();
+const future = count();
+print(JSON.stringify({unconfirmed, historical, lostStateOld, fresh, repeated,
+    reloadUnread, opened, redraw, changedHistory, olderPayload, restoredPayload, newCompletion,
+    finishedFocused, noReplay, invalid, future}));
+"#,
+    );
+    for field in ["unconfirmed", "historical", "lostStateOld", "opened", "redraw",
+        "changedHistory", "olderPayload", "restoredPayload", "finishedFocused", "noReplay", "invalid", "future"] {
+        assert_eq!(js[field], 0, "{field}");
+    }
+    for field in ["fresh", "repeated", "reloadUnread", "newCompletion"] {
+        assert_eq!(js[field], 1, "{field}");
+    }
+}
+
+#[test]
 fn unread_completion_acknowledgement_survives_shell_reload() {
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");
