@@ -13,7 +13,7 @@
  *   ams-stale     payload older than the freshness threshold
  *   ams-agent-row one agent line in the drop-down (project + phase + title)
  *   ams-workspace-block one heading plus all rows on the same workspace
- *   ams-current-workspace-block continuous highlight for the active workspace
+ *   ams-current-workspace-block background on the active workspace heading
  *   ams-project-tag Phrase Automation's compact project label leading the row
  *   ams-menu-provider-icon harness icon within a workspace-grouped row
  *   ams-instance-tag CX account identity immediately after the Codex icon
@@ -128,6 +128,7 @@
 }
 
 .ams-current-workspace-block {
+  border-radius: 6px;
   background-color: rgba(25, 190, 180, 0.35);
 }
 

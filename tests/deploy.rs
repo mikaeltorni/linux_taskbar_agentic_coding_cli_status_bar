@@ -332,7 +332,7 @@ fn model_status_extension_contract() {
         "new PopupMenu.PopupMenuSection()",
         "workspaceSection.addMenuItem(heading)",
         "workspaceSection.addMenuItem(this._agentMenuItem",
-        "workspaceSection.actor.add_style_class_name('ams-current-workspace-block')",
+        "heading.actor.add_style_class_name('ams-current-workspace-block')",
         "this._renderHarnessRates(payload)",
         "function formatCompactTokens(value)",
         "function formatHarnessRateText(row)",
@@ -349,6 +349,11 @@ fn model_status_extension_contract() {
     ] {
         assert!(code.contains(required), "{required}");
     }
+    assert!(
+        !code
+            .contains("workspaceSection.actor.add_style_class_name('ams-current-workspace-block')"),
+        "current-workspace highlight must not cover agent rows or instance tags"
+    );
     for signal in [
         "active-workspace-changed",
         "window-created",

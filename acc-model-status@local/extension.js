@@ -1081,7 +1081,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             workspaceSection = new PopupMenu.PopupMenuSection();
             workspaceSection.actor.add_style_class_name('ams-workspace-block');
             if (current)
-                workspaceSection.actor.add_style_class_name('ams-current-workspace-block');
+                heading.actor.add_style_class_name('ams-current-workspace-block');
             workspaceSection.addMenuItem(heading);
             this.menu.addMenuItem(workspaceSection);
             for (const entry of group.entries)
