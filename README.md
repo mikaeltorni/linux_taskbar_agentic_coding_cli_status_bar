@@ -277,9 +277,10 @@ label from Phrase Automation's project catalog (for example `INS`), followed by
 the harness's symbolic icon instead of a repeated provider name. Codex rows
 place their `CX1`, `CX2`, … account name immediately to the right
 of that icon, using the same blue-to-purple identity color as the main
-rate-limit indicator. Other harness rows keep their existing layout. The active
-workspace's heading plus all of its rows share one continuous translucent teal
-block. A finished agent that has not been opened since its turn ended gives
+rate-limit indicator. Other harness rows keep their existing layout. Only the
+active workspace heading gets a translucent teal background; agent rows,
+including any CX instance tags, remain unhighlighted. A finished agent that
+has not been opened since its turn ended gives
 only this indicator a soft green flow. Its workspace gets a steady green
 `W<n>:<count>` marker and its row in the expanded menu gets the same steady
 glow. The markers count only finished, unopened turns; waiting, stopped, and
