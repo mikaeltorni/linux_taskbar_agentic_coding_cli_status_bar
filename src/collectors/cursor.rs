@@ -186,7 +186,7 @@ fn dashboard_headers(cookie: &str) -> Vec<(String, String)> {
         ("User-Agent".into(), USER_AGENT.into()),
         ("Accept".into(), "application/json".into()),
         ("Origin".into(), "https://cursor.com".into()),
-        ("Referer".into(), format!("{CURSOR_SPENDING_URL_DEFAULT}")),
+        ("Referer".into(), CURSOR_SPENDING_URL_DEFAULT.into()),
         ("Cookie".into(), cookie_header_value(cookie)),
         ("Content-Type".into(), "application/json".into()),
     ]
@@ -299,6 +299,11 @@ fn percent_re() -> &'static Regex {
 fn script_json_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r#"(?is)<script[^>]*>(.*?)</script>"#).unwrap())
+}
+
+fn remaining_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(\$[\d,.]+)\s+remaining(?:\s+of\s+(\$[\d,.]+))?").unwrap())
 }
 
 fn included_region(html: &str) -> &str {
@@ -437,11 +442,11 @@ fn walk_json(value: &Value, now: f64, out: &mut SpendingPage) {
                     }
                 }
                 let n = normalize_name(key);
-                if matches!(n.as_str(), "plan" | "planname" | "membershiptype") {
-                    if out.plan.is_none() {
-                        if let Some(text) = field_text(child) {
-                            out.plan = Some(text);
-                        }
+                if matches!(n.as_str(), "plan" | "planname" | "membershiptype")
+                    && out.plan.is_none()
+                {
+                    if let Some(text) = field_text(child) {
+                        out.plan = Some(text);
                     }
                 }
                 walk_json(child, now, out);
@@ -495,13 +500,10 @@ fn parse_html_pools(html: &str, now: f64, out: &mut SpendingPage) {
             used_percent: used.clamp(0.0, 100.0),
             resets_at: None,
         });
-        if let Some(remain) = Regex::new(r"(\$[\d,.]+)\s+remaining(?:\s+of\s+(\$[\d,.]+))?")
-            .ok()
-            .and_then(|re| re.captures(slice))
-        {
+        if let Some(remain) = remaining_re().captures(slice) {
             let mut text = remain[1].to_string();
             if let Some(limit) = remain.get(2) {
-                text = format!("{} of {}", remain[1].to_string(), limit.as_str());
+                text = format!("{} of {}", &remain[1], limit.as_str());
             }
             push_field(out, &format!("{id} remaining"), text);
         }

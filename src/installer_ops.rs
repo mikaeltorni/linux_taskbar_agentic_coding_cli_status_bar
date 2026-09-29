@@ -263,7 +263,7 @@ fn parse_crs_interval() -> Result<i64, String> {
                 return Ok(crate::config::CURSOR_FETCH_MIN_INTERVAL_SECONDS);
             }
             let parsed = trimmed.parse::<i64>().map_err(|_| {
-                format!("CRS_FETCH_INTERVAL_SECONDS must be a whole number from 5 to 3600")
+                String::from("CRS_FETCH_INTERVAL_SECONDS must be a whole number from 5 to 3600")
             })?;
             if !(crate::config::MIN_CURSOR_FETCH_INTERVAL_SECONDS
                 ..=crate::config::MAX_POLL_INTERVAL_SECONDS)
