@@ -69,7 +69,11 @@ fn segment_add_child_classes(body: &str) -> Vec<String> {
             continue;
         };
         let after = rest[cls_idx + "style_class:".len()..].trim_start();
-        let Some(quote) = after.chars().next().filter(|c| matches!(c, '\'' | '"' | '`')) else {
+        let Some(quote) = after
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '\'' | '"' | '`'))
+        else {
             continue;
         };
         let inner = &after[1..];
@@ -750,7 +754,8 @@ print(JSON.stringify({
 
 #[test]
 fn model_status_omits_session_worktree_mark() {
-    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     assert!(
         !source.contains("worktree_mark"),
         "agent status taskbar must not render the session worktree mark"
@@ -767,7 +772,8 @@ fn model_status_omits_session_worktree_mark() {
 
 #[test]
 fn panel_running_count_is_left_of_icon() {
-    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let empty = extract_method(&source, "_renderEmpty");
     let provider = extract_method(&source, "_renderProvider");
     let orphans = extract_method(&source, "_renderPanelHarnessRates");
@@ -863,7 +869,8 @@ fn finished_agent_glows_until_its_terminal_is_focused() {
         eprintln!("gjs not installed; skipping");
         return;
     }
-    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let js = run_gjs(
         &[
             extract_function(&source, "unreadCompletionCount"),
@@ -930,7 +937,8 @@ print(JSON.stringify({running, finished, marked, repeated, opened, cleared,
     assert_eq!(js["finishedWhileFocused"], 0);
     assert_eq!(js["remainsRead"], 0);
 
-    let css = fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
+    let css =
+        fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
     assert!(source.contains("'notify::focus-window'"));
     assert!(source.contains("focused: match.focused"));
     assert!(source.contains("this._box.add_style_class_name('ams-unread-glow')"));
@@ -944,7 +952,8 @@ fn unread_completion_acknowledgement_survives_shell_reload() {
         eprintln!("gjs not installed; skipping");
         return;
     }
-    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("model-status-unread.json");
     let path_json = serde_json::to_string(&path.to_string_lossy().to_string()).unwrap();
@@ -1123,11 +1132,21 @@ print(JSON.stringify({
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0], "Claude 0/s  10/min  10/h");
     assert_eq!(lines[1], "Codex 12/s  80/min  900/h");
-    let kinds: Vec<_> = js["panelRows"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    let kinds: Vec<_> = js["panelRows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
     assert_eq!(kinds, ["claude", "codex"]);
     let rate_pos = source.find("this._renderHarnessRates(payload)").unwrap();
-    let workspace_pos = source.find("groupWorkspaceEntries(workspaceEntries)").unwrap();
-    assert!(rate_pos < workspace_pos, "harness rates must render above workspaces");
+    let workspace_pos = source
+        .find("groupWorkspaceEntries(workspaceEntries)")
+        .unwrap();
+    assert!(
+        rate_pos < workspace_pos,
+        "harness rates must render above workspaces"
+    );
     assert!(source.contains("ams-harness-rates"));
     assert!(source.contains("this._renderPanelHarnessRates(payload"));
     assert!(source.contains("style_class: 'ams-rate'"));
@@ -1169,10 +1188,15 @@ fn model_status_extension_contract() {
 
 #[test]
 fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
-    let model = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
-    let taskbar = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let model =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let taskbar =
+        fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
     for name in ["INSTANCE_TAG_FIRST_RGB", "INSTANCE_TAG_LAST_RGB"] {
-        assert_eq!(extract_constant(&model, name), extract_constant(&taskbar, name));
+        assert_eq!(
+            extract_constant(&model, name),
+            extract_constant(&taskbar, name)
+        );
     }
     let label = extract_function(&model, "codexInstanceLabel");
     let color = extract_function(&model, "instanceTagColor");
@@ -1182,7 +1206,15 @@ fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
         color,
         label,
     ], "print(JSON.stringify([codexInstanceLabel({kind: 'codex', codex_instance: 1}, 3), codexInstanceLabel({kind: 'codex', codex_instance: 2}, 3), codexInstanceLabel({kind: 'codex', codex_instance: 3}, 3), codexInstanceLabel({kind: 'claude', codex_instance: 1}, 3)]))");
-    assert_eq!(result, serde_json::json!([["CX1", "#7ec8ff"], ["CX2", "#938ff4"], ["CX3", "#a856e8"], null]));
+    assert_eq!(
+        result,
+        serde_json::json!([
+            ["CX1", "#7ec8ff"],
+            ["CX2", "#938ff4"],
+            ["CX3", "#a856e8"],
+            null
+        ])
+    );
 
     let menu = extract_method(&model, "_agentMenuItem");
     assert!(menu.find("ams-menu-provider-icon").unwrap() < menu.find("ams-instance-tag").unwrap());

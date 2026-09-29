@@ -51,7 +51,11 @@ fn segment_add_child_classes(body: &str) -> Vec<String> {
             continue;
         };
         let after = rest[cls_idx + "style_class:".len()..].trim_start();
-        let Some(quote) = after.chars().next().filter(|c| matches!(c, '\'' | '"' | '`')) else {
+        let Some(quote) = after
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '\'' | '"' | '`'))
+        else {
             continue;
         };
         let inner = &after[1..];
@@ -471,10 +475,12 @@ fn model_status_phase_palette_and_rows() {
             "{phase}"
         );
     }
-    let row = Regex::new(r"    _agentMenuItem\(agent, provider, codexInstanceCount\) \{(?s)(.*?)\n    \}")
-        .unwrap()
-        .captures(&js)
-        .unwrap();
+    let row = Regex::new(
+        r"    _agentMenuItem\(agent, provider, codexInstanceCount\) \{(?s)(.*?)\n    \}",
+    )
+    .unwrap()
+    .captures(&js)
+    .unwrap();
     let body = &row[1];
     assert!(body.contains("agent.project_tag"));
     assert!(body.contains("ams-project-tag"));
