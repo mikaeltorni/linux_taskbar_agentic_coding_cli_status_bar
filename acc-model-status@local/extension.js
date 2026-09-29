@@ -549,18 +549,19 @@ function scopePayloadToWindows(payload, windows) {
 /**
  * Count completed turns whose terminal has not received focus since finishing.
  *
- * A DONE row first seen while focused starts acknowledged. Repeated payload
- * writes preserve that decision even if pane activity changes afterward. A
- * later RUNNING phase or a new ACC work-history completion time arms the next
- * completion; older payloads without that time still use phase transitions.
+ * Confirmed ready identities survive phase redraws and work-history updates.
+ * Missing state baselines old completions as read; only a finish within 30
+ * seconds can arm on first observation. Saved unread decisions remain valid
+ * without an age limit. Legacy payloads retain their phase-based contract.
  * Keep the state by session identity so sorting and workspace moves cannot
  * transfer an unread mark to another terminal.
  *
  * @param {object} payload - agent rows scoped to open windows.
  * @param {Map<string, object>} states - prior phase and unread state by session.
+ * @param {number} nowMillis - current time used to reject historical baselines.
  * @returns {number} completed turns still waiting to be opened.
  */
-function unreadCompletionCount(payload, states) {
+function unreadCompletionCount(payload, states, nowMillis = Date.now()) {
     let count = 0;
     for (const provider of payload.providers || []) {
         for (const agent of provider.agents || []) {
@@ -570,8 +571,42 @@ function unreadCompletionCount(payload, states) {
                 continue;
             }
             const phase = String(agent.phase || '').trim().toUpperCase();
-            const completedAt = String(agent.last_worked_at || '');
             const previous = states.get(key);
+            if (Object.prototype.hasOwnProperty.call(agent, 'ready_completed_at')) {
+                const rawCompletion = String(agent.ready_completed_at || '');
+                const completionMillis = Date.parse(rawCompletion);
+                const confirmed = previous?.confirmed === true;
+                const previousMillis = Date.parse(previous?.completedAt || '');
+                const valid = Number.isFinite(completionMillis) &&
+                    completionMillis <= nowMillis + 1000 &&
+                    (!confirmed || !Number.isFinite(previousMillis) ||
+                        completionMillis >= previousMillis);
+                const completedAt = valid ? rawCompletion : '';
+                const sameCompletion = completedAt &&
+                    previous?.completedAt === completedAt;
+                let unread = confirmed ? Boolean(previous.unread) : false;
+                if (completedAt) {
+                    if (sameCompletion && (confirmed || previous.unread === false)) {
+                        unread = Boolean(previous.unread);
+                    } else if (confirmed && previous.completedAt) {
+                        // Only a later confirmed finish creates new attention.
+                        unread = completionMillis > Date.parse(previous.completedAt);
+                    } else {
+                        // Migration and lost state must not rearm old DONE rows.
+                        unread = nowMillis - completionMillis <= 30000;
+                    }
+                }
+                if (agent.focused)
+                    unread = false;
+                agent.unread_completion = phase === 'DONE' && valid && unread;
+                // Preserve identity through temporary RUNNING/empty-marker ticks.
+                states.set(key, {phase, unread, confirmed: true,
+                    completedAt: completedAt || (confirmed ? previous.completedAt : '')});
+                if (agent.unread_completion)
+                    count += 1;
+                continue;
+            }
+            const completedAt = String(agent.last_worked_at || '');
             const sameCompletion = previous?.phase === 'DONE' &&
                 (!completedAt || !previous.completedAt ||
                     previous.completedAt === completedAt);
@@ -791,11 +826,14 @@ class AccModelStatusButton extends PanelMenu.Button {
             ? scopePayloadToWindows(published, windows)
             : null;
         const previousUnreadState = JSON.stringify([...this._unreadStates]);
+        const previousUnreadCount = this._unreadCount;
         this._unreadCount = payload
             ? unreadCompletionCount(payload, this._unreadStates)
             : 0;
         if (previousUnreadState !== JSON.stringify([...this._unreadStates]))
             saveUnreadStates(this._unreadFile, this._unreadStates);
+        if (previousUnreadCount !== this._unreadCount)
+            log(`acc-model-status: unread completions ${previousUnreadCount} -> ${this._unreadCount}`);
         this._box.destroy_all_children();
         this.menu.removeAll();
         // Run clocks are re-collected on every repaint; never keep stale ones.
