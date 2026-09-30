@@ -1303,9 +1303,11 @@ fn model_status_extension_contract() {
     let code = code_only(&js);
     assert!(code.contains("model_status_bar.json"));
     assert!(code.contains("CODEX_AGENT_TRACKER_STATE_DIR"));
-    for forbidden in ["GLib.spawn", "Gio.Subprocess", "Soup", "subprocess"] {
+    for forbidden in ["GLib.spawn", "Soup", "subprocess"] {
         assert!(!code.contains(forbidden), "{forbidden}");
     }
+    assert!(code.contains("Gio.Subprocess.new"));
+    assert!(code.contains("this._focusAgent(noteId)"));
     let metadata: Value =
         serde_json::from_str(&fs::read_to_string(ext.join("metadata.json")).unwrap()).unwrap();
     assert_eq!(metadata["uuid"], "acc-model-status@local");
@@ -1350,6 +1352,51 @@ fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
 
     let menu = extract_method(&model, "_agentMenuItem");
     assert!(menu.find("ams-menu-provider-icon").unwrap() < menu.find("ams-instance-tag").unwrap());
+}
+
+#[test]
+fn model_status_menu_rows_focus_the_exact_agent_through_acc() {
+    let model =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let menu = extract_method(&model, "_agentMenuItem");
+    assert!(menu.contains("reactive: Boolean(noteId)"));
+    assert!(menu.contains("can_focus: Boolean(noteId)"));
+    assert!(menu.contains("item.connect('activate', () => this._focusAgent(noteId))"));
+
+    let focus = extract_method(&model, "_focusAgent");
+    let gio_stub = r#"
+const launched = [];
+const GLib = {
+    build_filenamev(parts) { return parts.join('/'); },
+    get_home_dir() { return '/home/test'; },
+};
+const Gio = {
+    SubprocessFlags: {NONE: 0},
+    Subprocess: {
+        new(argv, flags) {
+            launched.push({argv: [...argv], flags});
+            return {
+                wait_check_async(_cancellable, callback) { callback(this, {}); },
+                wait_check_finish() { return true; },
+            };
+        },
+    },
+};
+function logError(_error, _message) {}
+    "#
+    .to_string();
+    let extension = format!("const extension = {{ {} }};", focus);
+    let result = run_gjs(
+        &[gio_stub, extension],
+        "extension._focusAgent('note-123'); extension._focusAgent('  '); print(JSON.stringify(launched));",
+    );
+    assert_eq!(
+        result,
+        serde_json::json!([{
+            "argv": ["/home/test/.local/bin/acc-window-select", "--note-id", "note-123"],
+            "flags": 0
+        }])
+    );
 }
 
 #[test]
