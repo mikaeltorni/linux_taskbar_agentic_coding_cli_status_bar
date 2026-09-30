@@ -23,6 +23,7 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import Meta from 'gi://Meta';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -38,6 +39,14 @@ const UNREAD_FILENAME = 'model-status-unread.json';
 const STATE_DIR_NAME = 'codex-agent-tracker';
 /** Environment override honored by the tracker (and therefore by us). */
 const STATE_DIR_ENV = 'CODEX_AGENT_TRACKER_STATE_DIR';
+/** Layout-independent Alt+§ accelerator that opens the agent status menu. */
+const AGENT_STATUS_MENU_ACCELERATOR = '<Alt>Above_Tab';
+/** Mutter key names that can alias the physical key above Tab. */
+const AGENT_STATUS_MENU_ACCELERATORS = new Set(['<alt>above_tab', '<alt>section', '<alt>grave', '<alt>0x31']);
+/** Preserve the user's group-switch accelerators while this extension is active. */
+const SWITCH_GROUP_SCHEMA = 'org.gnome.desktop.wm.keybindings';
+const SWITCH_GROUP_KEY = 'switch-group';
+const MENU_ACCELERATOR_BACKUP_FILENAME = 'model-status-menu-keybinding-backup.json';
 /** Safety-net re-read interval (seconds); the file monitor does the real work. */
 const POLL_SECONDS = 15;
 /** Payload older than this is rendered dimmed — the monitor is not publishing. */
@@ -249,6 +258,73 @@ function saveUnreadStates(file, states) {
         GLib.chmod(file.get_path(), 0o600);
     } catch (error) {
         logError(error, 'acc-model-status: could not save unread completion state');
+    }
+}
+
+/** Return existing group-switch values that collide with Alt+Above_Tab. */
+function agentStatusMenuShortcutBindings(bindings) {
+    return (Array.isArray(bindings) ? bindings : []).filter(binding =>
+        typeof binding === 'string' && AGENT_STATUS_MENU_ACCELERATORS.has(binding.toLowerCase()));
+}
+
+/** Remove layout aliases for the accelerator from GNOME's group-switch list. */
+function withoutAgentStatusMenuShortcuts(bindings) {
+    return (Array.isArray(bindings) ? bindings : []).filter(binding =>
+        typeof binding !== 'string' || !AGENT_STATUS_MENU_ACCELERATORS.has(binding.toLowerCase()));
+}
+
+/** Restore saved aliases without replacing unrelated group-switch changes. */
+function restoreAgentStatusMenuShortcuts(bindings, shortcuts) {
+    const restored = Array.isArray(bindings) ? [...bindings] : [];
+    const existing = new Set(restored.map(binding => String(binding).toLowerCase()));
+    for (const shortcut of agentStatusMenuShortcutBindings(shortcuts)) {
+        const normalized = shortcut.toLowerCase();
+        if (!existing.has(normalized)) {
+            restored.push(shortcut);
+            existing.add(normalized);
+        }
+    }
+    return restored;
+}
+
+/** Read the extension's persisted list of group-switch aliases to restore. */
+function readMenuShortcutBackup(file) {
+    if (!file.query_exists(null))
+        return [];
+    try {
+        const [ok, bytes] = file.load_contents(null);
+        if (!ok)
+            throw new Error('backup file could not be read');
+        const parsed = JSON.parse(new TextDecoder().decode(bytes));
+        if (!Array.isArray(parsed) || parsed.some(binding => typeof binding !== 'string'))
+            throw new Error('backup file has an invalid shape');
+        return agentStatusMenuShortcutBindings(parsed);
+    } catch (error) {
+        logError(error, 'acc-model-status: could not read menu shortcut backup');
+        return null;
+    }
+}
+
+/** Persist only the user's colliding accelerators so Shell restarts can recover. */
+function saveMenuShortcutBackup(file, shortcuts) {
+    try {
+        GLib.mkdir_with_parents(file.get_parent().get_path(), 0o700);
+        GLib.file_set_contents(file.get_path(), JSON.stringify(shortcuts));
+        GLib.chmod(file.get_path(), 0o600);
+        return true;
+    } catch (error) {
+        logError(error, 'acc-model-status: could not save menu shortcut backup');
+        return false;
+    }
+}
+
+/** Remove the persisted shortcut backup after restoring the user's setting. */
+function deleteMenuShortcutBackup(file) {
+    try {
+        if (file.query_exists(null))
+            file.delete(null);
+    } catch (error) {
+        logError(error, 'acc-model-status: could not remove menu shortcut backup');
     }
 }
 
@@ -1263,11 +1339,96 @@ export default class AccModelStatusExtension extends Extension {
     enable() {
         this._button = new AccModelStatusButton(this);
         Main.panel.addToStatusArea('acc-model-status', this._button, 0, 'right');
+        try {
+            this._switchGroupSettings = new Gio.Settings({schema_id: SWITCH_GROUP_SCHEMA});
+            this._shortcutBackupFile = Gio.File.new_for_path(GLib.build_filenamev([
+                GLib.get_user_state_dir(), 'acc-model-status', MENU_ACCELERATOR_BACKUP_FILENAME,
+            ]));
+        } catch (error) {
+            logError(error, 'acc-model-status: could not access GNOME keybindings');
+            return;
+        }
+        if (!this._reserveMenuAccelerator())
+            return;
+
+        try {
+            this._menuAcceleratorId = global.display.grab_accelerator(
+                AGENT_STATUS_MENU_ACCELERATOR, Meta.KeyBindingFlags.NONE);
+        } catch (error) {
+            logError(error, 'acc-model-status: could not register Alt+§ menu shortcut');
+            this._restoreMenuAccelerator();
+            return;
+        }
+        if (this._menuAcceleratorId === Meta.KeyBindingAction.NONE) {
+            log('acc-model-status: unable to register Alt+§ menu shortcut');
+            this._restoreMenuAccelerator();
+            return;
+        }
+        this._menuAcceleratorSignal = global.display.connect(
+            'accelerator-activated', (_display, action) => {
+                if (action !== this._menuAcceleratorId)
+                    return;
+                if (this._button) {
+                    this._button.menu.toggle();
+                    log('acc-model-status: toggled menu with Alt+§');
+                }
+            });
+        log('acc-model-status: registered Alt+§ menu shortcut');
     }
 
     /** Remove the indicator and every resource it owns. */
     disable() {
+        if (this._menuAcceleratorSignal) {
+            global.display.disconnect(this._menuAcceleratorSignal);
+            this._menuAcceleratorSignal = 0;
+        }
+        if (this._menuAcceleratorId &&
+            !global.display.ungrab_accelerator(this._menuAcceleratorId))
+            log('acc-model-status: unable to release Alt+§ menu shortcut');
+        this._menuAcceleratorId = 0;
+        this._restoreMenuAccelerator();
         this._button?.destroy();
         this._button = null;
+    }
+
+    /** Reserve the accelerator and keep a restart-safe backup of displaced settings. */
+    _reserveMenuAccelerator() {
+        const backup = readMenuShortcutBackup(this._shortcutBackupFile);
+        if (backup === null)
+            return false;
+        const current = this._switchGroupSettings.get_strv(SWITCH_GROUP_KEY);
+        const collisions = agentStatusMenuShortcutBindings(current);
+        const saved = restoreAgentStatusMenuShortcuts(backup, collisions);
+        if (saved.length > 0 && !saveMenuShortcutBackup(this._shortcutBackupFile, saved))
+            return false;
+
+        const reserved = withoutAgentStatusMenuShortcuts(current);
+        if (reserved.length !== current.length &&
+            !this._switchGroupSettings.set_strv(SWITCH_GROUP_KEY, reserved)) {
+            log('acc-model-status: unable to reserve Alt+§ in GNOME keybindings');
+            return false;
+        }
+        if (reserved.length !== current.length)
+            log('acc-model-status: reserved Alt+§ for the agent status menu');
+        return true;
+    }
+
+    /** Restore displaced GNOME shortcuts when the menu extension is disabled. */
+    _restoreMenuAccelerator() {
+        if (!this._switchGroupSettings || !this._shortcutBackupFile)
+            return;
+        const backup = readMenuShortcutBackup(this._shortcutBackupFile);
+        if (backup === null || backup.length === 0)
+            return;
+        const current = this._switchGroupSettings.get_strv(SWITCH_GROUP_KEY);
+        const restored = restoreAgentStatusMenuShortcuts(current, backup);
+        if (restored.length !== current.length &&
+            !this._switchGroupSettings.set_strv(SWITCH_GROUP_KEY, restored)) {
+            log('acc-model-status: unable to restore GNOME group-switch shortcuts');
+            return;
+        }
+        deleteMenuShortcutBackup(this._shortcutBackupFile);
+        if (restored.length !== current.length)
+            log('acc-model-status: restored GNOME group-switch shortcuts');
     }
 }

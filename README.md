@@ -302,6 +302,11 @@ sessions remain in ACC but are not shown until their terminal window is opened.
 The extension is opt-in and unrelated to the rate-limit indicator or the CLI
 status line:
 
+Press **Alt+§** (`Alt+Above_Tab`) to open the agent status menu. While this
+extension is enabled, it temporarily takes that accelerator from GNOME's
+window-group switcher and restores the existing shortcut list when disabled or
+uninstalled.
+
 ```bash
 bash install.sh --select model_status_bar     # install just this component
 bash install.sh --uninstall model_status_bar  # remove it again
