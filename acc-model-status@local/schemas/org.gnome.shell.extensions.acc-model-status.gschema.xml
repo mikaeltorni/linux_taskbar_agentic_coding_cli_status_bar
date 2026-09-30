@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.acc-model-status" path="/org/gnome/shell/extensions/acc-model-status/">
+    <key name="menu-accelerator" type="as">
+      <default>[ '&lt;Alt&gt;Above_Tab' ]</default>
+      <summary>Accelerator that opens the Agent Command Center status menu</summary>
+    </key>
+  </schema>
+</schemalist>
