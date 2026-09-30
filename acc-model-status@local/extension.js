@@ -46,6 +46,8 @@ const AGENT_STATUS_MENU_ACCELERATOR = '<Alt>Above_Tab';
 const AGENT_STATUS_MENU_ACCELERATOR_CANDIDATES = [
     '<Alt>Above_Tab', '<Alt>section', '<Alt>grave', '<Alt>0x31',
 ];
+/** Allow Mutter's previous group-switch grab to settle before retrying. */
+const MENU_ACCELERATOR_REGISTER_DELAY_MS = 250;
 /** Mutter key names that can alias the physical key above Tab. */
 const AGENT_STATUS_MENU_ACCELERATORS = new Set(['<alt>above_tab', '<alt>section', '<alt>grave', '<alt>0x31']);
 /** Preserve the user's group-switch accelerators while this extension is active. */
@@ -1386,6 +1388,16 @@ export default class AccModelStatusExtension extends Extension {
         if (!this._reserveMenuAccelerator())
             return;
 
+        this._menuAcceleratorRegisterId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, MENU_ACCELERATOR_REGISTER_DELAY_MS, () => {
+                this._menuAcceleratorRegisterId = 0;
+                this._registerMenuAccelerator();
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
+    /** Register the menu accelerator after GNOME releases the displaced binding. */
+    _registerMenuAccelerator() {
         this._menuAcceleratorId = Meta.KeyBindingAction.NONE;
         for (const accelerator of AGENT_STATUS_MENU_ACCELERATOR_CANDIDATES) {
             try {
@@ -1418,6 +1430,10 @@ export default class AccModelStatusExtension extends Extension {
 
     /** Remove the indicator and every resource it owns. */
     disable() {
+        if (this._menuAcceleratorRegisterId) {
+            GLib.source_remove(this._menuAcceleratorRegisterId);
+            this._menuAcceleratorRegisterId = 0;
+        }
         if (this._menuAcceleratorSignal) {
             global.display.disconnect(this._menuAcceleratorSignal);
             this._menuAcceleratorSignal = 0;
