@@ -753,6 +753,65 @@ print(JSON.stringify({
 }
 
 #[test]
+fn model_status_menu_shortcut_binding_is_reserved_and_restored() {
+    if !gjs_available() {
+        eprintln!("gjs not installed; skipping");
+        return;
+    }
+    let source = fs::read_to_string(
+        repo_root()
+            .join("acc-model-status@local")
+            .join("extension.js"),
+    )
+    .unwrap();
+    let snippets = vec![
+        extract_constant(&source, "AGENT_STATUS_MENU_ACCELERATORS"),
+        extract_function(&source, "agentStatusMenuShortcutBindings"),
+        extract_function(&source, "withoutAgentStatusMenuShortcuts"),
+        extract_function(&source, "restoreAgentStatusMenuShortcuts"),
+        extract_function(&source, "readMenuShortcutBackup"),
+        extract_function(&source, "saveMenuShortcutBackup"),
+        extract_function(&source, "deleteMenuShortcutBackup"),
+    ];
+    let js = run_gjs(
+        &snippets,
+        r#"
+const original = ['<Alt>Above_Tab', '<Alt>F2', '<Alt>section', '<Alt>grave'];
+const reserved = agentStatusMenuShortcutBindings(original);
+const cleared = withoutAgentStatusMenuShortcuts(original);
+const restored = restoreAgentStatusMenuShortcuts([...cleared, '<Super>F12'], reserved);
+const {Gio, GLib} = imports.gi;
+const parent = GLib.build_filenamev([GLib.get_tmp_dir(), `acc-menu-shortcut-${GLib.get_monotonic_time()}`]);
+const file = Gio.File.new_for_path(GLib.build_filenamev([parent, 'backup.json']));
+const backupSaved = saveMenuShortcutBackup(file, reserved);
+const backupRead = readMenuShortcutBackup(file);
+deleteMenuShortcutBackup(file);
+const backupDeleted = !file.query_exists(null);
+GLib.rmdir(parent);
+print(JSON.stringify({reserved, cleared, restored, backupSaved, backupRead, backupDeleted}));
+"#,
+    );
+    assert_eq!(
+        js["reserved"],
+        serde_json::json!(["<Alt>Above_Tab", "<Alt>section", "<Alt>grave"])
+    );
+    assert_eq!(js["cleared"], serde_json::json!(["<Alt>F2"]));
+    assert_eq!(
+        js["restored"],
+        serde_json::json!([
+            "<Alt>F2",
+            "<Super>F12",
+            "<Alt>Above_Tab",
+            "<Alt>section",
+            "<Alt>grave"
+        ])
+    );
+    assert_eq!(js["backupSaved"], true);
+    assert_eq!(js["backupRead"], js["reserved"]);
+    assert_eq!(js["backupDeleted"], true);
+}
+
+#[test]
 fn model_status_omits_session_worktree_mark() {
     let source =
         fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();

@@ -380,6 +380,23 @@ fn model_status_extension_contract() {
 }
 
 #[test]
+fn model_status_menu_hotkey_is_registered_and_released() {
+    let js = code_only(&read("acc-model-status@local/extension.js"));
+    for required in [
+        "const AGENT_STATUS_MENU_ACCELERATOR = '<Alt>Above_Tab';",
+        "global.display.grab_accelerator(",
+        "'accelerator-activated'",
+        "this._button.menu.toggle()",
+        "global.display.ungrab_accelerator(",
+        "org.gnome.desktop.wm.keybindings",
+        "const SWITCH_GROUP_KEY = 'switch-group';",
+        "set_strv(SWITCH_GROUP_KEY",
+    ] {
+        assert!(js.contains(required), "{required}");
+    }
+}
+
+#[test]
 fn panel_running_count_is_left_of_icon() {
     let js = read("acc-model-status@local/extension.js");
     let empty = extract_method(&js, "_renderEmpty");
@@ -413,6 +430,7 @@ fn model_status_metadata_and_styles() {
     let metadata: Value =
         serde_json::from_str(&read("acc-model-status@local/metadata.json")).unwrap();
     assert_eq!(metadata["uuid"], "acc-model-status@local");
+    assert_eq!(metadata["version"], 7);
     let versions = metadata["shell-version"]
         .as_array()
         .unwrap()
