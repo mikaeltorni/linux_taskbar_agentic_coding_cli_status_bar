@@ -386,6 +386,8 @@ fn model_status_menu_hotkey_is_registered_and_released() {
     let js = code_only(&read("acc-model-status@local/extension.js"));
     for required in [
         "const AGENT_STATUS_MENU_ACCELERATOR = '<Alt>Above_Tab';",
+        "const AGENT_STATUS_MENU_ACCELERATOR_CANDIDATES = [",
+        "for (const accelerator of AGENT_STATUS_MENU_ACCELERATOR_CANDIDATES)",
         "global.display.grab_accelerator(",
         "'accelerator-activated'",
         "this._button.menu.toggle()",
@@ -432,7 +434,7 @@ fn model_status_metadata_and_styles() {
     let metadata: Value =
         serde_json::from_str(&read("acc-model-status@local/metadata.json")).unwrap();
     assert_eq!(metadata["uuid"], "acc-model-status@local");
-    assert_eq!(metadata["version"], 8);
+    assert_eq!(metadata["version"], 9);
     let versions = metadata["shell-version"]
         .as_array()
         .unwrap()
