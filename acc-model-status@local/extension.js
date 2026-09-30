@@ -42,6 +42,10 @@ const STATE_DIR_NAME = 'codex-agent-tracker';
 const STATE_DIR_ENV = 'CODEX_AGENT_TRACKER_STATE_DIR';
 /** Layout-independent Alt+§ accelerator that opens the agent status menu. */
 const AGENT_STATUS_MENU_ACCELERATOR = '<Alt>Above_Tab';
+/** Mutter names for the physical key above Tab, tried in compatibility order. */
+const AGENT_STATUS_MENU_ACCELERATOR_CANDIDATES = [
+    '<Alt>Above_Tab', '<Alt>section', '<Alt>grave', '<Alt>0x31',
+];
 /** Mutter key names that can alias the physical key above Tab. */
 const AGENT_STATUS_MENU_ACCELERATORS = new Set(['<alt>above_tab', '<alt>section', '<alt>grave', '<alt>0x31']);
 /** Preserve the user's group-switch accelerators while this extension is active. */
@@ -1382,13 +1386,18 @@ export default class AccModelStatusExtension extends Extension {
         if (!this._reserveMenuAccelerator())
             return;
 
-        try {
-            this._menuAcceleratorId = global.display.grab_accelerator(
-                AGENT_STATUS_MENU_ACCELERATOR, Meta.KeyBindingFlags.NONE);
-        } catch (error) {
-            logError(error, 'acc-model-status: could not register Alt+§ menu shortcut');
-            this._restoreMenuAccelerator();
-            return;
+        this._menuAcceleratorId = Meta.KeyBindingAction.NONE;
+        for (const accelerator of AGENT_STATUS_MENU_ACCELERATOR_CANDIDATES) {
+            try {
+                const action = global.display.grab_accelerator(
+                    accelerator, Meta.KeyBindingFlags.NONE);
+                if (action !== Meta.KeyBindingAction.NONE) {
+                    this._menuAcceleratorId = action;
+                    break;
+                }
+            } catch (error) {
+                logError(error, `acc-model-status: could not register ${accelerator}`);
+            }
         }
         if (this._menuAcceleratorId === Meta.KeyBindingAction.NONE) {
             log('acc-model-status: unable to register Alt+§ menu shortcut');
