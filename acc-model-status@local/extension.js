@@ -25,6 +25,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -40,14 +41,6 @@ const UNREAD_FILENAME = 'model-status-unread.json';
 const STATE_DIR_NAME = 'codex-agent-tracker';
 /** Environment override honored by the tracker (and therefore by us). */
 const STATE_DIR_ENV = 'CODEX_AGENT_TRACKER_STATE_DIR';
-/** Layout-independent Alt+§ accelerator that opens the agent status menu. */
-const AGENT_STATUS_MENU_ACCELERATOR = '<Alt>Above_Tab';
-/** Mutter names for the physical key above Tab, tried in compatibility order. */
-const AGENT_STATUS_MENU_ACCELERATOR_CANDIDATES = [
-    '<Alt>Above_Tab', '<Alt>section', '<Alt>grave', '<Alt>0x31',
-];
-/** Allow Mutter's previous group-switch grab to settle before retrying. */
-const MENU_ACCELERATOR_REGISTER_DELAY_MS = 250;
 /** Mutter key names that can alias the physical key above Tab. */
 const AGENT_STATUS_MENU_ACCELERATORS = new Set(['<alt>above_tab', '<alt>section', '<alt>grave', '<alt>0x31']);
 /** Preserve the user's group-switch accelerators while this extension is active. */
@@ -1388,60 +1381,35 @@ export default class AccModelStatusExtension extends Extension {
         if (!this._reserveMenuAccelerator())
             return;
 
-        this._menuAcceleratorRegisterId = GLib.timeout_add(
-            GLib.PRIORITY_DEFAULT, MENU_ACCELERATOR_REGISTER_DELAY_MS, () => {
-                this._menuAcceleratorRegisterId = 0;
-                this._registerMenuAccelerator();
-                return GLib.SOURCE_REMOVE;
-            });
-    }
-
-    /** Register the menu accelerator after GNOME releases the displaced binding. */
-    _registerMenuAccelerator() {
-        this._menuAcceleratorId = Meta.KeyBindingAction.NONE;
-        for (const accelerator of AGENT_STATUS_MENU_ACCELERATOR_CANDIDATES) {
-            try {
-                const action = global.display.grab_accelerator(
-                    accelerator, Meta.KeyBindingFlags.NONE);
-                if (action !== Meta.KeyBindingAction.NONE) {
-                    this._menuAcceleratorId = action;
-                    break;
-                }
-            } catch (error) {
-                logError(error, `acc-model-status: could not register ${accelerator}`);
-            }
-        }
-        if (this._menuAcceleratorId === Meta.KeyBindingAction.NONE) {
-            log('acc-model-status: unable to register Alt+§ menu shortcut');
+        try {
+            this._menuAcceleratorSettings = this.getSettings();
+            Main.wm.addKeybinding(
+                'menu-accelerator',
+                this._menuAcceleratorSettings,
+                Meta.KeyBindingFlags.NONE,
+                Shell.ActionMode.ALL,
+                () => {
+                    if (this._button) {
+                        this._button.menu.toggle();
+                        log('acc-model-status: toggled menu with Alt+§');
+                    }
+                },
+            );
+            this._menuAcceleratorRegistered = true;
+            log('acc-model-status: registered Alt+§ menu shortcut');
+        } catch (error) {
+            logError(error, 'acc-model-status: could not register Alt+§ menu shortcut');
             this._restoreMenuAccelerator();
-            return;
         }
-        this._menuAcceleratorSignal = global.display.connect(
-            'accelerator-activated', (_display, action) => {
-                if (action !== this._menuAcceleratorId)
-                    return;
-                if (this._button) {
-                    this._button.menu.toggle();
-                    log('acc-model-status: toggled menu with Alt+§');
-                }
-            });
-        log('acc-model-status: registered Alt+§ menu shortcut');
     }
 
     /** Remove the indicator and every resource it owns. */
     disable() {
-        if (this._menuAcceleratorRegisterId) {
-            GLib.source_remove(this._menuAcceleratorRegisterId);
-            this._menuAcceleratorRegisterId = 0;
+        if (this._menuAcceleratorRegistered) {
+            Main.wm.removeKeybinding('menu-accelerator');
+            this._menuAcceleratorRegistered = false;
         }
-        if (this._menuAcceleratorSignal) {
-            global.display.disconnect(this._menuAcceleratorSignal);
-            this._menuAcceleratorSignal = 0;
-        }
-        if (this._menuAcceleratorId &&
-            !global.display.ungrab_accelerator(this._menuAcceleratorId))
-            log('acc-model-status: unable to release Alt+§ menu shortcut');
-        this._menuAcceleratorId = 0;
+        this._menuAcceleratorSettings = null;
         this._restoreMenuAccelerator();
         this._button?.destroy();
         this._button = null;

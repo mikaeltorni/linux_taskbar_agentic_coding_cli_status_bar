@@ -890,6 +890,7 @@ acs_detect_startup_service() {
 ACS_MODEL_STATUS_FILES=(
   "extension.js"
   "metadata.json"
+  "schemas/org.gnome.shell.extensions.acc-model-status.gschema.xml"
   "stylesheet.css"
   "icons/acc-provider-api-symbolic.svg"
   "icons/acc-provider-claude-symbolic.svg"
@@ -917,7 +918,7 @@ acs_install_model_status_bar() {
   ext_dst="$(acs_model_status_dir)"
   msg "Deploying model status bar extension $MODEL_STATUS_UUID"
   acs_log INFO "installing $MODEL_STATUS_UUID from $MODEL_STATUS_SRC"
-  run_as_target mkdir -p "$ext_dst/icons"
+  run_as_target mkdir -p "$ext_dst/icons" "$ext_dst/schemas"
   for file in "${ACS_MODEL_STATUS_FILES[@]}"; do
     if [ ! -f "$MODEL_STATUS_SRC/$file" ]; then
       msg "Missing extension file $MODEL_STATUS_UUID/$file; aborting deploy." >&2
@@ -926,6 +927,11 @@ acs_install_model_status_bar() {
     fi
     run_as_target cp "$MODEL_STATUS_SRC/$file" "$ext_dst/$file"
   done
+  if command -v glib-compile-schemas >/dev/null 2>&1; then
+    run_as_target glib-compile-schemas "$ext_dst/schemas"
+  else
+    msg "glib-compile-schemas unavailable; model status keybinding may activate after package installation." >&2
+  fi
 
   if run_as_target env XDG_RUNTIME_DIR="$RUNTIME_DIR" \
       DBUS_SESSION_BUS_ADDRESS="$USER_BUS" DISPLAY="$DISPLAY_VAL" \
