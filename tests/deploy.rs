@@ -310,9 +310,11 @@ fn model_status_extension_contract() {
     let code = code_only(&js);
     assert!(code.contains("model_status_bar.json"));
     assert!(code.contains("CODEX_AGENT_TRACKER_STATE_DIR"));
-    for forbidden in ["GLib.spawn", "Gio.Subprocess", "Soup", "subprocess"] {
+    for forbidden in ["GLib.spawn", "Soup", "subprocess"] {
         assert!(!code.contains(forbidden), "{forbidden}");
     }
+    assert!(code.contains("Gio.Subprocess.new"));
+    assert!(code.contains("this._focusAgent(noteId)"));
     for required in [
         "global.workspace_manager.get_active_workspace()",
         "global.get_window_actors()",
@@ -430,7 +432,7 @@ fn model_status_metadata_and_styles() {
     let metadata: Value =
         serde_json::from_str(&read("acc-model-status@local/metadata.json")).unwrap();
     assert_eq!(metadata["uuid"], "acc-model-status@local");
-    assert_eq!(metadata["version"], 7);
+    assert_eq!(metadata["version"], 8);
     let versions = metadata["shell-version"]
         .as_array()
         .unwrap()

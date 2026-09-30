@@ -10,8 +10,9 @@
  *     `model_status_bar.json` into the tracker state directory.
  *   - This extension joins that document to GNOME Shell's live window metadata
  *     so only agents with an open terminal window are rendered, across every
- *     workspace. It never scans tmux, spawns a subprocess, or talks to the
- *     network; it watches the file and Shell window/workspace signals directly.
+ *     workspace. It never scans tmux or talks to the network; it watches the
+ *     file and Shell window/workspace signals directly. Activating an agent
+ *     row launches ACC's shared window selector for that exact note id.
  *
  * Components:
  *   AccModelStatusButton  panel button: segment box + agent list menu
@@ -1223,13 +1224,16 @@ class AccModelStatusButton extends PanelMenu.Button {
      * @param {object} agent - agent entry enriched from its live window.
      * @param {object} provider - provider metadata owning the agent.
      * @param {number} codexInstanceCount - registered accounts for CX tag colors.
-     * @returns {PopupMenu.PopupBaseMenuItem} the non-reactive row.
+     * @returns {PopupMenu.PopupBaseMenuItem} the agent row.
      */
     _agentMenuItem(agent, provider, codexInstanceCount) {
+        const noteId = String(agent.note_id || '').trim();
         const item = new PopupMenu.PopupBaseMenuItem({
-            reactive: false,
-            can_focus: false,
+            reactive: Boolean(noteId),
+            can_focus: Boolean(noteId),
         });
+        if (noteId)
+            item.connect('activate', () => this._focusAgent(noteId));
         if (agent.unread_completion)
             item.actor.add_style_class_name('ams-agent-unread');
         const row = new St.BoxLayout({style_class: 'ams-agent-row'});
@@ -1297,6 +1301,33 @@ class AccModelStatusButton extends PanelMenu.Button {
 
         item.add_child(row);
         return item;
+    }
+
+    /** Activate one agent terminal through ACC's shared focus-and-pointer selector. */
+    _focusAgent(noteId) {
+        const targetNoteId = String(noteId || '').trim();
+        if (!targetNoteId) {
+            log('acc-model-status: cannot focus an agent without a note id');
+            return;
+        }
+        const selectorPath = GLib.build_filenamev([
+            GLib.get_home_dir(), '.local', 'bin', 'acc-window-select',
+        ]);
+        try {
+            const process = Gio.Subprocess.new(
+                [selectorPath, '--note-id', targetNoteId],
+                Gio.SubprocessFlags.NONE,
+            );
+            process.wait_check_async(null, (child, result) => {
+                try {
+                    child.wait_check_finish(result);
+                } catch (error) {
+                    logError(error, 'acc-model-status: agent terminal focus failed');
+                }
+            });
+        } catch (error) {
+            logError(error, 'acc-model-status: could not launch agent terminal selector');
+        }
     }
 
     /** Tear down timers and the file monitor before the actor goes away. */

@@ -305,7 +305,8 @@ status line:
 Press **Alt+§** (`Alt+Above_Tab`) to open the agent status menu. While this
 extension is enabled, it temporarily takes that accelerator from GNOME's
 window-group switcher and restores the existing shortcut list when disabled or
-uninstalled.
+uninstalled. Click an agent row to focus its matching terminal and move the
+pointer to that window, using ACC's shared `acc-window-select --note-id` path.
 
 ```bash
 bash install.sh --select model_status_bar     # install just this component
@@ -316,7 +317,8 @@ It has no poller of its own: it renders
 `~/.local/state/codex-agent-tracker/model_status_bar.json`, which the Agent
 Command Center monitor publishes (honoring `CODEX_AGENT_TRACKER_STATE_DIR`).
 It joins those agent rows to GNOME's live window titles and actual workspace
-metadata; no subprocess or tmux polling is involved. Segments are green while
+metadata; it only launches the shared selector when an agent row is clicked,
+and never polls tmux. Segments are green while
 agents run, yellow when an agent needs input, gray when idle, and dimmed when
 the payload stops being refreshed.
 In the Agent Command Center menu, a Codex row queued for auto-continue shows
