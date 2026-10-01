@@ -1234,7 +1234,7 @@ class AccModelStatusButton extends PanelMenu.Button {
      */
     _agentMenuItem(agent, provider, codexInstanceCount) {
         const noteId = String(agent.note_id || '').trim();
-        const actionable = Boolean(noteId) && Boolean(agent.unread_completion);
+        const actionable = Boolean(noteId);
         const item = new PopupMenu.PopupBaseMenuItem({
             reactive: actionable,
             can_focus: actionable,
