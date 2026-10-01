@@ -309,10 +309,13 @@ status line:
 Click the panel indicator or press **Alt+§** (`Alt+Above_Tab`) to open the agent
 status menu. While this extension is enabled, it temporarily takes that
 accelerator from GNOME's window-group switcher and restores the existing
-shortcut list when disabled or uninstalled. Only green, finished-but-unopened
-agent rows are clickable; selecting one focuses its matching terminal and
+shortcut list when disabled or uninstalled. Every displayed live agent with a
+window identity is clickable, including running and already-opened agents;
+selecting one focuses its matching terminal and
 moves the pointer to that window through ACC's shared selector,
 `acc-window-select --note-id`.
+Green highlighting marks finished-but-unopened work, not click eligibility.
+Super+§ still cycles only through unopened completions.
 While the menu is open, its rows and panel layout remain a stable snapshot so
 background status updates cannot move or replace a row mid-click. Existing
 run clocks keep ticking; status changes appear immediately after dismissal.

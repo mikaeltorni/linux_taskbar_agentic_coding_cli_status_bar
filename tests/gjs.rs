@@ -1442,7 +1442,8 @@ const PopupMenu = {
         constructor(options) {
             this.options = options;
             this.handlers = {};
-            this.actor = {add_style_class_name() {}};
+            this.styles = [];
+            this.actor = {add_style_class_name: name => this.styles.push(name)};
         }
         connect(name, callback) { this.handlers[name] = callback; }
         add_child() {}
@@ -1468,10 +1469,15 @@ function agentPhaseBadgeColor() { return '#fff'; }
         r#"
 const unread = extension._agentMenuItem({note_id: 'note-unread', unread_completion: true}, {}, 0);
 const read = extension._agentMenuItem({note_id: 'note-read', unread_completion: false}, {}, 0);
+const running = extension._agentMenuItem({note_id: 'note-running', phase: 'RUNNING', unread_completion: false}, {}, 0);
+const waiting = extension._agentMenuItem({note_id: 'note-waiting', phase: 'WAITING', unread_completion: false}, {}, 0);
+const stopped = extension._agentMenuItem({note_id: 'note-stopped', phase: 'STOPPED', unread_completion: false}, {}, 0);
 const missing = extension._agentMenuItem({unread_completion: true}, {}, 0);
-for (const row of [unread, read, missing]) row.handlers.activate?.();
+const rows = [unread, read, running, waiting, stopped, missing];
+for (const row of rows) row.handlers.activate?.();
 print(JSON.stringify({
-    options: [unread.options, read.options, missing.options],
+    options: rows.map(row => row.options),
+    highlighted: rows.map(row => row.styles.includes('ams-agent-unread')),
     focused,
 }));
 "#,
@@ -1481,10 +1487,14 @@ print(JSON.stringify({
         serde_json::json!({
             "options": [
                 {"reactive": true, "can_focus": true},
-                {"reactive": false, "can_focus": false},
+                {"reactive": true, "can_focus": true},
+                {"reactive": true, "can_focus": true},
+                {"reactive": true, "can_focus": true},
+                {"reactive": true, "can_focus": true},
                 {"reactive": false, "can_focus": false},
             ],
-            "focused": ["note-unread"],
+            "highlighted": [true, false, false, false, false, true],
+            "focused": ["note-unread", "note-read", "note-running", "note-waiting", "note-stopped"],
         })
     );
 

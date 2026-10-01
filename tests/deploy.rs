@@ -433,7 +433,7 @@ fn model_status_metadata_and_styles() {
     let metadata: Value =
         serde_json::from_str(&read("acc-model-status@local/metadata.json")).unwrap();
     assert_eq!(metadata["uuid"], "acc-model-status@local");
-    assert_eq!(metadata["version"], 14);
+    assert_eq!(metadata["version"], 15);
     let settings_schema = "org.gnome.shell.extensions.acc-model-status";
     assert_eq!(metadata["settings-schema"], settings_schema);
     let schema = read(
