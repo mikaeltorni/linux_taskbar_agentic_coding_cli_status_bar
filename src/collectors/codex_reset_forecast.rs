@@ -543,6 +543,12 @@ fn fetch_site(
 }
 
 /// Whether a dated prediction is still inside its vote window at `now`.
+///
+/// Daily Codex markets resolve by 11:59 PM ET on the named date. Gamma stores
+/// that instant as UTC `endDate` (during EDT, `…T03:59:00Z` on the following
+/// UTC calendar day). Compare that epoch to the collector's `SystemTime`
+/// clock. `endDateIso` is the UTC date of expiry, and `groupItemTitle` is a
+/// timezone-less label, so neither one is the cutoff.
 fn vote_window_open(prediction: &Prediction, now: f64) -> bool {
     match prediction.end_at {
         Some(end_at) => now < end_at,
@@ -1927,6 +1933,44 @@ mod tests {
             "expired date must drop inside the throttle window without a refetch"
         );
         let site = polymarket_site(&second);
+        assert_eq!(site["predictions"], json!([]));
+        assert_eq!(site["detail"], json!("no open market"));
+    }
+
+    #[test]
+    fn polymarket_visibility_flips_at_the_et_vote_deadline_encoded_as_utc() {
+        // 11:59 PM ET on September 29 during EDT is 2026-09-30T03:59:00Z.
+        let end = parse_iso_epoch("2026-09-30T03:59:00Z").unwrap() as f64;
+        let body = daily_gamma_event(vec![daily_gamma_market(
+            "September 29",
+            "2026-09-30T03:59:00Z",
+            "2026-09-30",
+        )]);
+        let before = collect_polymarket_at(&body, end - 1.0, None);
+        assert_eq!(
+            polymarket_site(&before)["predictions"][0]["label"],
+            json!("September 29")
+        );
+        let at_deadline = collect_polymarket_at(&body, end, None);
+        assert_eq!(polymarket_site(&at_deadline)["predictions"], json!([]));
+        assert_eq!(
+            polymarket_site(&at_deadline)["detail"],
+            json!("no open market")
+        );
+    }
+
+    #[test]
+    fn end_date_iso_utc_calendar_day_does_not_keep_a_market_alive_after_end_date() {
+        // Named September 29; endDateIso is 2026-09-30 (UTC date of expiry).
+        // 04:00 UTC on September 30 is still that ISO date, after 11:59 PM ET.
+        let now = parse_iso_epoch("2026-09-30T04:00:00Z").unwrap() as f64;
+        let body = daily_gamma_event(vec![daily_gamma_market(
+            "September 29",
+            "2026-09-30T03:59:00Z",
+            "2026-09-30",
+        )]);
+        let result = collect_polymarket_at(&body, now, None);
+        let site = polymarket_site(&result);
         assert_eq!(site["predictions"], json!([]));
         assert_eq!(site["detail"], json!("no open market"));
     }
