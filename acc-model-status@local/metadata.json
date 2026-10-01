@@ -1,7 +1,8 @@
 {
   "uuid": "acc-model-status@local",
+  "settings-schema": "org.gnome.shell.extensions.acc-model-status",
   "name": "ACC Model Status",
   "description": "Optional taskbar indicator showing Agent Command Center providers and open agent windows across every workspace.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version": 11
+  "version": 12
 }
