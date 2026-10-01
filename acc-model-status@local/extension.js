@@ -764,6 +764,11 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._box = new St.BoxLayout({style_class: 'ams-box panel-status-menu-box'});
         this.add_child(this._box);
 
+        this.menu.connect('open-state-changed', (_menu, isOpen) => {
+            if (!isOpen)
+                this._queueRefresh();
+        });
+
         this._startWatching();
         this._startWindowWatching();
         this._refresh();
@@ -896,6 +901,8 @@ class AccModelStatusButton extends PanelMenu.Button {
 
     /** Re-read the payload and repaint the panel segments and the menu. */
     _refresh() {
+        if (this.menu.isOpen)
+            return;
         const published = readPayload(this._file);
         const windows = this._openWindowDescriptors();
         const payload = published
@@ -1310,6 +1317,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             log('acc-model-status: cannot focus an agent without a note id');
             return;
         }
+        this.menu.close();
         const selectorPath = GLib.build_filenamev([
             GLib.get_home_dir(), '.local', 'bin', 'acc-window-select',
         ]);
