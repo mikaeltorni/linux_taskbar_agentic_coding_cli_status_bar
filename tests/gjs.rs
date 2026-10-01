@@ -1355,6 +1355,81 @@ fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
 }
 
 #[test]
+fn model_status_menu_keeps_click_targets_until_closed() {
+    let model =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let methods = ["_init", "_refresh", "_queueRefresh"]
+        .map(|name| extract_method(&model, name))
+        .join("\n");
+    let stubs = r#"
+let reads = 0;
+let removals = 0;
+const callbacks = [];
+const GLib = {PRIORITY_DEFAULT: 0, SOURCE_REMOVE: false,
+    timeout_add(_priority, _delay, callback) { callbacks.push(callback); return callbacks.length; }};
+const St = {BoxLayout: class {destroy_all_children() {}}};
+const UNREAD_FILENAME = 'unread.json';
+function payloadFile() { return {get_parent() { return {get_child() { return {}; }}; }}; }
+function readUnreadStates() { return new Map(); }
+function readPayload() { reads++; return null; }
+function log() {}
+function panelHarnessRateRows() { return []; }
+class Base {
+    _init() {
+        this.menu = {isOpen: false, handlers: {}, rows: [{}],
+            connect(name, callback) { this.handlers[name] = callback; },
+            removeAll() { removals++; this.rows = []; }};
+    }
+    add_child() {}
+    _startWatching() {}
+    _startWindowWatching() {}
+    _openWindowDescriptors() { return []; }
+    _renderEmpty() { this.menu.rows = [{}]; }
+    _syncGlowTimer() {}
+    _syncRunClockTimer() {}
+}
+"#
+    .to_string();
+    let button = format!("class Button extends Base {{ {methods} }}");
+    let result = run_gjs(
+        &[stubs, button],
+        r#"
+const button = new Button();
+button._init({dir: {get_child() { return {}; }}});
+const snapshots = [];
+for (let cycle = 0; cycle < 2; cycle++) {
+    button.menu.isOpen = true;
+    button.menu.handlers['open-state-changed']?.(button.menu, true);
+    const target = button.menu.rows[0];
+    const clocks = button._runClockActors;
+    for (let tick = 0; tick < 5; tick++) {
+        button._queueRefresh();
+        callbacks.shift()();
+        button._refresh();
+    }
+    snapshots.push({reads, removals, sameTarget: target === button.menu.rows[0],
+        sameClocks: clocks === button._runClockActors});
+    button.menu.isOpen = false;
+    button.menu.handlers['open-state-changed']?.(button.menu, false);
+    const queued = callbacks.length;
+    callbacks.shift()?.();
+    snapshots.push({reads, removals, queued});
+}
+print(JSON.stringify(snapshots));
+"#,
+    );
+    assert_eq!(
+        result,
+        serde_json::json!([
+            {"reads": 1, "removals": 1, "sameTarget": true, "sameClocks": true},
+            {"reads": 2, "removals": 2, "queued": 1},
+            {"reads": 2, "removals": 2, "sameTarget": true, "sameClocks": true},
+            {"reads": 3, "removals": 3, "queued": 1},
+        ])
+    );
+}
+
+#[test]
 fn model_status_menu_rows_focus_the_exact_agent_through_acc() {
     let model =
         fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
@@ -1416,6 +1491,8 @@ print(JSON.stringify({
     let focus = extract_method(&model, "_focusAgent");
     let gio_stub = r#"
 const launched = [];
+const ordering = [];
+const menu = {close() { ordering.push('close'); }};
 const GLib = {
     build_filenamev(parts) { return parts.join('/'); },
     get_home_dir() { return '/home/test'; },
@@ -1424,6 +1501,7 @@ const Gio = {
     SubprocessFlags: {NONE: 0},
     Subprocess: {
         new(argv, flags) {
+            ordering.push('launch');
             launched.push({argv: [...argv], flags});
             return {
                 wait_check_async(_cancellable, callback) { callback(this, {}); },
@@ -1435,17 +1513,17 @@ const Gio = {
 function logError(_error, _message) {}
     "#
     .to_string();
-    let extension = format!("const extension = {{ {} }};", focus);
+    let extension = format!("const extension = {{ menu, {} }};", focus);
     let result = run_gjs(
         &[gio_stub, extension],
-        "extension._focusAgent('note-123'); extension._focusAgent('  '); print(JSON.stringify(launched));",
+        "extension._focusAgent('note-123'); extension._focusAgent('  '); print(JSON.stringify({launched, ordering}));",
     );
     assert_eq!(
         result,
-        serde_json::json!([{
+        serde_json::json!({"launched": [{
             "argv": ["/home/test/.local/bin/acc-window-select", "--note-id", "note-123"],
             "flags": 0
-        }])
+        }], "ordering": ["close", "launch"]})
     );
 }
 
