@@ -1359,9 +1359,59 @@ fn model_status_menu_rows_focus_the_exact_agent_through_acc() {
     let model =
         fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let menu = extract_method(&model, "_agentMenuItem");
-    assert!(menu.contains("reactive: Boolean(noteId)"));
-    assert!(menu.contains("can_focus: Boolean(noteId)"));
-    assert!(menu.contains("item.connect('activate', () => this._focusAgent(noteId))"));
+    let item = format!("const menuBuilder = {{ {} }};", menu);
+    let stubs = r#"
+const focused = [];
+const PopupMenu = {
+    PopupBaseMenuItem: class {
+        constructor(options) {
+            this.options = options;
+            this.handlers = {};
+            this.actor = {add_style_class_name() {}};
+        }
+        connect(name, callback) { this.handlers[name] = callback; }
+        add_child() {}
+    },
+};
+const St = {
+    BoxLayout: class { add_child() {} },
+    Icon: class {},
+    Label: class { set_style() {} },
+};
+const Clutter = {ActorAlign: {CENTER: 0}};
+function codexInstanceLabel() { return null; }
+function agentPhaseBadgeText() { return 'DONE'; }
+function agentPhaseBadgeColor() { return '#fff'; }
+"#
+    .to_string();
+    let extension = format!(
+        "{}\nconst extension = Object.assign({{_runClockActors: [], _icon() {{ return {{}}; }}, _focusAgent(noteId) {{ focused.push(noteId); }} }}, menuBuilder);",
+        item
+    );
+    let result = run_gjs(
+        &[stubs, extension],
+        r#"
+const unread = extension._agentMenuItem({note_id: 'note-unread', unread_completion: true}, {}, 0);
+const read = extension._agentMenuItem({note_id: 'note-read', unread_completion: false}, {}, 0);
+const missing = extension._agentMenuItem({unread_completion: true}, {}, 0);
+for (const row of [unread, read, missing]) row.handlers.activate?.();
+print(JSON.stringify({
+    options: [unread.options, read.options, missing.options],
+    focused,
+}));
+"#,
+    );
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "options": [
+                {"reactive": true, "can_focus": true},
+                {"reactive": false, "can_focus": false},
+                {"reactive": false, "can_focus": false},
+            ],
+            "focused": ["note-unread"],
+        })
+    );
 
     let focus = extract_method(&model, "_focusAgent");
     let gio_stub = r#"
