@@ -313,6 +313,12 @@ bash install.sh --select model_status_bar     # install just this component
 bash install.sh --uninstall model_status_bar  # remove it again
 ```
 
+The Codex mark copied by that install is
+`acc-model-status@local/icons/acc-provider-codex-symbolic.svg` (panel name
+`acc-provider-codex-symbolic`). It is a 16×16 symbolic ChatGPT blossom: six
+curved segments in six-fold symmetry around an open center, with a single
+recolorable `#2e3436` fill.
+
 It has no poller of its own: it renders
 `~/.local/state/codex-agent-tracker/model_status_bar.json`, which the Agent
 Command Center monitor publishes (honoring `CODEX_AGENT_TRACKER_STATE_DIR`).
