@@ -312,6 +312,11 @@ excluded; legacy phase-only plans count each enabled phase once. Missing plans
 show no progress fill. The background follows the row's width, preserves its
 focus/click behavior, and updates in place while the menu is open. At confirmed
 completion, it disappears in the same refresh that applies the green glow.
+The status badge shows `[1/4] 2:05`: completed/total actionable steps in the
+current phase, in brackets immediately before the timer, without a phase name.
+Legacy plans without microsteps use completed/enabled phases. Missing or invalid
+counts omit the brackets, and confirmed completion removes the count. The live
+clock and count update together while the menu remains open.
 Focusing a completed task removes its unread glow without bringing the old
 progress fill back; a new running turn can show progress again.
 

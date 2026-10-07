@@ -12,3 +12,7 @@ GJS drawing checks use stub actors and fresh cases; they do not access the deskt
 | Legacy payload fraction | Existing fill tests retain their independently expected widths |
 
 No command parsers change; numeric conversion and operand validation are inapplicable.
+
+| Compact active-phase counts before timer | model_status_compact_workflow_count_precedes_timer: `[1/4] 2:05`, next tick `[1/4] 2:06`, zero `[0/4]`, full `[4/4]`; no phase name |
+| Bad/missing count operands, confirmed completion | Same GJS case: negative, fractional, zero-total, excessive, string, missing and NaN counts omit brackets; confirmed/unread DONE omits progress |
+| Queued reset timer and waiting state | Same case: `[1/4] -1:00` and `[1/4] WAITING`; existing plain clocks and colors retained |

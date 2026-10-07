@@ -117,7 +117,8 @@ function formatRunTimer(seconds) {
  * Visible badge text for one click-menu agent row.
  *
  * A queued auto-continue shows a negative reset clock; a live run with a known
- * start shows the elapsed clock. Other phases keep their phase word.
+ * start shows the elapsed clock. Measured workflow counts precede the clock
+ * in brackets without a phase name. Other phases keep their phase word.
  *
  * @param {object} agent - payload agent row.
  * @param {number} [nowMs] - clock override in milliseconds (tests).
@@ -125,19 +126,25 @@ function formatRunTimer(seconds) {
  */
 function agentPhaseBadgeText(agent, nowMs) {
     const phase = String(agent && agent.phase || 'UNKNOWN').trim().toUpperCase();
+    const completed = agent?.workflow?.phase_completed;
+    const total = agent?.workflow?.phase_total;
+    const showProgress = !agent?.unread_completion && !(phase === 'DONE' && agent?.ready_completed_at) &&
+        Number.isInteger(completed) && Number.isInteger(total) &&
+        total > 0 && completed >= 0 && completed <= total;
+    const prefix = showProgress ? `[${completed}/${total}] ` : '';
     const resetAt = Date.parse(agent && agent.queued_reset_at || '');
     if (!Number.isNaN(resetAt)) {
         const now = Number.isFinite(nowMs) ? nowMs : Date.now();
         if (resetAt > now)
-            return `-${formatRunTimer(Math.ceil((resetAt - now) / 1000))}`;
+            return `${prefix}-${formatRunTimer(Math.ceil((resetAt - now) / 1000))}`;
     }
     const started = Date.parse(agent && agent.run_started_at || '');
     const active = Boolean(agent && agent.run_active);
     if (phase === 'RUNNING' && active && !Number.isNaN(started)) {
         const now = Number.isFinite(nowMs) ? nowMs : Date.now();
-        return formatRunTimer((now - started) / 1000);
+        return `${prefix}${formatRunTimer((now - started) / 1000)}`;
     }
-    return phase;
+    return `${prefix}${phase}`;
 }
 
 /**
