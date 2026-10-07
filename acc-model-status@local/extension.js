@@ -786,6 +786,80 @@ function taskProgressRectangles(agent, width) {
     return rects;
 }
 
+/**
+ * Extract remaining-work fields for agents currently doing work.
+ * Parameters: payload - normalized local ACC snapshot, or null when unavailable.
+ * Returns: estimate records for active agents across all providers/workspaces.
+ */
+function activeTaskEstimates(payload) {
+    print(`payload=${JSON.stringify(payload)}`);
+    const estimates = [];
+    const providers = Array.isArray(payload?.providers) ? payload.providers : [];
+    for (const provider of providers) {
+        const agents = Array.isArray(provider?.agents) ? provider.agents : [];
+        for (const agent of agents) {
+            if (agent?.phase !== 'RUNNING' || agent?.run_active !== true)
+                continue;
+            estimates.push({
+                status: agent.task_time_estimate?.status || 'unavailable',
+                remainingSeconds: agent.task_time_estimate?.remaining_seconds,
+            });
+        }
+    }
+    print(JSON.stringify(estimates));
+    return estimates;
+}
+
+/**
+ * Select the largest measured remaining work without adding parallel tasks.
+ * Parameters: estimates - active-agent estimate records from activeTaskEstimates.
+ * Returns: maximum valid duration and its status, or an explicit unknown state.
+ */
+function longestTaskEstimate(estimates) {
+    print(`estimates=${JSON.stringify(estimates)}`);
+    let remainingSeconds = null;
+    let status = 'inactive';
+    for (const estimate of estimates) {
+        const seconds = estimate.remainingSeconds;
+        if (estimate.status === 'estimated' && typeof seconds === 'number' &&
+            Number.isFinite(seconds) && seconds > 0) {
+            remainingSeconds = Math.max(remainingSeconds || 0, seconds);
+        } else if (estimate.status === 'overrun' && status === 'inactive') {
+            status = 'overrun';
+        } else if (estimate.status !== 'overrun') {
+            status = 'learning';
+        }
+    }
+    const result = {remainingSeconds, status: remainingSeconds === null ? status : 'estimated'};
+    print(JSON.stringify(result));
+    return result;
+}
+
+/**
+ * Format the selected historical duration in compact rounded-up minutes.
+ * Parameters: estimate - maximum remaining work and availability status.
+ * Returns: panel label, or empty text when no agent is actively working.
+ */
+function formatPanelTaskEstimate(estimate) {
+    print(`estimate=${JSON.stringify(estimate)}`);
+    let text = '';
+    if (estimate.status === 'estimated') {
+        const minutes = Math.ceil(estimate.remainingSeconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const remainder = minutes % 60;
+        const duration = hours > 0
+            ? `${hours}h${remainder ? ` ${remainder}m` : ''}`
+            : `${minutes}m`;
+        text = `~${duration} left`;
+    } else if (estimate.status === 'learning') {
+        text = 'learning';
+    } else if (estimate.status === 'overrun') {
+        text = 'past estimate';
+    }
+    print(text);
+    return text;
+}
+
 /** Read ACC's local forecast for timed tasks; idle/completed tasks have none. */
 function taskEstimateText(agent) {
     const timed = (agent?.phase === 'RUNNING' && agent?.run_active) ||
@@ -1033,13 +1107,21 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
     }
 
-    /** Re-read the payload and repaint the panel segments and the menu. */
+    /**
+     * Refresh panel estimates and repaint closed menus from the local snapshot.
+     * Parameters: this - model-status button whose panel and menu are refreshed.
+     * Returns: undefined.
+     */
     _refresh() {
+        print(`this=${this}`);
         const published = readPayload(this._file);
         const windows = this._openWindowDescriptors();
         const payload = published
             ? scopePayloadToWindows(published, windows)
             : null;
+        const panelEstimate = formatPanelTaskEstimate(
+            longestTaskEstimate(activeTaskEstimates(published)));
+        const stale = published ? ageSeconds(published.updatedAt) > STALE_SECONDS : false;
         const previousUnreadState = JSON.stringify([...this._unreadStates]);
         const previousUnreadCount = this._unreadCount;
         this._unreadCount = payload
@@ -1052,11 +1134,14 @@ class AccModelStatusButton extends PanelMenu.Button {
         if (this.menu.isOpen) {
             // Preserve row identities while refreshing progress and glow together.
             this._updateTaskRows(payload);
+            this._updatePanelTaskEstimate(panelEstimate, stale);
             this._syncGlowTimer();
+            print(undefined);
             return;
         }
         this._taskRows.clear();
         this._box.destroy_all_children();
+        this._panelTaskEstimate = null;
         this.menu.removeAll();
         // Run clocks are re-collected on every repaint; never keep stale ones.
         this._runClockActors = [];
@@ -1065,7 +1150,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._renderHarnessRates(payload);
 
         if (!payload || payload.providers.length === 0) {
-            const stale = payload ? ageSeconds(payload.updatedAt) > STALE_SECONDS : false;
             const rateRows = panelHarnessRateRows(payload);
             if (rateRows.length === 0)
                 this._renderEmpty(payload);
@@ -1074,12 +1158,13 @@ class AccModelStatusButton extends PanelMenu.Button {
                 this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
                     'No open agent terminals', {reactive: false}));
             }
+            this._updatePanelTaskEstimate(panelEstimate, stale);
             this._syncGlowTimer();
             this._syncRunClockTimer();
+            print(undefined);
             return;
         }
 
-        const stale = ageSeconds(payload.updatedAt) > STALE_SECONDS;
         // Counted once and shared, so the bar and the drop-down never disagree.
         const attention = workspaceAttentionCounts(payload);
         const shownKinds = new Set();
@@ -1090,8 +1175,35 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._renderPanelHarnessRates(payload, stale, shownKinds);
         this._renderWorkspaceAttention(attention, stale);
         this._renderMenu(payload, stale, attention);
+        this._updatePanelTaskEstimate(panelEstimate, stale);
         this._syncGlowTimer();
         this._syncRunClockTimer();
+        print(undefined);
+    }
+
+    /**
+     * Keep one inert estimate label after every existing panel segment.
+     * Parameters: this - model-status button; text - aggregate estimate label;
+     * stale - whether the published snapshot should appear dimmed.
+     * Returns: undefined.
+     */
+    _updatePanelTaskEstimate(text, stale) {
+        print(`this=${this}, text=${text}, stale=${stale}`);
+        if (!this._panelTaskEstimate) {
+            this._panelTaskEstimate = new St.Label({
+                style_class: 'ams-panel-estimate',
+                y_align: Clutter.ActorAlign.CENTER,
+                reactive: false,
+            });
+            this._box.add_child(this._panelTaskEstimate);
+        }
+        this._panelTaskEstimate.text = text;
+        this._panelTaskEstimate.visible = Boolean(text);
+        if (stale)
+            this._panelTaskEstimate.add_style_class_name('ams-stale');
+        else
+            this._panelTaskEstimate.remove_style_class_name('ams-stale');
+        print(undefined);
     }
 
     /**
