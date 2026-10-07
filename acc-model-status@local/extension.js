@@ -786,6 +786,17 @@ function taskProgressRectangles(agent, width) {
     return rects;
 }
 
+/** Read ACC's local forecast for timed tasks; idle/completed tasks have none. */
+function taskEstimateText(agent) {
+    const timed = (agent?.phase === 'RUNNING' && agent?.run_active) ||
+        Date.parse(agent?.queued_reset_at || '') > Date.now();
+    const estimate = agent?.task_time_estimate;
+    if (!timed || !['estimated', 'learning', 'overrun'].includes(estimate?.status) ||
+        typeof estimate?.label !== 'string')
+        return '';
+    return estimate.label.trim();
+}
+
 /** Update the background and completion glow together, retaining row actors. */
 function updateTaskProgress(widgets, agent) {
     widgets.agent = agent;
@@ -801,6 +812,10 @@ function updateTaskProgress(widgets, agent) {
     widgets.badge.text = agentPhaseBadgeText(agent);
     widgets.badge.set_style(`color: ${agentPhaseBadgeColor(agent)};`);
     widgets.badge._amsAgent = agent;
+    if (widgets.estimateLabel) {
+        widgets.estimateLabel.text = taskEstimateText(agent);
+        widgets.estimateLabel.visible = Boolean(widgets.estimateLabel.text);
+    }
 }
 
 /** Layer a measured fill behind task text without changing its click target. */
@@ -1428,7 +1443,17 @@ class AccModelStatusButton extends PanelMenu.Button {
             }));
         }
 
+        const estimateLabel = new St.Label({
+            text: taskEstimateText(agent),
+            style_class: 'ams-agent-estimate',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        estimateLabel.visible = Boolean(estimateLabel.text);
+        row.add_child(estimateLabel);
         const widgets = buildTaskProgressLayer(item, row, badge, agent);
+        widgets.estimateLabel = estimateLabel;
         const key = String(agent.session_id || agent.tmux_name || agent.key || '');
         if (key)
             this._taskRows.set(key, widgets);

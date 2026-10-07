@@ -1458,7 +1458,7 @@ function agentPhaseBadgeColor() { return '#fff'; }
     );
     let result = run_gjs(
         &[task_progress_stubs(), stubs, extract_function(&model, "taskProgressValue"),
-            extract_function(&model, "taskProgressRectangles"), extract_function(&model, "updateTaskProgress"), extract_function(&model, "buildTaskProgressLayer"), extension],
+            extract_function(&model, "taskProgressRectangles"), extract_function(&model, "taskEstimateText"), extract_function(&model, "updateTaskProgress"), extract_function(&model, "buildTaskProgressLayer"), extension],
         r#"
 const unread = extension._agentMenuItem({note_id: 'note-unread', unread_completion: true}, {}, 0);
 const read = extension._agentMenuItem({note_id: 'note-read', unread_completion: false}, {}, 0);
@@ -1636,7 +1636,7 @@ function agentPhaseBadgeColor() { return '#fff'; }
 fn model_status_task_progress_layer_updates_in_place() {
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let snippets = vec![task_progress_stubs(), extract_function(&source, "taskProgressValue"),
-        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer")];
+        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "taskEstimateText"), extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer")];
     let js = run_gjs(&snippets, r#"
 const item = new Actor(); item.actor = item;
 const text = new Actor(), badge = new Actor();
@@ -1674,7 +1674,7 @@ fn model_status_open_menu_progress_refresh_keeps_actor_identity() {
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let method = extract_method(&source, "_updateTaskRows");
     let snippets = vec![task_progress_stubs(), extract_function(&source, "taskProgressValue"),
-        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer"),
+        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "taskEstimateText"), extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer"),
         format!("const updater = {{ {method} }};")];
     let js = run_gjs(&snippets, r#"
 const item = new Actor(); item.actor = item;
@@ -1726,7 +1726,7 @@ print(JSON.stringify({colors: rects.map(r => r.color), gaps, bounded,
 fn model_status_segmented_actors_resize_and_retain_click_target() {
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let snippets = vec![task_progress_stubs(), extract_function(&source, "taskProgressValue"),
-        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "updateTaskProgress"),
+        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "taskEstimateText"), extract_function(&source, "updateTaskProgress"),
         extract_function(&source, "buildTaskProgressLayer")];
     let js = run_gjs(&snippets, r#"
 const item = new Actor(); item.actor = item;
@@ -1786,4 +1786,64 @@ print(JSON.stringify({text, tick, bad, zero, full, queued, waiting, done, unread
         "bad": ["2:05", "2:05", "2:05", "2:05", "2:05", "2:05", "2:05"],
         "zero": "[0/4] 2:05", "full": "[4/4] 2:05", "queued": "[1/4] -1:00",
         "waiting": "[1/4] WAITING", "done": "DONE", "unread": "DONE"}));
+}
+
+#[test]
+fn model_status_estimate_is_right_of_summary_and_refreshes_in_place() {
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let menu = format!(
+        "const builder = {{ {} }};",
+        extract_method(&source, "_agentMenuItem")
+    );
+    let stubs = r#"
+const PopupMenu = {PopupBaseMenuItem: class extends Actor {
+    constructor(options) { super(options); this.actor = this; }
+}};
+St.BoxLayout = Actor; St.Icon = Actor; St.Label = Actor;
+Clutter.ActorAlign = {CENTER: 0, END: 1};
+function codexInstanceLabel() { return null; }
+"#
+    .to_string();
+    let snippets = vec![
+        task_progress_stubs(),
+        stubs,
+        extract_function(&source, "taskEstimateText"),
+        extract_function(&source, "taskProgressValue"),
+        extract_function(&source, "taskProgressRectangles"),
+        extract_function(&source, "updateTaskProgress"),
+        extract_function(&source, "buildTaskProgressLayer"),
+        menu,
+    ];
+    let js = run_gjs(
+        &snippets,
+        r#"
+const extension = Object.assign({_runClockActors: [], _taskRows: new Map(), _icon() { return {}; }}, builder);
+const agent = {session_id: 'task', note_id: 'note', project_tag: 'ACC', project: 'agent_command_center',
+    title: 'AI summary', branch: 'feat/example', phase: 'RUNNING', run_active: true,
+    task_time_estimate: {status: 'estimated', label: '~9m left'}};
+const item = extension._agentMenuItem(agent, {}, 0);
+const widgets = extension._taskRows.get('task');
+const row = item.children[0].children[1];
+const initial = {last: row.children.at(-1).text, title: row.children.find(c => c.style_class === 'ams-agent-title').text,
+    tag: row.children[0].text, aligned: row.children.at(-1).x_align === 1, expands: row.children.at(-1).x_expand};
+const actor = widgets.estimateLabel;
+updateTaskProgress(widgets, {...agent, task_time_estimate: {status: 'estimated', label: '~4m left'}});
+const refreshed = actor.text;
+updateTaskProgress(widgets, {...agent, phase: 'DONE', run_active: false});
+const idle = actor.text;
+const states = [null, [], {label: 123}, {status: 'complete', label: '~9m left'},
+    {status: 'learning', label: 'learning time estimates'}, {status: 'overrun', label: 'past estimate'}]
+    .map(task_time_estimate => taskEstimateText({...agent, task_time_estimate}));
+const waiting = taskEstimateText({...agent, phase: 'STOPPED', run_active: false,
+    queued_reset_at: '2099-01-01T00:00:00Z'});
+print(JSON.stringify({initial, refreshed, idle, states, waiting, same: actor === widgets.estimateLabel && item === widgets.item}));
+"#,
+    );
+    assert_eq!(
+        js,
+        serde_json::json!({"initial": {"last": "~9m left", "title": "AI summary", "tag": "ACC", "aligned": true, "expands": true},
+        "refreshed": "~4m left", "idle": "", "states": ["", "", "", "", "learning time estimates", "past estimate"],
+        "waiting": "~9m left", "same": true})
+    );
 }

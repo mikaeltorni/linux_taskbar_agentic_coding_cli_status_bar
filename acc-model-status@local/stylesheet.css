@@ -189,3 +189,6 @@
 .ams-task-progress-block {
   border-radius: 3px;
 }
+
+/* Remaining agent work, aligned at the end of the task row. */
+.ams-agent-estimate { color: #c4c7cf; margin-left: 12px; }
