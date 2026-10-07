@@ -301,6 +301,18 @@ only a confirmed finish within 30 seconds can create an initial unread mark.
 Saved unread turns remain unread across reloads until selected. Legacy ACC
 payloads lacking the confirmed field still use phase transitions.
 
+The far-right panel label shows the **largest available remaining-work estimate**
+across all actively working agents, including agents on other workspaces and
+those without an open terminal window. For example, parallel tasks with 2, 9
+and 4 minutes left show `~9m left`. Durations round up to minutes; waiting and
+finished agents are excluded. When none has a usable estimate, the label shows
+`learning` or `past estimate`; with no active agents it disappears. The label
+updates in place while the menu stays open and dims when the snapshot is stale.
+It reads ACC's local historical estimates from `model_status_bar.json`; it
+makes no AI requests and writes neither history nor notes. Install/update with
+`bash install.sh --select model_status_bar`. On Wayland, newly installed
+extension code takes effect after logout/login.
+
 Each task with an ACC workflow plan has colored background segments matching
 its terminal workflow bar: blue, purple, teal and amber for completed phases,
 gold for the active action, and charcoal for pending work. Wider gaps separate
@@ -322,7 +334,9 @@ progress fill back; a new running turn can show progress again.
 
 Switching workspaces, moving a terminal, opening or closing one, and changing
 its ACC-managed title updates the bar immediately. Detached tmux
-sessions remain in ACC but are not shown until their terminal window is opened.
+sessions remain in ACC but are not listed in the menu until their terminal
+window is opened; active detached agents still contribute to the remaining-time
+maximum.
 The extension is opt-in and unrelated to the rate-limit indicator or the CLI
 status line:
 
@@ -338,7 +352,8 @@ Green highlighting marks finished-but-unopened work, not click eligibility.
 Super+§ still cycles only through unopened completions.
 While the menu is open, its rows and panel layout remain a stable snapshot so
 background status updates cannot move or replace a row mid-click. Existing
-run clocks, task progress and completion glows update in place. Changes to
+run clocks, task progress, completion glows and the panel remaining-time label
+update in place. Changes to
 menu membership and ordering appear immediately after dismissal.
 Selecting a row closes the popup before launching the selector, releasing its
 keyboard grab before the terminal receives focus.

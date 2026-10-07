@@ -1354,14 +1354,22 @@ fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
     assert!(menu.find("ams-menu-provider-icon").unwrap() < menu.find("ams-instance-tag").unwrap());
 }
 
+/// Preserve menu click targets while recurring refreshes update panel estimates.
+/// Parameters: none.
+/// Returns: None; asserts stable menu and clock actors through open/close cycles.
 #[test]
 fn model_status_menu_keeps_click_targets_until_closed() {
+    println!("parameters=none");
     let model =
         fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let methods = ["_init", "_refresh", "_queueRefresh"]
         .map(|name| extract_method(&model, name))
         .join("\n");
     let stubs = r#"
+const emit = print; print = value => {};
+const activeTaskEstimates = payload => [];
+const longestTaskEstimate = estimates => ({status: 'inactive'});
+const formatPanelTaskEstimate = estimate => '';
 let reads = 0;
 let removals = 0;
 const callbacks = [];
@@ -1391,6 +1399,8 @@ class Base {
 }
 "#
     .to_string();
+    let stubs =
+        format!("{stubs}\nBase.prototype._updatePanelTaskEstimate = (text, stale) => {{}};");
     let button = format!("class Button extends Base {{ {methods} }}");
     let result = run_gjs(
         &[stubs, button],
@@ -1416,7 +1426,7 @@ for (let cycle = 0; cycle < 2; cycle++) {
     callbacks.shift()?.();
     snapshots.push({reads, removals, queued});
 }
-print(JSON.stringify(snapshots));
+emit(JSON.stringify(snapshots));
 "#,
     );
     assert_eq!(
@@ -1428,6 +1438,7 @@ print(JSON.stringify(snapshots));
             {"reads": 23, "removals": 3, "queued": 1},
         ])
     );
+    println!("None");
 }
 
 #[test]
@@ -1847,4 +1858,147 @@ print(JSON.stringify({initial, refreshed, idle, states, waiting, same: actor ===
         "refreshed": "~4m left", "idle": "", "states": ["", "", "", "", "learning time estimates", "past estimate"],
         "waiting": "~9m left", "same": true})
     );
+}
+
+
+/// Check maximum selection, active-only filtering and duration boundaries.
+/// Parameters: none.
+/// Returns: None; asserts independently expected rendered labels.
+#[test]
+fn panel_remaining_uses_maximum_active_historical_estimate() {
+    println!("parameters=none");
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let snippets = vec![
+        extract_function(&source, "activeTaskEstimates"),
+        extract_function(&source, "longestTaskEstimate"),
+        extract_function(&source, "formatPanelTaskEstimate"),
+        "const emit = print; const traces = []; print = value => traces.push(value);".into(),
+    ];
+    let result = run_gjs(
+        &snippets,
+        r#"
+const agent = (seconds, extra = {}) => ({phase: 'RUNNING', run_active: true,
+    task_time_estimate: {status: 'estimated', remaining_seconds: seconds}, ...extra});
+const label = payload => formatPanelTaskEstimate(longestTaskEstimate(activeTaskEstimates(payload)));
+const payload = {providers: [
+    {agents: [agent(120), agent(9999, {phase: 'DONE'}), agent(9999, {run_active: false})]},
+    {agents: [agent(540, {workspace: 8}), agent(240), agent(9999, {phase: 'WAITING'})]}]};
+const invalid = ['120', NaN, Infinity, -1, 0, null].map(seconds =>
+    label({providers: [{agents: [agent(seconds)]}]}));
+const malformed = [null, {}, {providers: null}, {providers: [null, {agents: 'bad'}]},
+    {providers: [{agents: [null, {}, agent(20, {task_time_estimate: {status: 'complete'}})]}]}];
+const learning = agent(null, {task_time_estimate: {status: 'learning'}});
+const overrun = agent(null, {task_time_estimate: {status: 'overrun'}});
+emit(JSON.stringify({maximum: label(payload), invalid, malformed: malformed.map(label),
+    bounds: [1, 60, 61, 3600, 3601].map(seconds => label({providers: [{agents: [agent(seconds)]}]})),
+    learning: label({providers: [{agents: [learning]}]}),
+    overrun: label({providers: [{agents: [overrun]}]}),
+    mixed: label({providers: [{agents: [learning, overrun, agent(540)]}]}),
+    empty: label({providers: [{agents: []}]}), traced: traces.length > 20}));
+"#,
+    );
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "maximum": "~9m left", "invalid": ["learning", "learning", "learning", "learning", "learning", "learning"],
+            "malformed": ["", "", "", "", "learning"],
+            "bounds": ["~1m left", "~1m left", "~2m left", "~1h left", "~1h 1m left"],
+            "learning": "learning", "overrun": "past estimate", "mixed": "~9m left", "empty": "", "traced": true
+        })
+    );
+    println!("None");
+}
+
+/// Check the trailing panel actor through open-menu refresh and recovery.
+/// Parameters: none.
+/// Returns: None; asserts maximum text, stable click targets and stale styling.
+#[test]
+fn panel_remaining_refreshes_at_far_right_without_replacing_menu() {
+    println!("parameters=none");
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let snippets = vec![
+        extract_function(&source, "activeTaskEstimates"),
+        extract_function(&source, "longestTaskEstimate"),
+        extract_function(&source, "formatPanelTaskEstimate"),
+        format!("const methods = {{ {}, {} }};", extract_method(&source, "_refresh"),
+            extract_method(&source, "_updatePanelTaskEstimate")),
+        r#"
+const emit = print; print = value => {};
+let published = {updatedAt: 'fresh', providers: [
+    {kind: 'codex', agents: [{phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'estimated', remaining_seconds: 120}}]},
+    {kind: 'claude', agents: [{phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'estimated', remaining_seconds: 540}}]}]};
+const readPayload = file => published;
+const scopePayloadToWindows = (payload, windows) => ({...payload, providers: payload.providers.slice(0, 1)});
+const unreadCompletionCount = (payload, states) => 0;
+const saveUnreadStates = (file, states) => {};
+const log = message => {};
+const ageSeconds = stamp => stamp === 'stale' ? 999 : 0;
+const STALE_SECONDS = 30;
+const workspaceAttentionCounts = payload => [];
+const panelHarnessRateRows = payload => [];
+const actor = options => ({...options, styles: [],
+    add_style_class_name: name => {}, remove_style_class_name: name => {}});
+const St = {Label: function(options) {
+    // Create the label stub. Parameters: this - stub receiver; options - actor properties. Returns: label actor.
+    print(`this=${this}, options=${JSON.stringify(options)}`);
+    const label = actor(options);
+    label.add_style_class_name = name => label.styles.push(name);
+    label.remove_style_class_name = name => {label.styles = label.styles.filter(s => s !== name);};
+    print(JSON.stringify(label));
+    return label;
+}};
+const Clutter = {ActorAlign: {CENTER: 0, END: 1}};
+"#.into(),
+    ];
+    let result = run_gjs(
+        &snippets,
+        r#"
+const box = {children: [], add_child: child => box.children.push(child),
+    destroy_all_children: () => {box.children = [];}};
+const menu = {isOpen: false, target: {}, removeAll: () => {menu.target = {};}};
+const chip = name => box.add_child({name});
+const button = Object.assign({_box: box, menu, _taskRows: new Map(), _unreadStates: new Map(), _unreadCount: 0,
+    _openWindowDescriptors: () => [], _renderHarnessRates: payload => {},
+    _renderProvider: (provider, stale, payload) => chip(provider.kind),
+    _renderPanelHarnessRates: (payload, stale, kinds) => chip('rate'),
+    _renderWorkspaceAttention: (attention, stale) => chip('attention'),
+    _renderMenu: (payload, stale, attention) => {}, _renderEmpty: payload => chip('empty'),
+    _syncGlowTimer: () => {}, _syncRunClockTimer: () => {}, _updateTaskRows: payload => {}}, methods);
+button._refresh();
+const estimate = box.children[box.children.length - 1];
+const initial = {text: estimate.text, preceding: box.children.slice(0, -1).map(a => a.name),
+    style: estimate.style_class, visible: estimate.visible};
+menu.isOpen = true;
+const target = menu.target;
+published.providers[1].agents[0].task_time_estimate.remaining_seconds = 240;
+published.updatedAt = 'stale'; button._refresh();
+const open = {text: estimate.text, sameActor: box.children[box.children.length - 1] === estimate,
+    sameTarget: menu.target === target, stale: estimate.styles.includes('ams-stale')};
+published = null; button._refresh();
+const missing = {hidden: !estimate.visible, sameTarget: menu.target === target};
+published = {updatedAt: 'fresh', providers: [{kind: 'codex', agents: [{phase: 'RUNNING', run_active: true,
+    task_time_estimate: {status: 'estimated', remaining_seconds: 61}}]}]};
+button._refresh();
+const recovered = {text: estimate.text, visible: estimate.visible, stale: estimate.styles.includes('ams-stale')};
+menu.isOpen = false; button._refresh();
+const rebuilt = box.children[box.children.length - 1];
+const closed = {text: rebuilt.text, newActor: rebuilt !== estimate};
+published.providers = []; button._refresh();
+const empty = box.children[box.children.length - 1];
+emit(JSON.stringify({initial, open, missing, recovered, closed, emptyHidden: !empty.visible}));
+"#,
+    );
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "initial": {"text": "~9m left", "preceding": ["codex", "rate", "attention"], "style": "ams-panel-estimate", "visible": true},
+            "open": {"text": "~4m left", "sameActor": true, "sameTarget": true, "stale": true},
+            "missing": {"hidden": true, "sameTarget": true},
+            "recovered": {"text": "~2m left", "visible": true, "stale": false},
+            "closed": {"text": "~2m left", "newActor": true}, "emptyHidden": true
+        })
+    );
+    println!("None");
 }
