@@ -1347,7 +1347,7 @@ fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
             ["CX2", "#938ff4"],
             ["CX3", "#a856e8"],
             ["GK1", "#7ec8ff"],
-            null
+            ["CC1", "#7ec8ff"]
         ])
     );
 

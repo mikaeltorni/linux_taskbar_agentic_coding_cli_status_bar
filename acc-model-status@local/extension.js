@@ -347,10 +347,10 @@ function instanceTagColor(id, count) {
     return `#${hex}`;
 }
 
-/** Return a Codex or Grok menu label and identity color when the kind is known. */
+/** Return a Codex, Grok, or Claude menu label and identity color when the kind is known. */
 function codexInstanceLabel(agent, count) {
     const kind = String(agent?.kind || '').toLowerCase();
-    const prefix = kind === 'codex' ? 'CX' : kind === 'grok' ? 'GK' : '';
+    const prefix = kind === 'codex' ? 'CX' : kind === 'grok' ? 'GK' : kind === 'claude' ? 'CC' : '';
     if (!prefix)
         return null;
     let id = Number(agent?.codex_instance);
