@@ -184,3 +184,8 @@
 .ams-ws-attn-current {
   background-color: rgba(34, 197, 94, 0.46);
 }
+
+
+.ams-task-progress-block {
+  border-radius: 3px;
+}

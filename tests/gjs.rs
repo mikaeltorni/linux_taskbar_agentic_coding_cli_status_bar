@@ -1458,7 +1458,7 @@ function agentPhaseBadgeColor() { return '#fff'; }
     );
     let result = run_gjs(
         &[task_progress_stubs(), stubs, extract_function(&model, "taskProgressValue"),
-            extract_function(&model, "updateTaskProgress"), extract_function(&model, "buildTaskProgressLayer"), extension],
+            extract_function(&model, "taskProgressRectangles"), extract_function(&model, "updateTaskProgress"), extract_function(&model, "buildTaskProgressLayer"), extension],
         r#"
 const unread = extension._agentMenuItem({note_id: 'note-unread', unread_completion: true}, {}, 0);
 const read = extension._agentMenuItem({note_id: 'note-read', unread_completion: false}, {}, 0);
@@ -1621,6 +1621,7 @@ class Actor {
     set_size(width, height) { this.width = width; this.height = height; }
     set_position(x, y) { this.x = x; this.y = y; }
     set_style(style) { this.style = style; }
+    destroy() { this.destroyed = true; }
     add_style_class_name(style) { if (!this.styles.includes(style)) this.styles.push(style); }
     remove_style_class_name(style) { this.styles = this.styles.filter(s => s !== style); }
 }
@@ -1635,7 +1636,7 @@ function agentPhaseBadgeColor() { return '#fff'; }
 fn model_status_task_progress_layer_updates_in_place() {
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let snippets = vec![task_progress_stubs(), extract_function(&source, "taskProgressValue"),
-        extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer")];
+        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer")];
     let js = run_gjs(&snippets, r#"
 const item = new Actor(); item.actor = item;
 const text = new Actor(), badge = new Actor();
@@ -1673,7 +1674,7 @@ fn model_status_open_menu_progress_refresh_keeps_actor_identity() {
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let method = extract_method(&source, "_updateTaskRows");
     let snippets = vec![task_progress_stubs(), extract_function(&source, "taskProgressValue"),
-        extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer"),
+        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer"),
         format!("const updater = {{ {method} }};")];
     let js = run_gjs(&snippets, r#"
 const item = new Actor(); item.actor = item;
@@ -1689,4 +1690,71 @@ print(JSON.stringify({width, hidden: !widgets.track.visible, glow: item.styles.i
     badge: badge.text}));
 "#);
     assert_eq!(js, serde_json::json!({"width":300,"hidden":true,"glow":true,"sameItem":true,"sameText":true,"badge":"DONE"}));
+}
+
+
+#[test]
+fn model_status_segmented_task_background() {
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let js = run_gjs(&[extract_function(&source, "taskProgressRectangles")], r#"
+const agent = {workflow: {segments: [
+    {phase: 'Plan', status: 'complete'}, {phase: 'Establish worktree', status: 'complete'},
+    {phase: 'Write code', status: 'complete'}, {phase: 'Write code', status: 'complete'},
+    {phase: 'Write code', status: 'in_progress'}, {phase: 'Write code', status: 'pending'},
+    {phase: 'Write documentation', status: 'pending'}]}};
+const rects = taskProgressRectangles(agent, 280);
+const gaps = rects.slice(1).map((r, i) => r.x - rects[i].x - rects[i].width);
+const bounded = [0, 1, 20, 120, 280].every(width => {
+    const rs = taskProgressRectangles(agent, width);
+    return rs.every((r, i) => r.x >= 0 && r.width > 0 && r.x + r.width <= width &&
+        (!i || rs[i - 1].x + rs[i - 1].width <= r.x));
+});
+const skipped = taskProgressRectangles({workflow: {segments: [{phase: 'Plan', status: 'skipped'}]}}, 1)[0].color;
+const many = taskProgressRectangles({workflow: {segments: Array.from({length: 100}, () => ({phase: 'Write code', status: 'pending'}))}}, 20);
+const invalid = [{}, {workflow: {segments: 'bad'}},
+    {workflow: {segments: [null]}}, {workflow: {segments: [{phase: 'unknown', status: 'complete'}]}},
+    {workflow: {segments: [{phase: 'Plan', status: 'bad'}]}}];
+print(JSON.stringify({colors: rects.map(r => r.color), gaps, bounded,
+    edge: rects[6].x + rects[6].width, skipped, many: many.length, invalid: invalid.map(a => taskProgressRectangles(a, 280))}));
+"#);
+    assert_eq!(js, serde_json::json!({"colors": ["92, 168, 255", "174, 129, 255", "55, 211, 190", "55, 211, 190", "255, 198, 79", "48, 52, 64", "48, 52, 64"],
+        "gaps": [7,7,2,2,2,7], "bounded": true, "edge": 280, "skipped": "72, 77, 89", "many": 20, "invalid": [[],[],[],[],[]]}));
+}
+
+
+#[test]
+fn model_status_segmented_actors_resize_and_retain_click_target() {
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let snippets = vec![task_progress_stubs(), extract_function(&source, "taskProgressValue"),
+        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "updateTaskProgress"),
+        extract_function(&source, "buildTaskProgressLayer")];
+    let js = run_gjs(&snippets, r#"
+const item = new Actor(); item.actor = item;
+const row = new Actor(), badge = new Actor();
+const agent = {phase: 'RUNNING', workflow: {fraction: .5, segments: [
+    {phase: 'Plan', status: 'complete'}, {phase: 'Write code', status: 'in_progress'}]}};
+const widgets = buildTaskProgressLayer(item, row, badge, agent);
+const first = widgets.blocks[0];
+const initial = {count: widgets.blocks.length, fillHidden: !widgets.fill.visible,
+    firstColor: first.style, activeColor: widgets.blocks[1].style,
+    behind: item.children[0].children[0] === widgets.track && item.children[0].children[1] === row,
+    inert: widgets.blocks.every(b => b.reactive === false)};
+widgets.track.width = 100; widgets.track.height = 24;
+widgets.track.handlers['notify::allocation']();
+const resize = {edge: widgets.blocks[1].x + widgets.blocks[1].width, height: first.height,
+    sameBlock: first === widgets.blocks[0]};
+agent.workflow.segments[1].status = 'complete'; updateTaskProgress(widgets, agent);
+const changed = widgets.blocks[1].style;
+agent.workflow.segments.pop(); updateTaskProgress(widgets, agent);
+const shrunk = widgets.blocks.length;
+updateTaskProgress(widgets, {phase: 'DONE', ready_completed_at: 'finish', unread_completion: true});
+print(JSON.stringify({initial, resize, changed, shrunk,
+    done: {hidden: !widgets.track.visible, glow: item.styles.includes('ams-agent-unread')},
+    sameItem: widgets.item === item}));
+"#);
+    assert_eq!(js, serde_json::json!({"initial": {"count": 2, "fillHidden": true,
+        "firstColor": "background-color: rgba(92, 168, 255, 0.24);", "activeColor": "background-color: rgba(255, 198, 79, 0.24);", "behind": true, "inert": true},
+        "resize": {"edge": 100, "height": 24, "sameBlock": true},
+        "changed": "background-color: rgba(55, 211, 190, 0.24);", "shrunk": 1,
+        "done": {"hidden": true, "glow": true}, "sameItem": true}));
 }

@@ -747,13 +747,44 @@ function taskProgressValue(agent) {
         ? Math.max(0, Math.min(1, value)) : null;
 }
 
+/** Lay out measured phase/action blocks with the terminal overlay's palette. */
+function taskProgressRectangles(agent, width) {
+    const phases = ['Plan', 'Establish worktree', 'Write code', 'Write documentation'];
+    const palette = ['92, 168, 255', '174, 129, 255', '55, 211, 190', '238, 171, 87'];
+    const segments = agent.workflow?.segments;
+    if (!Array.isArray(segments) || !segments.length || !Number.isFinite(width) || width <= 0 ||
+        segments.some(s => !s || !phases.includes(s.phase) ||
+            !['complete', 'in_progress', 'pending', 'skipped'].includes(s.status)))
+        return [];
+    width = Math.floor(width);
+    let gaps = segments.slice(1).map((s, i) => s.phase === segments[i].phase ? 2 : 7);
+    const count = segments.length;
+    if (width < count * 3 + gaps.reduce((a, b) => a + b, 0))
+        gaps = gaps.map(gap => Math.min(1, gap));
+    if (width < count + gaps.reduce((a, b) => a + b, 0))
+        gaps = gaps.map(() => 0);
+    const usable = width - gaps.reduce((a, b) => a + b, 0);
+    let inset = 0;
+    const rects = [];
+    segments.forEach((segment, i) => {
+        const x = Math.floor(usable * i / count) + inset;
+        const right = Math.floor(usable * (i + 1) / count) + inset;
+        const color = segment.status === 'complete' ? palette[phases.indexOf(segment.phase)] :
+            segment.status === 'in_progress' ? '255, 198, 79' :
+                segment.status === 'skipped' ? '72, 77, 89' : '48, 52, 64';
+        if (right > x)
+            rects.push({x, width: right - x, color});
+        inset += gaps[i] || 0;
+    });
+    return rects;
+}
+
 /** Update the background and completion glow together, retaining row actors. */
 function updateTaskProgress(widgets, agent) {
     widgets.agent = agent;
     const fraction = taskProgressValue(agent);
     widgets.fraction = fraction ?? 0;
     widgets.track.visible = fraction !== null;
-    widgets.fill.visible = fraction !== null && fraction > 0;
     widgets.resize();
     if (agent.unread_completion)
         widgets.item.actor.add_style_class_name('ams-agent-unread');
@@ -777,9 +808,25 @@ function buildTaskProgressLayer(item, row, badge, agent) {
     row.x_expand = true;
     stack.add_child(row);
     item.add_child(stack);
-    const widgets = {item, track, fill, badge, fraction: 0, resize() {
+    const widgets = {item, track, fill, badge, blocks: [], fraction: 0, resize() {
+        const width = track.get_width(), height = track.get_height();
+        const rects = taskProgressRectangles(this.agent, width);
+        fill.visible = track.visible && this.fraction > 0 && !rects.length;
         fill.set_position(0, 0);
-        fill.set_size(Math.floor(track.get_width() * this.fraction), track.get_height());
+        fill.set_size(Math.floor(width * this.fraction), height);
+        while (this.blocks.length > rects.length)
+            this.blocks.pop().destroy();
+        rects.forEach((rect, i) => {
+            if (!this.blocks[i]) {
+                const block = new St.Widget({style_class: 'ams-task-progress-block', reactive: false});
+                track.add_child(block);
+                this.blocks.push(block);
+            }
+            const block = this.blocks[i];
+            block.set_position(rect.x, 0);
+            block.set_size(rect.width, height);
+            block.set_style(`background-color: rgba(${rect.color}, 0.24);`);
+        });
     }};
     track.connect('notify::allocation', () => widgets.resize());
     updateTaskProgress(widgets, agent);

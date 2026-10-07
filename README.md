@@ -301,8 +301,11 @@ only a confirmed finish within 30 seconds can create an initial unread mark.
 Saved unread turns remain unread across reloads until selected. Legacy ACC
 payloads lacking the confirmed field still use phase transitions.
 
-Each task with an ACC workflow plan has a subtle blue-to-teal progress fill
-behind its row text. ACC publishes the completed/total actions and fraction
+Each task with an ACC workflow plan has colored background segments matching
+its terminal workflow bar: blue, purple, teal and amber for completed phases,
+gold for the active action, and charcoal for pending work. Wider gaps separate
+phases; concrete microsteps have individual blocks. ACC publishes the measured
+`workflow.segments` with completed/total actions and fraction
 from that session's `tmp/workflow/<session-id>.md` in
 `~/.local/state/codex-agent-tracker/model_status_bar.json`. Skipped actions are
 excluded; legacy phase-only plans count each enabled phase once. Missing plans
