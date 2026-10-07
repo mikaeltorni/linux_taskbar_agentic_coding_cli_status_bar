@@ -737,6 +737,55 @@ function workspaceAttentionCounts(payload) {
     return entries;
 }
 
+/** Return a measured fraction, or null when completion replaces progress. */
+function taskProgressValue(agent) {
+    if (agent.unread_completion || (String(agent.phase || '').toUpperCase() === 'DONE' &&
+        agent.ready_completed_at))
+        return null;
+    const value = agent.workflow?.fraction;
+    return typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(0, Math.min(1, value)) : null;
+}
+
+/** Update the background and completion glow together, retaining row actors. */
+function updateTaskProgress(widgets, agent) {
+    widgets.agent = agent;
+    const fraction = taskProgressValue(agent);
+    widgets.fraction = fraction ?? 0;
+    widgets.track.visible = fraction !== null;
+    widgets.fill.visible = fraction !== null && fraction > 0;
+    widgets.resize();
+    if (agent.unread_completion)
+        widgets.item.actor.add_style_class_name('ams-agent-unread');
+    else
+        widgets.item.actor.remove_style_class_name('ams-agent-unread');
+    widgets.item.accessible_name = [agent.title, agent.workflow?.label].filter(Boolean).join(' · ');
+    widgets.badge.text = agentPhaseBadgeText(agent);
+    widgets.badge.set_style(`color: ${agentPhaseBadgeColor(agent)};`);
+    widgets.badge._amsAgent = agent;
+}
+
+/** Layer a measured fill behind task text without changing its click target. */
+function buildTaskProgressLayer(item, row, badge, agent) {
+    const stack = new St.Widget({layout_manager: new Clutter.BinLayout(), x_expand: true});
+    const track = new St.Widget({style_class: 'ams-task-progress',
+        layout_manager: new Clutter.FixedLayout(), x_expand: true, y_expand: true,
+        reactive: false});
+    const fill = new St.Widget({style_class: 'ams-task-progress-fill', reactive: false});
+    track.add_child(fill);
+    stack.add_child(track);
+    row.x_expand = true;
+    stack.add_child(row);
+    item.add_child(stack);
+    const widgets = {item, track, fill, badge, fraction: 0, resize() {
+        fill.set_position(0, 0);
+        fill.set_size(Math.floor(track.get_width() * this.fraction), track.get_height());
+    }};
+    track.connect('notify::allocation', () => widgets.resize());
+    updateTaskProgress(widgets, agent);
+    return widgets;
+}
+
 const AccModelStatusButton = GObject.registerClass(
 class AccModelStatusButton extends PanelMenu.Button {
     /**
@@ -758,6 +807,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._unreadStates = readUnreadStates(this._unreadFile);
         this._unreadCount = 0;
         this._runClockActors = [];
+        this._taskRows = new Map();
         this._shellSignals = [];
         this._windowSignals = new Map();
 
@@ -899,10 +949,23 @@ class AccModelStatusButton extends PanelMenu.Button {
         return new Gio.FileIcon({file: child});
     }
 
+    /** Refresh existing task widgets while the menu stays open and clickable. */
+    _updateTaskRows(payload) {
+        const agents = new Map();
+        for (const provider of payload?.providers || []) {
+            for (const agent of provider.agents || []) {
+                const key = String(agent.session_id || agent.tmux_name || agent.key || '');
+                agents.set(key, agent);
+            }
+        }
+        for (const [key, widgets] of this._taskRows) {
+            const agent = agents.get(key) || {...widgets.agent, workflow: null, unread_completion: false};
+            updateTaskProgress(widgets, agent);
+        }
+    }
+
     /** Re-read the payload and repaint the panel segments and the menu. */
     _refresh() {
-        if (this.menu.isOpen)
-            return;
         const published = readPayload(this._file);
         const windows = this._openWindowDescriptors();
         const payload = published
@@ -917,6 +980,13 @@ class AccModelStatusButton extends PanelMenu.Button {
             saveUnreadStates(this._unreadFile, this._unreadStates);
         if (previousUnreadCount !== this._unreadCount)
             log(`acc-model-status: unread completions ${previousUnreadCount} -> ${this._unreadCount}`);
+        if (this.menu.isOpen) {
+            // Preserve row identities while refreshing progress and glow together.
+            this._updateTaskRows(payload);
+            this._syncGlowTimer();
+            return;
+        }
+        this._taskRows.clear();
         this._box.destroy_all_children();
         this.menu.removeAll();
         // Run clocks are re-collected on every repaint; never keep stale ones.
@@ -1241,8 +1311,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         });
         if (actionable)
             item.connect('activate', () => this._focusAgent(noteId));
-        if (agent.unread_completion)
-            item.actor.add_style_class_name('ams-agent-unread');
         const row = new St.BoxLayout({style_class: 'ams-agent-row'});
 
         const projectTag = String(agent.project_tag || '').trim();
@@ -1306,7 +1374,10 @@ class AccModelStatusButton extends PanelMenu.Button {
             }));
         }
 
-        item.add_child(row);
+        const widgets = buildTaskProgressLayer(item, row, badge, agent);
+        const key = String(agent.session_id || agent.tmux_name || agent.key || '');
+        if (key)
+            this._taskRows.set(key, widgets);
         return item;
     }
 
@@ -1357,6 +1428,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._runClockId = 0;
         }
         this._runClockActors = [];
+        this._taskRows.clear();
         if (this._monitor) {
             this._monitor.cancel();
             this._monitor = null;
