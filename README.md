@@ -300,6 +300,7 @@ state is missing or first migrated, historical finishes start acknowledged;
 only a confirmed finish within 30 seconds can create an initial unread mark.
 Saved unread turns remain unread across reloads until selected. Legacy ACC
 payloads lacking the confirmed field still use phase transitions.
+
 Each task with an ACC workflow plan has a subtle blue-to-teal progress fill
 behind its row text. ACC publishes the completed/total actions and fraction
 from that session's `tmp/workflow/<session-id>.md` in
@@ -329,7 +330,8 @@ Green highlighting marks finished-but-unopened work, not click eligibility.
 Super+§ still cycles only through unopened completions.
 While the menu is open, its rows and panel layout remain a stable snapshot so
 background status updates cannot move or replace a row mid-click. Existing
-run clocks keep ticking; status changes appear immediately after dismissal.
+run clocks, task progress and completion glows update in place. Changes to
+menu membership and ordering appear immediately after dismissal.
 Selecting a row closes the popup before launching the selector, releasing its
 keyboard grab before the terminal receives focus.
 
