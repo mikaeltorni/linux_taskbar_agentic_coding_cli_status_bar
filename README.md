@@ -282,8 +282,8 @@ the harness's symbolic icon instead of a repeated provider name. Codex rows
 place their `CX1`, `CX2`, … account name immediately to the right
 of that icon, using the same blue-to-purple identity color as the main
 rate-limit indicator. Other harness rows keep their existing layout. Only the
-active workspace heading gets a translucent teal background; agent rows,
-including any CX instance tags, remain unhighlighted. A finished agent that
+active workspace heading gets a translucent teal background. Agent rows keep
+their text and CX instance colors, with measured task progress behind the text. A finished agent that
 has not been opened since its turn ended gives
 only this indicator a soft green flow. Its workspace gets a steady green
 `W<n>:<count>` marker and its row in the expanded menu gets the same steady
@@ -300,6 +300,17 @@ state is missing or first migrated, historical finishes start acknowledged;
 only a confirmed finish within 30 seconds can create an initial unread mark.
 Saved unread turns remain unread across reloads until selected. Legacy ACC
 payloads lacking the confirmed field still use phase transitions.
+Each task with an ACC workflow plan has a subtle blue-to-teal progress fill
+behind its row text. ACC publishes the completed/total actions and fraction
+from that session's `tmp/workflow/<session-id>.md` in
+`~/.local/state/codex-agent-tracker/model_status_bar.json`. Skipped actions are
+excluded; legacy phase-only plans count each enabled phase once. Missing plans
+show no progress fill. The background follows the row's width, preserves its
+focus/click behavior, and updates in place while the menu is open. At confirmed
+completion, it disappears in the same refresh that applies the green glow.
+Focusing a completed task removes its unread glow without bringing the old
+progress fill back; a new running turn can show progress again.
+
 Switching workspaces, moving a terminal, opening or closing one, and changing
 its ACC-managed title updates the bar immediately. Detached tmux
 sessions remain in ACC but are not shown until their terminal window is opened.
