@@ -1826,6 +1826,7 @@ const item = extension._agentMenuItem(agent, {}, 0);
 const widgets = extension._taskRows.get('task');
 const row = item.children[0].children[1];
 const initial = {last: row.children.at(-1).text, title: row.children.find(c => c.style_class === 'ams-agent-title').text,
+    origin: row.children.find(c => c.style_class === 'ams-agent-origin').text,
     tag: row.children[0].text, aligned: row.children.at(-1).x_align === 1, expands: row.children.at(-1).x_expand};
 const actor = widgets.estimateLabel;
 updateTaskProgress(widgets, {...agent, task_time_estimate: {status: 'estimated', label: '~4m left'}});
@@ -1842,7 +1843,7 @@ print(JSON.stringify({initial, refreshed, idle, states, waiting, same: actor ===
     );
     assert_eq!(
         js,
-        serde_json::json!({"initial": {"last": "~9m left", "title": "AI summary", "tag": "ACC", "aligned": true, "expands": true},
+        serde_json::json!({"initial": {"last": "~9m left", "title": "AI summary", "tag": "ACC", "origin": "(feat/example)", "aligned": true, "expands": true},
         "refreshed": "~4m left", "idle": "", "states": ["", "", "", "", "learning time estimates", "past estimate"],
         "waiting": "~9m left", "same": true})
     );
