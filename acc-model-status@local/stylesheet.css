@@ -117,6 +117,19 @@
   spacing: 8px;
 }
 
+/* These background actors sit underneath task text and never capture clicks. */
+.ams-task-progress {
+  border-radius: 6px;
+  background-color: rgba(48, 52, 64, 0.16);
+}
+
+.ams-task-progress-fill {
+  border-radius: 6px;
+  background-gradient-direction: horizontal;
+  background-gradient-start: rgba(92, 168, 255, 0.22);
+  background-gradient-end: rgba(55, 211, 190, 0.26);
+}
+
 .ams-agent-unread {
   border-radius: 6px;
   background-color: rgba(34, 197, 94, 0.16);

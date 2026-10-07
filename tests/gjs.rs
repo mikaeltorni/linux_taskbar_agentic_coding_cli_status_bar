@@ -1386,6 +1386,7 @@ class Base {
     _openWindowDescriptors() { return []; }
     _renderEmpty() { this.menu.rows = [{}]; }
     _syncGlowTimer() {}
+    _updateTaskRows() {}
     _syncRunClockTimer() {}
 }
 "#
@@ -1421,10 +1422,10 @@ print(JSON.stringify(snapshots));
     assert_eq!(
         result,
         serde_json::json!([
-            {"reads": 1, "removals": 1, "sameTarget": true, "sameClocks": true},
-            {"reads": 2, "removals": 2, "queued": 1},
-            {"reads": 2, "removals": 2, "sameTarget": true, "sameClocks": true},
-            {"reads": 3, "removals": 3, "queued": 1},
+            {"reads": 11, "removals": 1, "sameTarget": true, "sameClocks": true},
+            {"reads": 12, "removals": 2, "queued": 1},
+            {"reads": 22, "removals": 2, "sameTarget": true, "sameClocks": true},
+            {"reads": 23, "removals": 3, "queued": 1},
         ])
     );
 }
@@ -1438,34 +1439,26 @@ fn model_status_menu_rows_focus_the_exact_agent_through_acc() {
     let stubs = r#"
 const focused = [];
 const PopupMenu = {
-    PopupBaseMenuItem: class {
-        constructor(options) {
-            this.options = options;
-            this.handlers = {};
-            this.styles = [];
-            this.actor = {add_style_class_name: name => this.styles.push(name)};
-        }
-        connect(name, callback) { this.handlers[name] = callback; }
-        add_child() {}
+    PopupBaseMenuItem: class extends Actor {
+        constructor(options) { super(options); this.options = options; this.actor = this; }
     },
 };
-const St = {
-    BoxLayout: class { add_child() {} },
-    Icon: class {},
-    Label: class { set_style() {} },
-};
-const Clutter = {ActorAlign: {CENTER: 0}};
+St.BoxLayout = Actor;
+St.Icon = Actor;
+St.Label = Actor;
+Clutter.ActorAlign = {CENTER: 0};
 function codexInstanceLabel() { return null; }
 function agentPhaseBadgeText() { return 'DONE'; }
 function agentPhaseBadgeColor() { return '#fff'; }
 "#
     .to_string();
     let extension = format!(
-        "{}\nconst extension = Object.assign({{_runClockActors: [], _icon() {{ return {{}}; }}, _focusAgent(noteId) {{ focused.push(noteId); }} }}, menuBuilder);",
+        "{}\nconst extension = Object.assign({{_runClockActors: [], _taskRows: new Map(), _icon() {{ return {{}}; }}, _focusAgent(noteId) {{ focused.push(noteId); }} }}, menuBuilder);",
         item
     );
     let result = run_gjs(
-        &[stubs, extension],
+        &[task_progress_stubs(), stubs, extract_function(&model, "taskProgressValue"),
+            extract_function(&model, "updateTaskProgress"), extract_function(&model, "buildTaskProgressLayer"), extension],
         r#"
 const unread = extension._agentMenuItem({note_id: 'note-unread', unread_completion: true}, {}, 0);
 const read = extension._agentMenuItem({note_id: 'note-read', unread_completion: false}, {}, 0);
@@ -1597,4 +1590,103 @@ fn installer_delegates_readonly_routing() {
     let text = fs::read_to_string(repo_root().join("install.sh")).unwrap();
     assert!(text.contains("isc_route_readonly_args"));
     assert!(!text.contains("--list-components|--export-selection|--detect"));
+}
+
+#[test]
+fn model_status_task_progress_validates_payload() {
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let js = run_gjs(&[extract_function(&source, "taskProgressValue")], r#"
+const inputs = [
+    {}, {workflow: null}, {workflow: {fraction: NaN}}, {workflow: {fraction: '0.5'}},
+    {workflow: {fraction: -1}}, {workflow: {fraction: 2}}, {workflow: {fraction: 0}},
+    {workflow: {fraction: .25}}, {workflow: {fraction: .5}, unread_completion: true},
+    {workflow: {fraction: .5}, phase: 'DONE', ready_completed_at: '2026-10-07T01:00:00Z'},
+    {workflow: {fraction: .5}, phase: 'DONE', ready_completed_at: ''}];
+print(JSON.stringify(inputs.map(taskProgressValue)));
+"#);
+    assert_eq!(js, serde_json::json!([null, null, null, null, 0, 1, 0, 0.25, null, null, 0.5]));
+}
+
+fn task_progress_stubs() -> String {
+    r#"
+class Actor {
+    constructor(options = {}) {
+        Object.assign(this, options); this.children = []; this.handlers = {};
+        this.styles = []; this.visible = true; this.width = 400; this.height = 32;
+    }
+    add_child(child) { this.children.push(child); }
+    connect(name, callback) { this.handlers[name] = callback; }
+    get_width() { return this.width; }
+    get_height() { return this.height; }
+    set_size(width, height) { this.width = width; this.height = height; }
+    set_position(x, y) { this.x = x; this.y = y; }
+    set_style(style) { this.style = style; }
+    add_style_class_name(style) { if (!this.styles.includes(style)) this.styles.push(style); }
+    remove_style_class_name(style) { this.styles = this.styles.filter(s => s !== style); }
+}
+const St = {Widget: Actor};
+const Clutter = {BinLayout: class {}, FixedLayout: class {}};
+function agentPhaseBadgeText(agent) { return agent.phase || ''; }
+function agentPhaseBadgeColor() { return '#fff'; }
+"#.to_string()
+}
+
+#[test]
+fn model_status_task_progress_layer_updates_in_place() {
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let snippets = vec![task_progress_stubs(), extract_function(&source, "taskProgressValue"),
+        extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer")];
+    let js = run_gjs(&snippets, r#"
+const item = new Actor(); item.actor = item;
+const text = new Actor(), badge = new Actor();
+const agent = {phase: 'RUNNING', title: 'First task', workflow: {fraction: .25, label: 'Write code 1 out of 4'}};
+const widgets = buildTaskProgressLayer(item, text, badge, agent);
+const otherItem = new Actor(); otherItem.actor = otherItem;
+const other = buildTaskProgressLayer(otherItem, new Actor(), new Actor(),
+    {phase: 'RUNNING', workflow: {fraction: .75}});
+const before = {behind: item.children[0].children[0] === widgets.track &&
+    item.children[0].children[1] === text,
+    firstWidth: widgets.fill.width, otherWidth: other.fill.width,
+    caption: item.accessible_name};
+widgets.track.width = 200;
+widgets.track.handlers['notify::allocation']();
+const resized = widgets.fill.width;
+updateTaskProgress(widgets, {phase: 'DONE', unread_completion: true, ready_completed_at: 'finish', workflow: {fraction: 1}});
+const done = {hidden: !widgets.track.visible, glow: item.styles.includes('ams-agent-unread')};
+updateTaskProgress(widgets, {phase: 'DONE', unread_completion: false, ready_completed_at: 'finish', workflow: {fraction: 1}});
+const read = {hidden: !widgets.track.visible, glow: item.styles.includes('ams-agent-unread')};
+updateTaskProgress(widgets, {phase: 'RUNNING', workflow: {fraction: .5}});
+const resumed = {shown: widgets.track.visible, width: widgets.fill.width, glow: item.styles.includes('ams-agent-unread')};
+updateTaskProgress(widgets, {phase: 'RUNNING'});
+print(JSON.stringify({before, resized, done, read, resumed, missingHidden: !widgets.track.visible}));
+"#);
+    assert_eq!(js, serde_json::json!({
+        "before": {"behind": true, "firstWidth": 100, "otherWidth": 300, "caption": "First task · Write code 1 out of 4"},
+        "resized": 50,
+        "done": {"hidden": true, "glow": true}, "read": {"hidden": true, "glow": false},
+        "resumed": {"shown": true, "width": 100, "glow": false}, "missingHidden": true
+    }));
+}
+
+#[test]
+fn model_status_open_menu_progress_refresh_keeps_actor_identity() {
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let method = extract_method(&source, "_updateTaskRows");
+    let snippets = vec![task_progress_stubs(), extract_function(&source, "taskProgressValue"),
+        extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer"),
+        format!("const updater = {{ {method} }};")];
+    let js = run_gjs(&snippets, r#"
+const item = new Actor(); item.actor = item;
+const row = new Actor(), badge = new Actor();
+const widgets = buildTaskProgressLayer(item, row, badge, {phase: 'RUNNING', workflow: {fraction: .25}});
+const button = Object.assign({_taskRows: new Map([['session', widgets]])}, updater);
+const update = agent => button._updateTaskRows({providers: [{agents: [{session_id: 'session', ...agent}]}]});
+update({phase: 'RUNNING', workflow: {fraction: .75}});
+const width = widgets.fill.width;
+update({phase: 'DONE', unread_completion: true, ready_completed_at: 'finish'});
+print(JSON.stringify({width, hidden: !widgets.track.visible, glow: item.styles.includes('ams-agent-unread'),
+    sameItem: widgets.item === item, sameText: item.children[0].children[1] === row,
+    badge: badge.text}));
+"#);
+    assert_eq!(js, serde_json::json!({"width":300,"hidden":true,"glow":true,"sameItem":true,"sameText":true,"badge":"DONE"}));
 }
