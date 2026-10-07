@@ -1860,7 +1860,6 @@ print(JSON.stringify({initial, refreshed, idle, states, waiting, same: actor ===
     );
 }
 
-
 /// Check maximum selection, active-only filtering and duration boundaries.
 /// Parameters: none.
 /// Returns: None; asserts independently expected rendered labels.
