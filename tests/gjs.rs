@@ -1339,7 +1339,7 @@ fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
         extract_constant(&model, "INSTANCE_TAG_LAST_RGB"),
         color,
         label,
-    ], "print(JSON.stringify([codexInstanceLabel({kind: 'codex', codex_instance: 1}, 3), codexInstanceLabel({kind: 'codex', codex_instance: 2}, 3), codexInstanceLabel({kind: 'codex', codex_instance: 3}, 3), codexInstanceLabel({kind: 'grok'}, 3), codexInstanceLabel({kind: 'claude', codex_instance: 1}, 3)]))");
+    ], "print(JSON.stringify([codexInstanceLabel({kind: 'codex', codex_instance: 1}, 3), codexInstanceLabel({kind: 'codex', codex_instance: 2}, 3), codexInstanceLabel({kind: 'codex', codex_instance: 3}, 3), codexInstanceLabel({kind: 'grok'}, 3), codexInstanceLabel({kind: 'claude', codex_instance: 1}, 3), codexInstanceLabel({kind: 'qwen'}, 3), codexInstanceLabel({kind: 'openrouter'}, 3), codexInstanceLabel({kind: 'nvidia'}, 3), codexInstanceLabel({kind: 'opencode'}, 3), codexInstanceLabel({kind: 'cline'}, 3), codexInstanceLabel({kind: 'api'}, 3)]))");
     assert_eq!(
         result,
         serde_json::json!([
@@ -1347,7 +1347,13 @@ fn model_status_codex_instance_label_matches_taskbar_identity_colors() {
             ["CX2", "#938ff4"],
             ["CX3", "#a856e8"],
             ["GK1", "#7ec8ff"],
-            ["CC1", "#7ec8ff"]
+            ["CC1", "#7ec8ff"],
+            ["QA1", "#7ec8ff"],
+            ["OA1", "#7ec8ff"],
+            ["NA1", "#7ec8ff"],
+            ["OC1", "#7ec8ff"],
+            ["CL1", "#7ec8ff"],
+            ["AP1", "#7ec8ff"]
         ])
     );
 
