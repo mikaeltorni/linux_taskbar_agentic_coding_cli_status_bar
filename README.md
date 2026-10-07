@@ -281,7 +281,9 @@ label from Phrase Automation's project catalog (for example `INS`), followed by
 the harness's symbolic icon instead of a repeated provider name. Codex rows
 place their `CX1`, `CX2`, … account name immediately to the right
 of that icon, using the same blue-to-purple identity color as the main
-rate-limit indicator. Other harness rows keep their existing layout. Only the
+rate-limit indicator. Other live ACC kinds place `GK1`, `CC1`, `QA1`, `OA1`,
+`NA1`, `OC1`, `CL1`, or `AP1` in that same spot even when only one of that
+kind is open. Only the
 active workspace heading gets a translucent teal background. Agent rows keep
 their text and CX instance colors, with measured task progress behind the text. A finished agent that
 has not been opened since its turn ended gives
