@@ -1431,8 +1431,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
 
         const origin = [];
-        if (agent.project)
-            origin.push(`${agent.project}`);
         if (agent.branch)
             origin.push(`(${agent.branch})`);
         if (origin.length > 0) {
