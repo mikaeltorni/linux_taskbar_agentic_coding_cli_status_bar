@@ -1486,8 +1486,10 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Build one menu section per numerically ordered workspace, with
-     * monitor-ordered entries.
+     * Build workspace sections with ID-ordered rows and monitor separators.
+     * Parameters: this - model-status button; payload - normalized task rows;
+     *     stale - whether data is stale; attention - workspace waiting counts.
+     * Returns: undefined.
      *
      * @param {object} payload - normalized payload.
      * @param {boolean} stale - whether the payload is stale.
@@ -1495,6 +1497,7 @@ class AccModelStatusButton extends PanelMenu.Button {
      *     {@link workspaceAttentionCounts}, repeated as badges in the headings.
      */
     _renderMenu(payload, stale, attention) {
+        print(`this=${this} payload=${payload} stale=${stale} attention=${attention}`);
         const workspaceEntries = [];
         for (const provider of payload.providers) {
             const agents = Array.isArray(provider.agents) ? provider.agents : [];
@@ -1535,8 +1538,17 @@ class AccModelStatusButton extends PanelMenu.Button {
                 heading.actor.add_style_class_name('ams-current-workspace-block');
             workspaceSection.addMenuItem(heading);
             this.menu.addMenuItem(workspaceSection);
-            for (const entry of group.entries)
+            let previousMonitor = null;
+            for (const entry of group.entries) {
+                const monitor = monitorSortValue(entry.agent.monitor);
+                if (previousMonitor !== null && monitor !== previousMonitor) {
+                    const separator = new PopupMenu.PopupSeparatorMenuItem();
+                    separator.actor.add_style_class_name('ams-monitor-separator');
+                    workspaceSection.addMenuItem(separator);
+                }
                 workspaceSection.addMenuItem(this._agentMenuItem(entry.agent, entry.provider, payload.codexInstanceCount));
+                previousMonitor = monitor;
+            }
         }
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -1545,6 +1557,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             ? `Stale — last update ${payload.updatedAt || 'unknown'}`
             : `${payload.totalRunning} running / ${payload.totalLive} live`;
         this.menu.addMenuItem(new PopupMenu.PopupMenuItem(footer, {reactive: false}));
+        print(undefined);
     }
 
     /**

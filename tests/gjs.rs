@@ -2069,3 +2069,58 @@ emit(JSON.stringify({passed: true}));
     assert_eq!(result["passed"], true);
     println!("None");
 }
+
+/// Check rendered monitor boundaries independently for every workspace.
+/// Parameters: none.
+/// Returns: None after assertions on rows, separators, and muted line styling.
+#[test]
+fn taskbar_monitor_separators_are_workspace_local() {
+    println!("parameters=none");
+    assert!(gjs_available(), "gjs is required for taskbar render checks");
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let names = ["monitorSortValue", "workspaceSortValue", "windowDisplaySortValue",
+        "compareWorkspaceEntries", "groupWorkspaceEntries"];
+    let mut snippets: Vec<String> = names.iter().map(|name| extract_function(&source, name)).collect();
+    snippets.push(format!("const button = {{ {} }};", extract_method(&source, "_renderMenu")));
+    let result = run_gjs(&snippets, r#"
+const emit = print; print = value => {};
+/** Build a headless menu actor. Parameters: text - heading, or null. Returns: a menu item. */
+function MenuItem(text) {
+ print(`text=${text}`);
+ const result = {text, children: [], actor: {add_style_class_name: name => {}},
+   label: {add_style_class_name: name => {}}, addMenuItem: item => result.children.push(item)};
+ print(result); return result;
+}
+/** Build a headless separator. Parameters: none. Returns: a separator menu item. */
+function Separator() {
+ print('parameters=none');
+ const result = new MenuItem('separator'); print(result); return result;
+}
+const PopupMenu = {PopupMenuItem: MenuItem, PopupMenuSection: MenuItem, PopupSeparatorMenuItem: Separator};
+button.menu = new MenuItem('root');
+button._agentMenuItem = (agent, provider, count) => new MenuItem('id-' + agent.window_display_id);
+const agents = [
+ {workspace: 1, monitor: 1, window_display_id: 10},
+ {workspace: 1, monitor: 0, window_display_id: 0},
+ {workspace: 1, monitor: 1, window_display_id: 2},
+ {workspace: 2, monitor: 1, window_display_id: 12},
+ {workspace: 2, monitor: 0, window_display_id: 11},
+ {workspace: 3, monitor: 0, window_display_id: 13},
+ {workspace: 4, monitor: null, window_display_id: null},
+ {workspace: 4, monitor: -1, window_display_id: null},
+];
+button._renderMenu({providers: [{label: 'Codex', agents}], totalRunning: 0, totalLive: 8}, false, []);
+const groups = button.menu.children.filter(item => item.children.length).map(item => item.children.map(row => row.text));
+emit(JSON.stringify(groups));
+"#);
+    assert_eq!(result, serde_json::json!([
+        ["Workspace 1", "id-0", "separator", "id-2", "id-10"],
+        ["Workspace 2", "id-11", "separator", "id-12"],
+        ["Workspace 3", "id-13"],
+        ["Workspace 4", "id-null", "id-null"]
+    ]));
+    let css = fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
+    assert!(css.contains(".ams-monitor-separator"));
+    assert!(css.contains("rgba(160, 160, 160, 0.55)"));
+    println!("None");
+}
