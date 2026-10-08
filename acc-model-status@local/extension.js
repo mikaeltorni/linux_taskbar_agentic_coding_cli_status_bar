@@ -602,23 +602,28 @@ function withWindowDisplayIds(payload, ids) {
 }
 
 /**
- * Sort monitor groups by numeric corner IDs, then deterministic fallbacks.
+ * Sort workspace rows by numeric corner IDs before monitor fallbacks.
  * Parameters: left - first task/provider pair; right - second task/provider pair.
  * Returns: negative, zero, or positive ordering comparison.
  */
 function compareWorkspaceEntries(left, right) {
     print(`left=${left} right=${right}`);
-    const result = monitorSortValue(left.agent.monitor) - monitorSortValue(right.agent.monitor) ||
-        workspaceSortValue(left.agent.workspace) - workspaceSortValue(right.agent.workspace) ||
+    const result = workspaceSortValue(left.agent.workspace) - workspaceSortValue(right.agent.workspace) ||
         windowDisplaySortValue(left.agent) - windowDisplaySortValue(right.agent) ||
+        monitorSortValue(left.agent.monitor) - monitorSortValue(right.agent.monitor) ||
         String(left.provider.label || '').localeCompare(String(right.provider.label || '')) ||
         String(left.agent.title || '').localeCompare(String(right.agent.title || ''));
     print(result);
     return result;
 }
 
-/** Group once per workspace, sorting groups numerically and rows by monitor. */
+/**
+ * Group once per workspace with numeric ID ordering inside each section.
+ * Parameters: entries - task/provider pairs from all workspaces.
+ * Returns: workspace groups sorted by workspace and numeric corner ID.
+ */
 function groupWorkspaceEntries(entries) {
+    print(`entries=${entries}`);
     const groups = new Map();
     for (const entry of entries) {
         const workspace = Number(entry.agent.workspace) || 0;
@@ -635,6 +640,7 @@ function groupWorkspaceEntries(entries) {
         group.entries.sort(compareWorkspaceEntries);
     orderedGroups.sort((left, right) => workspaceSortValue(left.workspace) -
         workspaceSortValue(right.workspace));
+    print(orderedGroups);
     return orderedGroups;
 }
 
