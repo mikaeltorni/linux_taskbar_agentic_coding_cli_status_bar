@@ -278,7 +278,13 @@ menu origin show `·N` next to the worktree identity. Each workspace appears in
 one contiguous section, ordered by ascending workspace number; rows within
 each section are sorted numerically by the window IDs
 shown in the terminal’s top-left corner. These are read from ACC’s
-`cli_window_ids.json`; account and conversation IDs do not determine task order.
+`outline_window_index.json` (`number`, starting at 1 in each workspace), the
+same index used by the window-focus hotkeys. The outline helper numbers one
+monitor at a time in physical layout order, then rows from left to right on
+that monitor. The menu follows those published numbers on every refresh;
+account and conversation IDs do not determine task order. ACC's separate
+`cli_window_ids.json` contains global CLI selector IDs and does not set this
+menu's order.
 Rows without a current published window ID follow numbered rows. A full-width grey dashed
 line, aligned with the standard separators and with minimal vertical spacing,
 marks each monitor change within that ID order; single-monitor workspaces
