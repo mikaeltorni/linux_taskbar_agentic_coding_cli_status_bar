@@ -200,8 +200,14 @@
   margin-right: 3px;
 }
 
-/* A quiet one-pixel boundary between monitor groups inside one workspace. */
-.ams-monitor-separator .popup-separator-menu-item-separator {
-    background-color: rgba(160, 160, 160, 0.55);
-    height: 1px;
+/* Short grey dashes with no extra vertical padding between monitor groups. */
+.ams-monitor-separator {
+    padding: 0px 12px;
+    margin: 0px;
+    min-height: 0px;
+}
+
+.ams-monitor-separator-label {
+    color: rgba(160, 160, 160, 0.55);
+    font-size: 8px;
 }

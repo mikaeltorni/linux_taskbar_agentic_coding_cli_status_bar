@@ -1564,8 +1564,10 @@ class AccModelStatusButton extends PanelMenu.Button {
             for (const entry of group.entries) {
                 const monitor = monitorSortValue(entry.agent.monitor);
                 if (previousMonitor !== null && monitor !== previousMonitor) {
-                    const separator = new PopupMenu.PopupSeparatorMenuItem();
+                    const separator = new PopupMenu.PopupMenuItem('-----------',
+                        {reactive: false, can_focus: false});
                     separator.actor.add_style_class_name('ams-monitor-separator');
+                    separator.label.add_style_class_name('ams-monitor-separator-label');
                     workspaceSection.addMenuItem(separator);
                 }
                 workspaceSection.addMenuItem(this._agentMenuItem(entry.agent, entry.provider, payload.codexInstanceCount));
