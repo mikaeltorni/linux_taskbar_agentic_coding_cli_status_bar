@@ -540,21 +540,81 @@ function workspaceSortValue(workspace) {
     return number > 0 ? number : Number.MAX_SAFE_INTEGER;
 }
 
-/** Sort workspace-menu entries by monitor, workspace, provider, and title. */
+/**
+ * Read the corner badge IDs published by ACC's outline helper.
+ * Parameters: file - cli_window_ids.json beside the task payload.
+ * Returns: a map from note identity to valid display ID and desktop.
+ */
+function readWindowDisplayIds(file) {
+    print(`file=${file}`);
+    const ids = new Map();
+    try {
+        const [ok, bytes] = file.load_contents(null);
+        const parsed = ok ? JSON.parse(new TextDecoder().decode(bytes)) : null;
+        for (const row of Array.isArray(parsed?.windows) ? parsed.windows : []) {
+            const identity = row?.note_id || row?.instance_id;
+            const id = row?.display_id;
+            if (identity && id !== null && id !== undefined && id !== '' &&
+                Number.isInteger(Number(id)) && Number(id) >= 0)
+                ids.set(String(identity), {id: Number(id), desktop: row.desktop});
+        }
+    } catch (_error) {
+        // Missing or corrupt numbering must not hide open task rows.
+    }
+    print(ids);
+    return ids;
+}
+
+/**
+ * Normalize the published display ID, keeping unknown IDs last.
+ * Parameters: agent - one task row, optionally joined to its corner badge.
+ * Returns: the numeric display ID, or a final-position sentinel.
+ */
+function windowDisplaySortValue(agent) {
+    print(`agent=${agent}`);
+    const id = agent.window_display_id;
+    const result = id !== null && id !== undefined &&
+        Number.isInteger(Number(id)) && Number(id) >= 0
+        ? Number(id) : Number.MAX_SAFE_INTEGER;
+    print(result);
+    return result;
+}
+
+/**
+ * Join the outline helper's IDs to scoped task rows without changing identity.
+ * Parameters: payload - task rows scoped to live windows; ids - published ID map.
+ * Returns: a copied payload with corner display IDs on matching desktops.
+ */
+function withWindowDisplayIds(payload, ids) {
+    print(`payload=${payload} ids=${ids}`);
+    const providers = payload.providers.map(provider => ({...provider,
+        agents: (provider.agents || []).map(agent => {
+            const indexed = [agent.note_id, agent.tmux_name, agent.session_id, agent.key]
+                .map(identity => ids.get(String(identity || ''))).find(Boolean);
+            const matches = indexed && Number.isInteger(indexed.desktop) &&
+                indexed.desktop + 1 === Number(agent.workspace);
+            return {...agent, window_display_id: matches ? indexed.id : null};
+        }),
+    }));
+    const result = {...payload, providers};
+    print(result);
+    return result;
+}
+
+/**
+ * Sort monitor groups by numeric corner IDs, then deterministic fallbacks.
+ * Parameters: left - first task/provider pair; right - second task/provider pair.
+ * Returns: negative, zero, or positive ordering comparison.
+ */
 function compareWorkspaceEntries(left, right) {
-    const monitorDifference = monitorSortValue(left.agent.monitor) -
-        monitorSortValue(right.agent.monitor);
-    if (monitorDifference !== 0)
-        return monitorDifference;
-    const workspaceDifference = workspaceSortValue(left.agent.workspace) -
-        workspaceSortValue(right.agent.workspace);
-    if (workspaceDifference !== 0)
-        return workspaceDifference;
-    const providerDifference = String(left.provider.label || '').localeCompare(
-        String(right.provider.label || ''));
-    if (providerDifference !== 0)
-        return providerDifference;
-    return String(left.agent.title || '').localeCompare(String(right.agent.title || ''));
+    print(`left=${left} right=${right}`);
+    const result = monitorSortValue(left.agent.monitor) - monitorSortValue(right.agent.monitor) ||
+        workspaceSortValue(left.agent.workspace) - workspaceSortValue(right.agent.workspace) ||
+        windowDisplaySortValue(left.agent) - windowDisplaySortValue(right.agent) ||
+        String(left.provider.label || '').localeCompare(String(right.provider.label || '')) ||
+        String(left.agent.title || '').localeCompare(String(right.agent.title || ''));
+    print(result);
+    return result;
 }
 
 /** Group once per workspace, sorting groups numerically and rows by monitor. */
@@ -1135,7 +1195,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         const published = readPayload(this._file);
         const windows = this._openWindowDescriptors();
         const payload = published
-            ? scopePayloadToWindows(published, windows)
+            ? withWindowDisplayIds(scopePayloadToWindows(published, windows),
+                readWindowDisplayIds(this._file.get_parent().get_child('cli_window_ids.json')))
             : null;
         const panelEstimate = formatPanelTaskEstimate(
             longestTaskEstimate(activeTaskEstimates(published)));
