@@ -1590,6 +1590,17 @@ fn opt_in_clis_stay_off_the_bar_until_enabled() {
     assert_eq!(js["cold_start_opt_in"]["claude_code"], true);
     assert_eq!(js["cold_start_opt_in"]["grok"], true);
     assert_eq!(js["cold_start_opt_out"]["grok"], false);
+    let retained = &js["cursor_codex_with_grok_off"];
+    assert_eq!(retained["enabled"]["codex"], true);
+    assert_eq!(retained["enabled"]["cursor"], true);
+    assert_eq!(retained["enabled"]["grok"], false);
+    let codex_markup = retained["codex_markup"].as_str().unwrap();
+    assert!(codex_markup.contains("CX1"), "{codex_markup}");
+    assert!(codex_markup.contains("CX2"), "{codex_markup}");
+    let cursor_markup = retained["cursor_markup"].as_str().unwrap();
+    assert!(cursor_markup.contains("CRS"), "{cursor_markup}");
+    assert!(cursor_markup.contains(">77<"), "{cursor_markup}");
+    assert!(cursor_markup.contains(">55<"), "{cursor_markup}");
     // A non-boolean value is not an opt-in.
     assert_eq!(js["cold_start_garbage"]["openrouter"], false);
 
