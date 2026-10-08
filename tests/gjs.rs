@@ -2030,7 +2030,7 @@ emit(JSON.stringify({initial, open, missing, recovered, closed, emptyHidden: !em
     println!("None");
 }
 
-/// Check numeric corner IDs through the production file reader and payload join.
+/// Check numeric corner IDs precede monitors through the production reader and join.
 /// Parameters: none.
 /// Returns: None; assertions fail on incorrect ordering or invalid index acceptance.
 #[test]
@@ -2055,8 +2055,8 @@ const ids = readWindowDisplayIds(file);
 if (ids.size !== 3) throw Error('invalid index rows accepted');
 const entries = [
  {provider: {label: 'A'}, agent: {title: 'A', session_id: 'note-10', monitor: 0, workspace: 1}},
- {provider: {label: 'Z'}, agent: {title: 'Z', note_id: 'note-0', session_id: 'different-runtime-id', monitor: 0, workspace: 1}},
- {provider: {label: 'B'}, agent: {title: 'B', session_id: 'note-2', monitor: 0, workspace: 1}},
+ {provider: {label: 'Z'}, agent: {title: 'Z', note_id: 'note-0', session_id: 'different-runtime-id', monitor: 1, workspace: 1}},
+ {provider: {label: 'B'}, agent: {title: 'B', session_id: 'note-2', monitor: 2, workspace: 1}},
  {provider: {label: 'A'}, agent: {title: 'unknown', session_id: 'unmapped', monitor: 0, workspace: 1}}
 ];
 const payload = {providers: entries.map(entry => ({...entry.provider, agents: [entry.agent]}))};
@@ -2121,7 +2121,7 @@ const PopupMenu = {PopupMenuItem: MenuItem, PopupMenuSection: MenuItem, PopupSep
 button.menu = new MenuItem('root');
 button._agentMenuItem = (agent, provider, count) => new MenuItem('id-' + agent.window_display_id);
 const agents = [
- {workspace: 1, monitor: 1, window_display_id: 10},
+ {workspace: 1, monitor: 0, window_display_id: 10},
  {workspace: 1, monitor: 0, window_display_id: 0},
  {workspace: 1, monitor: 1, window_display_id: 2},
  {workspace: 2, monitor: 1, window_display_id: 12},
@@ -2136,13 +2136,13 @@ emit(JSON.stringify({groups, removedRules, expands: drawings.map(area => area.x_
  paints: drawings.every(area => area.callback === paintMonitorSeparator)}));
 "#);
     assert_eq!(result["groups"], serde_json::json!([
-        ["Workspace 1", "id-0", "separator", "id-2", "id-10"],
+        ["Workspace 1", "id-0", "separator", "id-2", "separator", "id-10"],
         ["Workspace 2", "id-11", "separator", "id-12"],
         ["Workspace 3", "id-13"],
         ["Workspace 4", "id-null", "id-null"]
     ]));
-    assert_eq!(result["removedRules"], 2);
-    assert_eq!(result["expands"], serde_json::json!([true, true]));
+    assert_eq!(result["removedRules"], 3);
+    assert_eq!(result["expands"], serde_json::json!([true, true, true]));
     assert_eq!(result["paints"], true);
     let css = fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
     assert!(css.contains(".ams-monitor-separator"));
