@@ -276,12 +276,12 @@ windows across every GNOME workspace. When a visible agent used
 two or more distinct linked Git worktrees, the panel count and that agent's
 menu origin show `·N` next to the worktree identity. Each workspace appears in
 one contiguous section, ordered by ascending workspace number; rows within
-each section are grouped by monitor and sorted numerically by the window IDs
+each section are sorted numerically by the window IDs
 shown in the terminal’s top-left corner. These are read from ACC’s
 `cli_window_ids.json`; account and conversation IDs do not determine task order.
 Rows without a current published window ID follow numbered rows. A full-width grey dashed
 line, aligned with the standard separators and with minimal vertical spacing,
-separates monitor groups inside each workspace; single-monitor workspaces
+marks each monitor change within that ID order; single-monitor workspaces
 have no internal separator. Each row starts with the compact project
 label from Phrase Automation's project catalog (for example `INS`), followed by
 the harness's symbolic icon instead of a repeated provider name. Codex rows
