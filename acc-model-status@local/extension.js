@@ -639,6 +639,49 @@ function groupWorkspaceEntries(entries) {
 }
 
 /**
+ * Paint a dashed grey line across the separator's allocated content width.
+ * Parameters: area - DrawingArea being repainted at the current menu width.
+ * Returns: undefined after releasing its Cairo context.
+ */
+function paintMonitorSeparator(area) {
+    print(`area=${area}`);
+    const [width] = area.get_surface_size();
+    const context = area.get_context();
+    context.setSourceRGBA(0.63, 0.63, 0.63, 0.55);
+    context.setLineWidth(1);
+    context.setDash([6, 4], 0);
+    context.moveTo(0, 0.5);
+    context.lineTo(width, 0.5);
+    context.stroke();
+    context.$dispose();
+    print(undefined);
+}
+
+/**
+ * Build a compact dashed separator with the standard line's side margins.
+ * Parameters: none.
+ * Returns: a noninteractive native separator with a full-width dashed drawing.
+ */
+function buildMonitorSeparator() {
+    print('parameters=none');
+    const separator = new PopupMenu.PopupSeparatorMenuItem();
+    separator.actor.add_style_class_name('ams-monitor-separator');
+    for (const child of separator.get_children()) {
+        if (child.has_style_class_name('popup-separator-menu-item-separator'))
+            child.destroy();
+    }
+    const area = new St.DrawingArea({
+        style_class: 'popup-separator-menu-item-separator ams-monitor-dashes',
+        x_expand: true,
+        y_align: Clutter.ActorAlign.CENTER,
+    });
+    area.connect('repaint', paintMonitorSeparator);
+    separator.add_child(area);
+    print(separator);
+    return separator;
+}
+
+/**
  * Match the ACC payload to every open agent window, preserving real workspace.
  *
  * Matching is one-to-one: a single terminal window can select at most one
@@ -1564,11 +1607,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             for (const entry of group.entries) {
                 const monitor = monitorSortValue(entry.agent.monitor);
                 if (previousMonitor !== null && monitor !== previousMonitor) {
-                    const separator = new PopupMenu.PopupMenuItem('-----------',
-                        {reactive: false, can_focus: false});
-                    separator.actor.add_style_class_name('ams-monitor-separator');
-                    separator.label.add_style_class_name('ams-monitor-separator-label');
-                    workspaceSection.addMenuItem(separator);
+                    workspaceSection.addMenuItem(buildMonitorSeparator());
                 }
                 workspaceSection.addMenuItem(this._agentMenuItem(entry.agent, entry.provider, payload.codexInstanceCount));
                 previousMonitor = monitor;
