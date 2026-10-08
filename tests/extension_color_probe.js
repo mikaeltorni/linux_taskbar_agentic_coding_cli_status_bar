@@ -347,6 +347,24 @@ const results = {
     {clis: {claude_code: {enabled: true}, openrouter: {enabled: true}, opencode_go: {enabled: true}, cursor: {enabled: true}, grok: {enabled: true}}}, DEFAULTS),
   cold_start_opt_out: cliEnabledFromConfig(
     {clis: {grok: {enabled: false}}}, DEFAULTS),
+  cursor_codex_with_grok_off: {
+    enabled: cliEnabledFromConfig(
+      {clis: {codex: {enabled: true}, cursor: {enabled: true}, grok: {enabled: false}}}, DEFAULTS),
+    codex_markup: codexBarMarkup('CX', {
+      selected: 2,
+      instances: [
+        {id: 1, windows: [
+          {label: '5h', used_percent: 57, resets_at: NOW + 3600},
+          {label: 'week', used_percent: 43, resets_at: NOW + 100000}]},
+        {id: 2, label: 'trial', selected: true, windows: [
+          {label: 'month', used_percent: 12, resets_at: NOW + 2588400}]},
+      ],
+    }, NOW),
+    cursor_markup: cursorBarMarkup('CRS', {windows: [
+      {label: 'cursor_models', used_percent: 23.1, resets_at: NOW + 3600},
+      {label: 'other_models', used_percent: 45, resets_at: NOW + 3600},
+    ]}, NOW),
+  },
   cold_start_garbage: cliEnabledFromConfig({clis: {openrouter: {enabled: 'yes'}}}, DEFAULTS),
 };
 print(JSON.stringify(results));
