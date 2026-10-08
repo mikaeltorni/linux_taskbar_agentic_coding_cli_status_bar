@@ -2114,13 +2114,15 @@ const groups = button.menu.children.filter(item => item.children.length).map(ite
 emit(JSON.stringify(groups));
 "#);
     assert_eq!(result, serde_json::json!([
-        ["Workspace 1", "id-0", "separator", "id-2", "id-10"],
-        ["Workspace 2", "id-11", "separator", "id-12"],
+        ["Workspace 1", "id-0", "-----------", "id-2", "id-10"],
+        ["Workspace 2", "id-11", "-----------", "id-12"],
         ["Workspace 3", "id-13"],
         ["Workspace 4", "id-null", "id-null"]
     ]));
     let css = fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
     assert!(css.contains(".ams-monitor-separator"));
     assert!(css.contains("rgba(160, 160, 160, 0.55)"));
+    assert!(css.contains("padding: 0px 12px;"));
+    assert!(css.contains("font-size: 8px;"));
     println!("None");
 }
