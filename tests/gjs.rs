@@ -2088,21 +2088,35 @@ fn taskbar_monitor_separators_are_workspace_local() {
     let names = ["monitorSortValue", "workspaceSortValue", "windowDisplaySortValue",
         "compareWorkspaceEntries", "groupWorkspaceEntries"];
     let mut snippets: Vec<String> = names.iter().map(|name| extract_function(&source, name)).collect();
+    snippets.push(extract_function(&source, "paintMonitorSeparator"));
+    snippets.push(extract_function(&source, "buildMonitorSeparator"));
     snippets.push(format!("const button = {{ {} }};", extract_method(&source, "_renderMenu")));
     let result = run_gjs(&snippets, r#"
 const emit = print; print = value => {};
+let removedRules = 0; const drawings = [];
 /** Build a headless menu actor. Parameters: text - heading, or null. Returns: a menu item. */
 function MenuItem(text) {
  print(`text=${text}`);
  const result = {text, children: [], actor: {add_style_class_name: name => {}},
-   label: {add_style_class_name: name => {}}, addMenuItem: item => result.children.push(item)};
+   label: {add_style_class_name: name => {}}, get_children: () => [],
+   add_child: child => {result.drawing = child; drawings.push(child);}, addMenuItem: item => result.children.push(item)};
  print(result); return result;
 }
 /** Build a headless separator. Parameters: none. Returns: a separator menu item. */
 function Separator() {
  print('parameters=none');
- const result = new MenuItem('separator'); print(result); return result;
+ const result = new MenuItem('separator');
+ result.get_children = () => [{has_style_class_name: name => name === 'popup-separator-menu-item-separator',
+   destroy: () => {removedRules++;}}];
+ print(result); return result;
 }
+const Clutter = {ActorAlign: {CENTER: 0}};
+const St = {DrawingArea: class {
+ /** Create a headless area. Parameters: props - drawing properties. Returns: a new area. */
+ constructor(props) {print(`props=${props}`); Object.assign(this, props); print(undefined);}
+ /** Capture repaint hookup. Parameters: signal - signal name; callback - paint handler. Returns: undefined. */
+ connect(signal, callback) {print(`signal=${signal} callback=${callback}`); this.callback = callback; print(undefined);}
+}};
 const PopupMenu = {PopupMenuItem: MenuItem, PopupMenuSection: MenuItem, PopupSeparatorMenuItem: Separator};
 button.menu = new MenuItem('root');
 button._agentMenuItem = (agent, provider, count) => new MenuItem('id-' + agent.window_display_id);
@@ -2118,19 +2132,24 @@ const agents = [
 ];
 button._renderMenu({providers: [{label: 'Codex', agents}], totalRunning: 0, totalLive: 8}, false, []);
 const groups = button.menu.children.filter(item => item.children.length).map(item => item.children.map(row => row.text));
-emit(JSON.stringify(groups));
+emit(JSON.stringify({groups, removedRules, expands: drawings.map(area => area.x_expand),
+ paints: drawings.every(area => area.callback === paintMonitorSeparator)}));
 "#);
-    assert_eq!(result, serde_json::json!([
-        ["Workspace 1", "id-0", "-----------", "id-2", "id-10"],
-        ["Workspace 2", "id-11", "-----------", "id-12"],
+    assert_eq!(result["groups"], serde_json::json!([
+        ["Workspace 1", "id-0", "separator", "id-2", "id-10"],
+        ["Workspace 2", "id-11", "separator", "id-12"],
         ["Workspace 3", "id-13"],
         ["Workspace 4", "id-null", "id-null"]
     ]));
+    assert_eq!(result["removedRules"], 2);
+    assert_eq!(result["expands"], serde_json::json!([true, true]));
+    assert_eq!(result["paints"], true);
     let css = fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
     assert!(css.contains(".ams-monitor-separator"));
-    assert!(css.contains("rgba(160, 160, 160, 0.55)"));
-    assert!(css.contains("padding: 0px 12px;"));
-    assert!(css.contains("font-size: 8px;"));
+    assert!(css.contains("background-color: transparent;"));
+    assert!(css.contains("padding-top: 2px;"));
+    assert!(css.contains("padding-bottom: 2px;"));
+    assert!(!css.contains(".ams-monitor-separator-label"));
     println!("None");
 }
 
@@ -2166,4 +2185,38 @@ globalThis.print(JSON.stringify({openMode, closedMode: manager._grabParams.actio
     assert!(source.find("this.menu.connect('open-state-changed'").unwrap()
         < source.find("Main.panel.addToStatusArea('acc-model-status'").unwrap());
     println!("{:?}", ());
+}
+
+/// Check the actual paint callback spans arbitrary allocated widths with gaps.
+/// Parameters: none.
+/// Returns: None after width, dash pattern, colour and context disposal assertions.
+#[test]
+fn taskbar_dashed_separator_paints_full_allocated_width() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let result = run_gjs(&[extract_function(&source, "paintMonitorSeparator")], r#"
+const emit = print; print = value => {};
+const samples = [];
+for (const width of [200, 460, 780]) {
+ const calls = [];
+ const context = {
+  setSourceRGBA: (...args) => calls.push(['color', ...args]),
+  setLineWidth: value => calls.push(['thickness', value]),
+  setDash: (pattern, offset) => calls.push(['dash', pattern, offset]),
+  moveTo: (x, y) => calls.push(['start', x, y]),
+  lineTo: (x, y) => calls.push(['end', x, y]),
+  stroke: () => calls.push(['stroke']), $dispose: () => calls.push(['dispose'])
+ };
+ paintMonitorSeparator({get_surface_size: () => [width, 1], get_context: () => context});
+ samples.push(calls);
+}
+emit(JSON.stringify(samples));
+"#);
+    for (sample, width) in result.as_array().unwrap().iter().zip([200, 460, 780]) {
+        assert_eq!(sample, &serde_json::json!([
+            ["color", 0.63, 0.63, 0.63, 0.55], ["thickness", 1], ["dash", [6, 4], 0],
+            ["start", 0, 0.5], ["end", width, 0.5], ["stroke"], ["dispose"]
+        ]));
+    }
+    println!("None");
 }
