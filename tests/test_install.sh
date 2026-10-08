@@ -178,11 +178,12 @@ assert_file_exists "$CONFIG_FILE" "Should seed the default config"
 for cli in codex claude_code grok opencode_go openrouter cursor; do
   assert_file_contains "$CONFIG_FILE" "\"$cli\"" "Config should have a $cli entry"
 done
-# A default install must enable every default-on CLI; Claude Code is opt-in via
-# --select claude_code_monitor and must remain hidden until selected.
-for cli in codex grok; do
+# A default install enables Codex but leaves Grok and Claude Code opt-in.
+for cli in codex; do
   assert_eq "$(cfg_get "clis.$cli.enabled")" "true" "default install must enable $cli"
 done
+assert_eq "$(cfg_get clis.grok.enabled)" "false" \
+  "default install must keep grok monitoring disabled"
 assert_eq "$(cfg_get clis.claude_code.enabled)" "false" \
   "default install must keep claude_code disabled"
 assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
@@ -204,6 +205,14 @@ assert_file_contains "$CONFIG_FILE" '"endpoint_min_interval_seconds": 180' \
   "Claude endpoint interval should be seeded configurable at 180 seconds"
 assert_file_contains "$TMP_DIR/install-1.out" "seconds" \
   "Install output should state the polling rate is in seconds"
+
+# --- Grok remains available as an explicit opt-in -------------------------
+run_installer --select grok_monitor >"$TMP_DIR/install-grok.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --select grok_monitor exited non-zero"; }
+assert_eq "$(cfg_get clis.grok.enabled)" "true" \
+  "--select grok_monitor should enable grok"
+assert_eq "$(cfg_get clis.codex.enabled)" "true" \
+  "selecting grok should leave codex enabled"
 
 # --- Non-interactive installer parameter overrides the shared cadence ------
 ACS_POLL_INTERVAL_SECONDS=7 run_installer --select polling_rate \
@@ -241,6 +250,8 @@ assert_file_exists "$REPO_ROOT/.log/install.log" \
 CONFIG_BEFORE="$(cat "$CONFIG_FILE")"
 run_installer >"$TMP_DIR/install-2.out" 2>"$TMP_DIR/install-2.err" || {
   FAIL=$((FAIL + 1)); echo "FAIL: re-run install exited non-zero"; }
+assert_eq "$(cfg_get clis.grok.enabled)" "true" \
+  "a default install should preserve an explicitly enabled grok monitor"
 if [ "$CONFIG_BEFORE" = "$(cat "$CONFIG_FILE")" ]; then
   PASS=$((PASS + 1))
 else
@@ -340,15 +351,16 @@ assert_eq "$(cfg_get clis.cursor.enabled)" "true" \
   "--select cursor_monitor should enable cursor"
 assert_eq "$(cfg_get clis.cursor.fetch_min_interval_seconds)" "12" \
   "installer should apply CRS_FETCH_INTERVAL_SECONDS without a TTY"
-# --- A default install re-enables previously-uninstalled default-on CLIs ---
-# grok (and the other default-on CLIs) were just uninstalled above; a plain
-# default install must bring them back, or they would stay hidden from the
-# taskbar (the extension drops any cli with enabled=false). claude_code stays
-# off unless explicitly selected.
+# --- A default install keeps Grok opt-in and preserves other CLI state ------
+# Grok was uninstalled above, so a default install leaves it off; Codex stays
+# enabled, Claude Code stays opt-in, and a previously enabled Cursor monitor is
+# preserved.
 run_installer >"$TMP_DIR/reinstall.out" 2>&1 || { FAIL=$((FAIL + 1)); echo "FAIL: default reinstall exited non-zero"; }
-for cli in codex grok; do
+for cli in codex; do
   assert_eq "$(cfg_get "clis.$cli.enabled")" "true" "default reinstall must re-enable $cli"
 done
+assert_eq "$(cfg_get clis.grok.enabled)" "false" \
+  "default reinstall must leave the opt-in Grok monitor disabled"
 assert_eq "$(cfg_get clis.claude_code.enabled)" "false" \
   "default reinstall must keep claude_code disabled"
 assert_eq "$(cfg_get clis.opencode_go.enabled)" "false" \
@@ -387,6 +399,8 @@ for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor ope
 done
 assert_eq "$(awk -F '\t' '$1 == "cursor_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \
   "--list-components should mark cursor_monitor opt-in"
+assert_eq "$(awk -F '\t' '$1 == "grok_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \
+  "--list-components should mark grok_monitor opt-in"
 assert_eq "$(awk -F '\t' '$1 == "claude_code_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \
   "--list-components should mark claude_code_monitor opt-in"
 assert_not_contains "$TMP_DIR/list.out" "cline" "--list-components must not offer cline"

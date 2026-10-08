@@ -86,9 +86,13 @@ fn default_forecast_sites() -> Value {
     Value::Object(sites)
 }
 
-/// Return the default configuration object.
+/// Build the default configuration object.
+///
+/// Parameters: none.
+/// Returns: the complete default configuration object.
 pub fn default_config() -> Value {
-    json!({
+    eprintln!("parameters=none");
+    let result = json!({
         "poll_interval_seconds": DEFAULT_POLL_INTERVAL_SECONDS,
         "tmux": {
             "enabled": true,
@@ -108,8 +112,9 @@ pub fn default_config() -> Value {
                 "stale_after_seconds": 1800,
                 "endpoint_min_interval_seconds": CLAUDE_ENDPOINT_MIN_INTERVAL_SECONDS,
             },
+            // Opt-in: keep Grok usage off the default bar for now.
             "grok": {
-                "enabled": true,
+                "enabled": false,
                 "source": "auto",
                 "stale_after_seconds": 1800,
             },
@@ -149,7 +154,9 @@ pub fn default_config() -> Value {
             "horizon": CODEX_RESET_FORECAST_HORIZON_DEFAULT,
             "sites": default_forecast_sites(),
         },
-    })
+    });
+    eprintln!("{result}");
+    result
 }
 
 /// Return the config file path, honoring `XDG_CONFIG_HOME`.
@@ -580,11 +587,16 @@ mod tests {
     use crate::test_support::Sandbox;
 
     #[test]
+    /// Use the default config when the sandbox has no config file.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
     fn defaults_when_missing() {
+        println!("parameters=none");
         let _sandbox = Sandbox::new();
         let cfg = load_config(None);
         assert_eq!(cfg["poll_interval_seconds"], json!(5));
-        let default_on = ["codex", "grok"];
+        let default_on = ["codex"];
         for cli in CLI_IDS {
             let enabled = cfg["clis"][cli]["enabled"].as_bool().unwrap();
             assert_eq!(enabled, default_on.contains(cli), "{cli}");
@@ -595,6 +607,7 @@ mod tests {
             };
             assert_eq!(cfg["clis"][cli]["source"], json!(expected_source));
         }
+        println!("()");
     }
 
     /// Write a config file into the sandbox and load it back.

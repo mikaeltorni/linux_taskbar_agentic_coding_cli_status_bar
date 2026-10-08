@@ -1563,8 +1563,14 @@ function logError(_error, _message) {}
 }
 
 #[test]
+/// Keep opt-in CLI taskbar segments hidden until selected.
+///
+/// Parameters: none.
+/// Returns: None.
 fn opt_in_clis_stay_off_the_bar_until_enabled() {
+    println!("parameters=none");
     let Some(js) = agentic_results() else {
+        println!("()");
         return;
     };
     // Cold start (no config file yet) must mirror the poller defaults: the
@@ -1575,13 +1581,14 @@ fn opt_in_clis_stay_off_the_bar_until_enabled() {
     assert_eq!(js["cold_start_defaults"]["cursor"], false);
     assert_eq!(js["cold_start_defaults"]["codex"], true);
     assert_eq!(js["cold_start_defaults"]["claude_code"], false);
-    assert_eq!(js["cold_start_defaults"]["grok"], true);
+    assert_eq!(js["cold_start_defaults"]["grok"], false);
     // An explicit opt-in brings the segment back, and an opt-out removes a
     // default-on one.
     assert_eq!(js["cold_start_opt_in"]["openrouter"], true);
     assert_eq!(js["cold_start_opt_in"]["opencode_go"], true);
     assert_eq!(js["cold_start_opt_in"]["cursor"], true);
     assert_eq!(js["cold_start_opt_in"]["claude_code"], true);
+    assert_eq!(js["cold_start_opt_in"]["grok"], true);
     assert_eq!(js["cold_start_opt_out"]["grok"], false);
     // A non-boolean value is not an opt-in.
     assert_eq!(js["cold_start_garbage"]["openrouter"], false);
@@ -1599,6 +1606,7 @@ fn opt_in_clis_stay_off_the_bar_until_enabled() {
     assert!(code.contains("openrouter: false"));
     assert!(code.contains("opencode_go: false"));
     assert!(code.contains("cursor: false"));
+    println!("()");
 }
 
 #[test]
