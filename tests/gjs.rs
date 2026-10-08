@@ -699,8 +699,12 @@ fn credit_state_is_visible_on_the_bar_and_in_the_menu() {
     );
 }
 
+/// Check retained workspace and monitor ordering.
+/// Parameters: none.
+/// Returns: None after successful assertions.
 #[test]
 fn model_status_entries_sort_workspaces_and_monitor_rows() {
+    println!("parameters=none");
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");
         return;
@@ -714,12 +718,14 @@ fn model_status_entries_sort_workspaces_and_monitor_rows() {
     let snippets = vec![
         extract_function(&source, "monitorSortValue"),
         extract_function(&source, "workspaceSortValue"),
+        extract_function(&source, "windowDisplaySortValue"),
         extract_function(&source, "compareWorkspaceEntries"),
         extract_function(&source, "groupWorkspaceEntries"),
     ];
     let js = run_gjs(
         &snippets,
         r#"
+const emit = print; print = value => {};
 const entries = [
   {provider: {label: 'Codex'}, agent: {title: 'monitor 2 workspace 1', monitor: 1, workspace: 1}},
   {provider: {label: 'Claude'}, agent: {title: 'monitor 1 workspace 2', monitor: 0, workspace: 2}},
@@ -730,7 +736,7 @@ const entries = [
   {provider: {label: 'Codex'}, agent: {title: 'unknown monitor', monitor: -1, workspace: 1}},
 ];
 const groups = groupWorkspaceEntries(entries);
-print(JSON.stringify({
+emit(JSON.stringify({
   workspaces: groups.map(group => group.workspace),
   titles: groups.map(group => group.entries.map(entry => entry.agent.title)),
 }));
@@ -750,6 +756,7 @@ print(JSON.stringify({
             ["monitor 1 workspace 4"]
         ])
     );
+    println!("None");
 }
 
 #[test]
@@ -1919,8 +1926,12 @@ emit(JSON.stringify({maximum: label(payload), invalid, malformed: malformed.map(
 /// Check the trailing panel actor through open-menu refresh and recovery.
 /// Parameters: none.
 /// Returns: None; asserts maximum text, stable click targets and stale styling.
+/// Check panel refresh with a local numbering file path.
+/// Parameters: none.
+/// Returns: None after successful assertions.
 #[test]
 fn panel_remaining_refreshes_at_far_right_without_replacing_menu() {
+    println!("parameters=none");
     println!("parameters=none");
     let source =
         fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
@@ -1936,6 +1947,8 @@ let published = {updatedAt: 'fresh', providers: [
     {kind: 'codex', agents: [{phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'estimated', remaining_seconds: 120}}]},
     {kind: 'claude', agents: [{phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'estimated', remaining_seconds: 540}}]}]};
 const readPayload = file => published;
+const readWindowDisplayIds = file => new Map();
+const withWindowDisplayIds = (payload, ids) => payload;
 const scopePayloadToWindows = (payload, windows) => ({...payload, providers: payload.providers.slice(0, 1)});
 const unreadCompletionCount = (payload, states) => 0;
 const saveUnreadStates = (file, states) => {};
@@ -1965,7 +1978,7 @@ const box = {children: [], add_child: child => box.children.push(child),
     destroy_all_children: () => {box.children = [];}};
 const menu = {isOpen: false, target: {}, removeAll: () => {menu.target = {};}};
 const chip = name => box.add_child({name});
-const button = Object.assign({_box: box, menu, _taskRows: new Map(), _unreadStates: new Map(), _unreadCount: 0,
+const button = Object.assign({_file: {get_parent: () => ({get_child: name => ({})})}, _box: box, menu, _taskRows: new Map(), _unreadStates: new Map(), _unreadCount: 0,
     _openWindowDescriptors: () => [], _renderHarnessRates: payload => {},
     _renderProvider: (provider, stale, payload) => chip(provider.kind),
     _renderPanelHarnessRates: (payload, stale, kinds) => chip('rate'),
@@ -2006,5 +2019,53 @@ emit(JSON.stringify({initial, open, missing, recovered, closed, emptyHidden: !em
             "closed": {"text": "~2m left", "newActor": true}, "emptyHidden": true
         })
     );
+    println!("None");
+    println!("None");
+}
+
+/// Check numeric corner IDs through the production file reader and payload join.
+/// Parameters: none.
+/// Returns: None; assertions fail on incorrect ordering or invalid index acceptance.
+#[test]
+fn taskbar_window_position_ids_order_rows() {
+    println!("parameters=none");
+    assert!(gjs_available(), "gjs is required for taskbar window ordering checks");
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let names = ["readWindowDisplayIds", "windowDisplaySortValue", "withWindowDisplayIds",
+        "monitorSortValue", "workspaceSortValue", "compareWorkspaceEntries", "groupWorkspaceEntries"];
+    let snippets: Vec<String> = names.iter().map(|name| extract_function(&source, name)).collect();
+    let result = run_gjs(&snippets, r#"
+const emit = print; print = value => {};
+const TextDecoder = class {decode(value) {return value;}};
+const file = {load_contents: () => [true, JSON.stringify({windows: [
+ {note_id: 'note-10', display_id: 10, desktop: 0},
+ {note_id: 'note-0', display_id: 0, desktop: 0},
+ {instance_id: 'note-2', display_id: '2', desktop: 0},
+ {note_id: 'negative', display_id: -1}, {note_id: 'fraction', display_id: 1.5},
+ {note_id: 'null', display_id: null}, {display_id: 4}
+]})]};
+const ids = readWindowDisplayIds(file);
+if (ids.size !== 3) throw Error('invalid index rows accepted');
+const entries = [
+ {provider: {label: 'A'}, agent: {title: 'A', session_id: 'note-10', monitor: 0, workspace: 1}},
+ {provider: {label: 'Z'}, agent: {title: 'Z', note_id: 'note-0', session_id: 'different-runtime-id', monitor: 0, workspace: 1}},
+ {provider: {label: 'B'}, agent: {title: 'B', session_id: 'note-2', monitor: 0, workspace: 1}},
+ {provider: {label: 'A'}, agent: {title: 'unknown', session_id: 'unmapped', monitor: 0, workspace: 1}}
+];
+const payload = {providers: entries.map(entry => ({...entry.provider, agents: [entry.agent]}))};
+const joined = withWindowDisplayIds(payload, ids);
+const rows = joined.providers.map(provider => ({provider, agent: provider.agents[0]}));
+const sorted = groupWorkspaceEntries(rows)[0].entries.map(entry => entry.agent.window_display_id);
+if (JSON.stringify(sorted) !== '[0,2,10,null]') throw Error('wrong numeric order: ' + JSON.stringify(sorted));
+if ('window_display_id' in payload.providers[0].agents[0]) throw Error('input mutated');
+const moved = withWindowDisplayIds({providers: [{agents: [{session_id: 'note-0', workspace: 2}]}]}, ids);
+if (moved.providers[0].agents[0].window_display_id !== null) throw Error('stale desktop joined');
+for (const input of ['{', '{}', '{"windows":null}']) {
+ if (readWindowDisplayIds({load_contents: () => [true, input]}).size) throw Error('invalid file accepted');
+}
+if (readWindowDisplayIds({load_contents: () => {throw Error('missing');}}).size) throw Error('missing file accepted');
+emit(JSON.stringify({passed: true}));
+"#);
+    assert_eq!(result["passed"], true);
     println!("None");
 }

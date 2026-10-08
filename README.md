@@ -276,7 +276,10 @@ windows across every GNOME workspace. When a visible agent used
 two or more distinct linked Git worktrees, the panel count and that agent's
 menu origin show `·N` next to the worktree identity. Each workspace appears in
 one contiguous section, ordered by ascending workspace number; rows within
-each section are ordered by monitor. Each row starts with the compact project
+each section are grouped by monitor and sorted numerically by the window IDs
+shown in the terminal’s top-left corner. These are read from ACC’s
+`cli_window_ids.json`; account and conversation IDs do not determine task order.
+Rows without a current published window ID follow numbered rows. Each row starts with the compact project
 label from Phrase Automation's project catalog (for example `INS`), followed by
 the harness's symbolic icon instead of a repeated provider name. Codex rows
 place their `CX1`, `CX2`, … account name immediately to the right
