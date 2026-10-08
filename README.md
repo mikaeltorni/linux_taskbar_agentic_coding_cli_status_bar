@@ -352,11 +352,12 @@ moves the pointer to that window through ACC's shared selector,
 `acc-window-select --note-id`.
 Green highlighting marks finished-but-unopened work, not click eligibility.
 Super+§ still cycles only through unopened completions.
-While the menu is open, its rows and panel layout remain a stable snapshot so
-background status updates cannot move or replace a row mid-click. Existing
-run clocks, task progress, completion glows and the panel remaining-time label
-update in place. Changes to
-menu membership and ordering appear immediately after dismissal.
+Configured GNOME Shell shortcuts, including workspace switching, continue
+to work while the menu is open. Its rows and panel layout remain a stable
+snapshot so background status updates cannot move or replace a row mid-click.
+Existing run clocks, task progress, completion glows and the panel remaining-time
+label update in place. Changes to menu membership and ordering appear
+immediately after dismissal.
 Selecting a row closes the popup before launching the selector, releasing its
 keyboard grab before the terminal receives focus.
 

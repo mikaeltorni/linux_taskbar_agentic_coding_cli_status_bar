@@ -947,14 +947,31 @@ function buildTaskProgressLayer(item, row, badge, agent) {
     return widgets;
 }
 
+/**
+ * Include regular Shell shortcuts in the ACC menu's modal popup grab.
+ *
+ * Parameters: manager - panel popup manager; isOpen - whether the menu is opening; originalActionMode - the manager's original mode.
+ * Returns: undefined after updating the popup action mode.
+ */
+function setStatusMenuActionMode(manager, isOpen, originalActionMode) {
+    print(`manager=${manager} isOpen=${isOpen} originalActionMode=${originalActionMode}`);
+    manager._grabParams.actionMode = isOpen
+        ? originalActionMode | Shell.ActionMode.NORMAL
+        : originalActionMode;
+    print(undefined);
+    return undefined;
+}
+
 const AccModelStatusButton = GObject.registerClass(
 class AccModelStatusButton extends PanelMenu.Button {
     /**
      * Build the panel button.
      *
-     * @param {Extension} extension - owning extension (for the icon directory).
+     * Parameters: this - button instance; extension - owning extension for the icon directory.
+     * Returns: undefined after initialization.
      */
     _init(extension) {
+        print(`this=${this} extension=${extension}`);
         super._init(0.5, 'ACC Model Status');
         this._iconsDir = extension.dir.get_child('icons');
         this._file = payloadFile();
@@ -975,7 +992,11 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._box = new St.BoxLayout({style_class: 'ams-box panel-status-menu-box'});
         this.add_child(this._box);
 
+        const menuManager = Main.panel.menuManager;
+        this._statusMenuActionMode = menuManager._grabParams.actionMode;
+        // Run before addToStatusArea registers the manager's open callback.
         this.menu.connect('open-state-changed', (_menu, isOpen) => {
+            setStatusMenuActionMode(menuManager, isOpen, this._statusMenuActionMode);
             if (!isOpen)
                 this._queueRefresh();
         });
@@ -983,6 +1004,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._startWatching();
         this._startWindowWatching();
         this._refresh();
+        print(undefined);
     }
 
     /**

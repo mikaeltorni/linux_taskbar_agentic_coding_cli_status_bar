@@ -1372,8 +1372,13 @@ fn model_status_menu_keeps_click_targets_until_closed() {
     let methods = ["_init", "_refresh", "_queueRefresh"]
         .map(|name| extract_method(&model, name))
         .join("\n");
-    let stubs = r#"
+    let stubs = format!(
+        "{}\n{}",
+        extract_function(&model, "setStatusMenuActionMode"),
+        r#"
 const emit = print; print = value => {};
+const Shell = {ActionMode: {NORMAL: 1, POPUP: 2}};
+const Main = {panel: {menuManager: {_grabParams: {actionMode: Shell.ActionMode.POPUP}}}};
 const activeTaskEstimates = payload => [];
 const longestTaskEstimate = estimates => ({status: 'inactive'});
 const formatPanelTaskEstimate = estimate => '';
@@ -1405,7 +1410,7 @@ class Base {
     _syncRunClockTimer() {}
 }
 "#
-    .to_string();
+    );
     let stubs =
         format!("{stubs}\nBase.prototype._updatePanelTaskEstimate = (text, stale) => {{}};");
     let button = format!("class Button extends Base {{ {methods} }}");
@@ -1426,12 +1431,14 @@ for (let cycle = 0; cycle < 2; cycle++) {
         button._refresh();
     }
     snapshots.push({reads, removals, sameTarget: target === button.menu.rows[0],
-        sameClocks: clocks === button._runClockActors});
+        sameClocks: clocks === button._runClockActors,
+        actionMode: Main.panel.menuManager._grabParams.actionMode});
     button.menu.isOpen = false;
     button.menu.handlers['open-state-changed']?.(button.menu, false);
     const queued = callbacks.length;
     callbacks.shift()?.();
-    snapshots.push({reads, removals, queued});
+    snapshots.push({reads, removals, queued,
+        actionMode: Main.panel.menuManager._grabParams.actionMode});
 }
 emit(JSON.stringify(snapshots));
 "#,
@@ -1439,10 +1446,10 @@ emit(JSON.stringify(snapshots));
     assert_eq!(
         result,
         serde_json::json!([
-            {"reads": 11, "removals": 1, "sameTarget": true, "sameClocks": true},
-            {"reads": 12, "removals": 2, "queued": 1},
-            {"reads": 22, "removals": 2, "sameTarget": true, "sameClocks": true},
-            {"reads": 23, "removals": 3, "queued": 1},
+            {"reads": 11, "removals": 1, "sameTarget": true, "sameClocks": true, "actionMode": 3},
+            {"reads": 12, "removals": 2, "queued": 1, "actionMode": 2},
+            {"reads": 22, "removals": 2, "sameTarget": true, "sameClocks": true, "actionMode": 3},
+            {"reads": 23, "removals": 3, "queued": 1, "actionMode": 2},
         ])
     );
     println!("None");
@@ -2007,4 +2014,38 @@ emit(JSON.stringify({initial, open, missing, recovered, closed, emptyHidden: !em
         })
     );
     println!("None");
+}
+
+/// Verify the status menu lets normal Shell shortcuts through while open.
+///
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn status_menu_hotkeys_remain_available_when_open() {
+    println!("parameters=none");
+    let source = fs::read_to_string(
+        repo_root()
+            .join("acc-model-status@local")
+            .join("extension.js"),
+    )
+    .unwrap();
+    let helper = extract_function(&source, "setStatusMenuActionMode");
+    let result = run_gjs(&[helper], r#"
+const traces = [];
+const print = (...values) => traces.push(values);
+const Shell = {ActionMode: {NORMAL: 1, POPUP: 2}};
+const manager = {_grabParams: {actionMode: Shell.ActionMode.POPUP}};
+setStatusMenuActionMode(manager, true, Shell.ActionMode.POPUP);
+const openMode = manager._grabParams.actionMode;
+setStatusMenuActionMode(manager, false, Shell.ActionMode.POPUP);
+globalThis.print(JSON.stringify({openMode, closedMode: manager._grabParams.actionMode, traces}));
+"#);
+    assert_eq!(result["openMode"], 3);
+    assert_eq!(result["closedMode"], 2);
+    assert!(source.contains(
+        "setStatusMenuActionMode(menuManager, isOpen, this._statusMenuActionMode)"
+    ));
+    assert!(source.find("this.menu.connect('open-state-changed'").unwrap()
+        < source.find("Main.panel.addToStatusArea('acc-model-status'").unwrap());
+    println!("{:?}", ());
 }
