@@ -2030,32 +2030,53 @@ emit(JSON.stringify({initial, open, missing, recovered, closed, emptyHidden: !em
     println!("None");
 }
 
-/// Check numeric corner IDs precede monitors through the production reader and join.
+/// Check per-workspace badge numbers precede global CLI IDs and monitor indexes.
 /// Parameters: none.
 /// Returns: None; assertions fail on incorrect ordering or invalid index acceptance.
 #[test]
 fn taskbar_window_position_ids_order_rows() {
     println!("parameters=none");
-    assert!(gjs_available(), "gjs is required for taskbar window ordering checks");
-    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
-    let names = ["readWindowDisplayIds", "windowDisplaySortValue", "withWindowDisplayIds",
-        "monitorSortValue", "workspaceSortValue", "compareWorkspaceEntries", "groupWorkspaceEntries"];
-    let snippets: Vec<String> = names.iter().map(|name| extract_function(&source, name)).collect();
-    let result = run_gjs(&snippets, r#"
+    assert!(
+        gjs_available(),
+        "gjs is required for taskbar window ordering checks"
+    );
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let names = [
+        "readWindowDisplayIds",
+        "windowDisplaySortValue",
+        "withWindowDisplayIds",
+        "monitorSortValue",
+        "workspaceSortValue",
+        "compareWorkspaceEntries",
+        "groupWorkspaceEntries",
+    ];
+    let snippets: Vec<String> = names
+        .iter()
+        .map(|name| extract_function(&source, name))
+        .collect();
+    let result = run_gjs(
+        &snippets,
+        r#"
 const emit = print; print = value => {};
-const TextDecoder = class {decode(value) {return value;}};
+const TextDecoder = class {
+ /** Decode headless file content. Parameters: value - saved JSON text. Returns: the same text. */
+ decode(value) {print(`value=${value}`); print(value); return value;}
+};
 const file = {load_contents: () => [true, JSON.stringify({windows: [
- {note_id: 'note-10', display_id: 10, desktop: 0},
- {note_id: 'note-0', display_id: 0, desktop: 0},
- {instance_id: 'note-2', display_id: '2', desktop: 0},
- {note_id: 'negative', display_id: -1}, {note_id: 'fraction', display_id: 1.5},
- {note_id: 'null', display_id: null}, {display_id: 4}
+ {note_id: 'note-10', number: 10, display_id: 0, desktop: 0},
+ {note_id: 'note-1', number: 1, display_id: 9, desktop: 0},
+ {note_id: 'note-2', number: '2', display_id: 8, desktop: 0},
+ {note_id: 'negative', number: -1}, {note_id: 'fraction', number: 1.5},
+ {note_id: 'zero', number: 0}, {note_id: 'null', number: null},
+ {note_id: 'empty', number: ''}, {note_id: 'boolean', number: true},
+ {note_id: 'missing'}, {number: 4}
 ]})]};
 const ids = readWindowDisplayIds(file);
 if (ids.size !== 3) throw Error('invalid index rows accepted');
 const entries = [
  {provider: {label: 'A'}, agent: {title: 'A', session_id: 'note-10', monitor: 0, workspace: 1}},
- {provider: {label: 'Z'}, agent: {title: 'Z', note_id: 'note-0', session_id: 'different-runtime-id', monitor: 1, workspace: 1}},
+ {provider: {label: 'Z'}, agent: {title: 'Z', note_id: 'note-1', session_id: 'different-runtime-id', monitor: 1, workspace: 1}},
  {provider: {label: 'B'}, agent: {title: 'B', session_id: 'note-2', monitor: 2, workspace: 1}},
  {provider: {label: 'A'}, agent: {title: 'unknown', session_id: 'unmapped', monitor: 0, workspace: 1}}
 ];
@@ -2063,17 +2084,27 @@ const payload = {providers: entries.map(entry => ({...entry.provider, agents: [e
 const joined = withWindowDisplayIds(payload, ids);
 const rows = joined.providers.map(provider => ({provider, agent: provider.agents[0]}));
 const sorted = groupWorkspaceEntries(rows)[0].entries.map(entry => entry.agent.window_display_id);
-if (JSON.stringify(sorted) !== '[0,2,10,null]') throw Error('wrong numeric order: ' + JSON.stringify(sorted));
+if (JSON.stringify(sorted) !== '[1,2,10,null]') throw Error('wrong badge order: ' + JSON.stringify(sorted));
 if ('window_display_id' in payload.providers[0].agents[0]) throw Error('input mutated');
-const moved = withWindowDisplayIds({providers: [{agents: [{session_id: 'note-0', workspace: 2}]}]}, ids);
+payload.providers.reverse();
+for (const provider of payload.providers) provider.agents[0].title = 'Changed title';
+const refreshed = withWindowDisplayIds(payload, ids);
+const refreshedRows = refreshed.providers.map(provider => ({provider, agent: provider.agents[0]}));
+const refreshedOrder = groupWorkspaceEntries(refreshedRows)[0].entries.map(entry => entry.agent.window_display_id);
+if (JSON.stringify(refreshedOrder) !== '[1,2,10,null]') throw Error('refresh reordered badges');
+const moved = withWindowDisplayIds({providers: [{agents: [{session_id: 'note-1', workspace: 2}]}]}, ids);
 if (moved.providers[0].agents[0].window_display_id !== null) throw Error('stale desktop joined');
 for (const input of ['{', '{}', '{"windows":null}']) {
  if (readWindowDisplayIds({load_contents: () => [true, input]}).size) throw Error('invalid file accepted');
 }
 if (readWindowDisplayIds({load_contents: () => {throw Error('missing');}}).size) throw Error('missing file accepted');
 emit(JSON.stringify({passed: true}));
-"#);
+"#,
+    );
     assert_eq!(result["passed"], true);
+    let refresh = extract_method(&source, "_refresh");
+    assert!(refresh.contains("get_child('outline_window_index.json')"));
+    assert!(!refresh.contains("cli_window_ids.json"));
     println!("None");
 }
 
@@ -2084,14 +2115,28 @@ emit(JSON.stringify({passed: true}));
 fn taskbar_monitor_separators_are_workspace_local() {
     println!("parameters=none");
     assert!(gjs_available(), "gjs is required for taskbar render checks");
-    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
-    let names = ["monitorSortValue", "workspaceSortValue", "windowDisplaySortValue",
-        "compareWorkspaceEntries", "groupWorkspaceEntries"];
-    let mut snippets: Vec<String> = names.iter().map(|name| extract_function(&source, name)).collect();
+    let source =
+        fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let names = [
+        "monitorSortValue",
+        "workspaceSortValue",
+        "windowDisplaySortValue",
+        "compareWorkspaceEntries",
+        "groupWorkspaceEntries",
+    ];
+    let mut snippets: Vec<String> = names
+        .iter()
+        .map(|name| extract_function(&source, name))
+        .collect();
     snippets.push(extract_function(&source, "paintMonitorSeparator"));
     snippets.push(extract_function(&source, "buildMonitorSeparator"));
-    snippets.push(format!("const button = {{ {} }};", extract_method(&source, "_renderMenu")));
-    let result = run_gjs(&snippets, r#"
+    snippets.push(format!(
+        "const button = {{ {} }};",
+        extract_method(&source, "_renderMenu")
+    ));
+    let result = run_gjs(
+        &snippets,
+        r#"
 const emit = print; print = value => {};
 let removedRules = 0; const drawings = [];
 /** Build a headless menu actor. Parameters: text - heading, or null. Returns: a menu item. */
@@ -2121,30 +2166,53 @@ const PopupMenu = {PopupMenuItem: MenuItem, PopupMenuSection: MenuItem, PopupSep
 button.menu = new MenuItem('root');
 button._agentMenuItem = (agent, provider, count) => new MenuItem('id-' + agent.window_display_id);
 const agents = [
- {workspace: 1, monitor: 0, window_display_id: 10},
- {workspace: 1, monitor: 0, window_display_id: 0},
- {workspace: 1, monitor: 1, window_display_id: 2},
- {workspace: 2, monitor: 1, window_display_id: 12},
- {workspace: 2, monitor: 0, window_display_id: 11},
+ {workspace: 5, monitor: 2, window_display_id: 8},
+ {workspace: 5, monitor: 2, window_display_id: 5},
+ {workspace: 5, monitor: 2, window_display_id: 7},
+ {workspace: 5, monitor: 2, window_display_id: 6},
+ {workspace: 5, monitor: 0, window_display_id: 4},
+ {workspace: 5, monitor: 0, window_display_id: 2},
+ {workspace: 5, monitor: 0, window_display_id: 3},
+ {workspace: 5, monitor: 0, window_display_id: 1},
+ {workspace: 6, monitor: 2, window_display_id: 4},
+ {workspace: 6, monitor: 0, window_display_id: 3},
+ {workspace: 6, monitor: 0, window_display_id: 1},
+ {workspace: 6, monitor: 0, window_display_id: 2},
  {workspace: 3, monitor: 0, window_display_id: 13},
  {workspace: 4, monitor: null, window_display_id: null},
  {workspace: 4, monitor: -1, window_display_id: null},
 ];
-button._renderMenu({providers: [{label: 'Codex', agents}], totalRunning: 0, totalLive: 8}, false, []);
+button._renderMenu({providers: [{label: 'Codex', agents}], totalRunning: 0, totalLive: 15}, false, []);
 const groups = button.menu.children.filter(item => item.children.length).map(item => item.children.map(row => row.text));
 emit(JSON.stringify({groups, removedRules, expands: drawings.map(area => area.x_expand),
  paints: drawings.every(area => area.callback === paintMonitorSeparator)}));
-"#);
-    assert_eq!(result["groups"], serde_json::json!([
-        ["Workspace 1", "id-0", "separator", "id-2", "separator", "id-10"],
-        ["Workspace 2", "id-11", "separator", "id-12"],
-        ["Workspace 3", "id-13"],
-        ["Workspace 4", "id-null", "id-null"]
-    ]));
-    assert_eq!(result["removedRules"], 3);
-    assert_eq!(result["expands"], serde_json::json!([true, true, true]));
+"#,
+    );
+    assert_eq!(
+        result["groups"],
+        serde_json::json!([
+            ["Workspace 3", "id-13"],
+            ["Workspace 4", "id-null", "id-null"],
+            [
+                "Workspace 5",
+                "id-1",
+                "id-2",
+                "id-3",
+                "id-4",
+                "separator",
+                "id-5",
+                "id-6",
+                "id-7",
+                "id-8"
+            ],
+            ["Workspace 6", "id-1", "id-2", "id-3", "separator", "id-4"]
+        ])
+    );
+    assert_eq!(result["removedRules"], 2);
+    assert_eq!(result["expands"], serde_json::json!([true, true]));
     assert_eq!(result["paints"], true);
-    let css = fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
+    let css =
+        fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
     assert!(css.contains(".ams-monitor-separator"));
     assert!(css.contains("background-color: transparent;"));
     assert!(css.contains("padding-top: 2px;"));

@@ -542,8 +542,8 @@ function workspaceSortValue(workspace) {
 
 /**
  * Read the corner badge IDs published by ACC's outline helper.
- * Parameters: file - cli_window_ids.json beside the task payload.
- * Returns: a map from note identity to valid display ID and desktop.
+ * Parameters: file - outline_window_index.json beside the task payload.
+ * Returns: a map from note identity to its 1-based workspace badge and desktop.
  */
 function readWindowDisplayIds(file) {
     print(`file=${file}`);
@@ -552,10 +552,10 @@ function readWindowDisplayIds(file) {
         const [ok, bytes] = file.load_contents(null);
         const parsed = ok ? JSON.parse(new TextDecoder().decode(bytes)) : null;
         for (const row of Array.isArray(parsed?.windows) ? parsed.windows : []) {
-            const identity = row?.note_id || row?.instance_id;
-            const id = row?.display_id;
-            if (identity && id !== null && id !== undefined && id !== '' &&
-                Number.isInteger(Number(id)) && Number(id) >= 0)
+            const identity = row?.note_id;
+            const id = row?.number;
+            if (identity && (typeof id === 'number' || typeof id === 'string') &&
+                Number.isInteger(Number(id)) && Number(id) > 0)
                 ids.set(String(identity), {id: Number(id), desktop: row.desktop});
         }
     } catch (_error) {
@@ -1267,7 +1267,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         const windows = this._openWindowDescriptors();
         const payload = published
             ? withWindowDisplayIds(scopePayloadToWindows(published, windows),
-                readWindowDisplayIds(this._file.get_parent().get_child('cli_window_ids.json')))
+                readWindowDisplayIds(this._file.get_parent().get_child('outline_window_index.json')))
             : null;
         const panelEstimate = formatPanelTaskEstimate(
             longestTaskEstimate(activeTaskEstimates(published)));
