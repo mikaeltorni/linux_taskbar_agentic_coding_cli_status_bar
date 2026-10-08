@@ -129,12 +129,25 @@ announcements and the codex launcher skips agent-tracker registration.
 
 ## Installation
 
+The public setup entrypoint is `bash install.sh`. It accepts these commands:
+
 ```bash
-bash install.sh                   # interactive component menu (TTY), else defaults
-bash install.sh --default         # core + every default-on component, no prompts
-bash install.sh --all             # core + every component, no prompts
-bash install.sh --select a,b,c    # core + only the listed component ids
-bash install.sh --list-components # machine-readable component list (no deploy)
+bash install.sh                                  # interactive menu (TTY), else defaults
+bash install.sh --config NAME                    # load installation_configs/NAME
+bash install.sh --default                        # install default-on components
+bash install.sh --all                            # install every component
+bash install.sh --select a,b,c                   # install selected component ids
+bash install.sh --reconfigure a,b,c              # reapply selected component config
+bash install.sh --uninstall a,b,c                # uninstall selected components
+bash install.sh --auth                           # allow authenticated Git operations
+bash install.sh --list-components                # list component ids and defaults
+bash install.sh --list-configurable-components   # list components with detail screens
+bash install.sh --list-select-configure-components # list components configured on select
+bash install.sh --list-component-config-values   # list editable configuration values
+bash install.sh --configure-component ID         # open a component's detail screen
+bash install.sh --detect                         # show installed component state
+bash install.sh --export-selection               # export resolved selection as JSON
+bash install.sh --help                            # show installer help
 ```
 
 No sudo needed: everything installs under `$HOME`. Building the poller needs
@@ -147,7 +160,7 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 |---|---|---|
 | `codex_monitor` | on | Codex monitoring; reconfigure source mode + staleness |
 | `claude_code_monitor` | **off (opt-in)** | Claude Code monitoring; same options |
-| `grok_monitor` | on | Grok CLI monitoring; same options |
+| `grok_monitor` | **off (opt-in)** | Grok CLI monitoring; same options. Grok is off by default for now and can be enabled with `bash install.sh --select grok_monitor` |
 | `opencode_go_monitor` | **off (opt-in)** | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
 | `openrouter_monitor` | **off (opt-in)** | OpenRouter free-model daily usage; enabling it adds the OR segment and walks through the management API key + monitored model slug. While off, no OR segment is shown and no analytics query is made |
 | `cursor_monitor` | **off (opt-in)** | Cursor spending-page scrape (not a CLI); enabling it adds the CRS segment. Single-command setup: `CRS_AUTH_COOKIE=… [CRS_FETCH_INTERVAL_SECONDS=30] crs setup` |
