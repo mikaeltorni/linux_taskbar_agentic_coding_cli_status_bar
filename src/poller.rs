@@ -1817,10 +1817,18 @@ mod tests {
         save_config(&cfg, None).unwrap();
     }
 
+    /// Aggregate enabled collectors, including Grok when explicitly selected.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
     #[test]
     fn aggregates_enabled_clis_and_writes_status() {
+        println!("parameters=none");
         let sandbox = Sandbox::new();
         configure(false);
+        let mut config = load_config(None);
+        config["clis"]["grok"]["enabled"] = json!(true);
+        save_config(&config, None).unwrap();
         write_codex_rollout(
             &sandbox.home,
             "2026/07/03",
@@ -1856,6 +1864,7 @@ mod tests {
             on_disk["clis"]["codex"]["windows"][0]["used_percent"],
             json!(57.0)
         );
+        println!("()");
     }
 
     #[test]
