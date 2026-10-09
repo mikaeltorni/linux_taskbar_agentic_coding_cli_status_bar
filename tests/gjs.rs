@@ -1419,7 +1419,7 @@ class Base {
 "#
     );
     let stubs =
-        format!("{stubs}\nBase.prototype._updatePanelTaskEstimate = (text, stale) => {{}};");
+        format!("{stubs}\nBase.prototype._updatePanelTaskEstimate = (text, stale) => {{}}; Base.prototype._syncMuteIndicator = muted => {{}};");
     let button = format!("class Button extends Base {{ {methods} }}");
     let result = run_gjs(
         &[stubs, button],
@@ -2010,7 +2010,7 @@ const button = Object.assign({_file: {get_parent: () => ({get_child: name => ({}
     _renderPanelHarnessRates: (payload, stale, kinds) => chip('rate'),
     _renderWorkspaceAttention: (attention, stale) => chip('attention'),
     _renderMenu: (payload, stale, attention) => {}, _renderEmpty: payload => chip('empty'),
-    _syncGlowTimer: () => {}, _syncRunClockTimer: () => {}, _updateTaskRows: payload => {}}, methods);
+    _syncGlowTimer: () => {}, _syncRunClockTimer: () => {}, _updateTaskRows: payload => {}, _syncMuteIndicator: muted => {}}, methods);
 button._refresh();
 const estimate = box.children[box.children.length - 1];
 const initial = {text: estimate.text, preceding: box.children.slice(0, -1).map(a => a.name),

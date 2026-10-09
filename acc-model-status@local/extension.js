@@ -189,20 +189,24 @@ function payloadFile() {
 /**
  * Read and validate the published document.
  *
- * @param {Gio.File} file - payload location.
- * @returns {object|null} normalized payload, or null when absent/unreadable/
+ * Parameters: file - payload location.
+ * Returns: normalized payload, or null when absent/unreadable/
  *     mid-write (the monitor writes atomically, but a truncated read still
  *     must never throw into the Shell).
  */
 function readPayload(file) {
+    print(`file=${file}`);
     let bytes;
     try {
         const [ok, contents] = file.load_contents(null);
-        if (!ok)
+        if (!ok) {
+            print(null);
             return null;
+        }
         bytes = contents;
     } catch (_error) {
         // Missing file is the normal "ACC not running yet" case.
+        print(null);
         return null;
     }
 
@@ -211,21 +215,27 @@ function readPayload(file) {
         parsed = JSON.parse(new TextDecoder().decode(bytes));
     } catch (error) {
         logError(error, 'acc-model-status: unparsable payload');
+        print(null);
         return null;
     }
-    if (!parsed || typeof parsed !== 'object')
+    if (!parsed || typeof parsed !== 'object') {
+        print(null);
         return null;
+    }
 
     const providers = Array.isArray(parsed.providers) ? parsed.providers : [];
     const harnessRates = Array.isArray(parsed.harness_rates) ? parsed.harness_rates : [];
-    return {
+    const result = {
         providers: providers.filter(entry => entry && typeof entry === 'object'),
         harnessRates: harnessRates.filter(entry => entry && typeof entry === 'object'),
         totalLive: Number(parsed.total_live) || 0,
         totalRunning: Number(parsed.total_running) || 0,
         codexInstanceCount: Math.max(1, Number(parsed.codex_instance_count) || 1),
+        announcementsMuted: parsed.announcements_muted === true,
         updatedAt: typeof parsed.updated_at === 'string' ? parsed.updated_at : '',
     };
+    print(JSON.stringify(result));
+    return result;
 }
 
 /**
@@ -1282,6 +1292,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         if (previousUnreadCount !== this._unreadCount)
             log(`acc-model-status: unread completions ${previousUnreadCount} -> ${this._unreadCount}`);
         if (this.menu.isOpen) {
+            this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
             // Preserve row identities while refreshing progress and glow together.
             this._updateTaskRows(payload);
             this._updatePanelTaskEstimate(panelEstimate, stale);
@@ -1291,6 +1302,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         this._taskRows.clear();
         this._box.destroy_all_children();
+        this._muteIcon = null;
+        this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
         this._panelTaskEstimate = null;
         this.menu.removeAll();
         // Run clocks are re-collected on every repaint; never keep stale ones.
@@ -1328,6 +1341,27 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._updatePanelTaskEstimate(panelEstimate, stale);
         this._syncGlowTimer();
         this._syncRunClockTimer();
+        print(undefined);
+    }
+
+    /**
+     * Show the muted bell before all provider segments, including in open menus.
+     * Parameters: this - status button; muted - effective published speech mute.
+     * Returns: undefined.
+     */
+    _syncMuteIndicator(muted) {
+        print(`this=${this}, muted=${muted}`);
+        if (muted && !this._muteIcon) {
+            this._muteIcon = new St.Icon({
+                icon_name: 'notifications-disabled-symbolic',
+                style_class: 'ams-icon ams-muted',
+                accessible_name: 'ACC announcements muted',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            this._box.insert_child_at_index(this._muteIcon, 0);
+        }
+        if (this._muteIcon)
+            this._muteIcon.visible = muted;
         print(undefined);
     }
 
