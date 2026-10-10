@@ -959,7 +959,7 @@ function panelProgressOpacity(underway, now, stale, ready = false) {
 }
 
 /**
- * Paint a compact track with its agent's actual completed fraction.
+ * Paint measured progress and a thin teal edge around the focused instance.
  * Parameters: area - taskbar DrawingArea carrying its current agent.
  * Returns: undefined after releasing the Cairo drawing context.
  */
@@ -978,6 +978,13 @@ function paintPanelTaskProgress(area) {
         context.setSourceRGBA(...color, 1);
         context.rectangle(0, 0, width * fraction, height);
         context.fill();
+    }
+    if (area._amsAgent.focused === true) {
+        // Match the CLI selection color, with a one-pixel inset stroke.
+        context.setSourceRGBA(0, 1, 230 / 255, 0.8);
+        context.setLineWidth(1);
+        context.rectangle(0.5, 0.5, Math.max(0, width - 1), Math.max(0, height - 1));
+        context.stroke();
     }
     context.$dispose();
     print(undefined);
