@@ -867,9 +867,14 @@ fn panel_running_count_is_left_of_icon() {
 }
 
 #[test]
+/// Verify completion detection and the updated panel rendering contract.
+/// Parameters: none.
+/// Returns: None after assertions.
 fn workspace_attention_badges() {
+    println!("parameters=none");
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");
+        println!("None");
         return;
     }
     let source = fs::read_to_string(
@@ -911,7 +916,7 @@ const PAYLOAD = {providers: [
     assert_eq!(labels, ["W2:1", "W5:1"]);
     assert!(source.contains("this._renderWorkspaceAttention("));
     assert!(source.contains("agent.unread_completion = unread"));
-    assert!(source.contains("this._box.add_style_class_name('ams-unread-glow')"));
+    assert!(!source.contains("ams-unread-glow"));
     assert!(!source.contains("ams-ws-attn-dim"));
     assert!(!source.contains("ams-unread-glow-dim"));
     assert!(source.contains("item.actor.add_style_class_name('ams-agent-unread')"));
@@ -924,15 +929,19 @@ const PAYLOAD = {providers: [
     for style in ["ams-ws-attn", "ams-ws-attn-current", "ams-agent-unread"] {
         assert!(css.contains(&format!(".{style} {{")), "{style}");
     }
-    for phase in 0..4 {
-        assert!(css.contains(&format!(".ams-unread-flow-{phase} {{")));
-    }
+    assert!(!css.contains(".ams-unread-flow-"));
+    println!("None");
 }
 
 #[test]
+/// Verify completion detection and the updated panel rendering contract.
+/// Parameters: none.
+/// Returns: None after assertions.
 fn finished_agent_glows_until_its_terminal_is_focused() {
+    println!("parameters=none");
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");
+        println!("None");
         return;
     }
     let source =
@@ -1007,9 +1016,10 @@ print(JSON.stringify({running, finished, marked, repeated, opened, cleared,
         fs::read_to_string(repo_root().join("acc-model-status@local/stylesheet.css")).unwrap();
     assert!(source.contains("'notify::focus-window'"));
     assert!(source.contains("focused: match.focused"));
-    assert!(source.contains("this._box.add_style_class_name('ams-unread-glow')"));
-    assert!(css.contains(".ams-unread-glow {"));
-    assert!(css.contains(".ams-unread-flow-0 {"));
+    assert!(!source.contains("ams-unread-glow"));
+    assert!(!css.contains(".ams-unread-glow {"));
+    assert!(!css.contains(".ams-unread-flow-0 {"));
+    println!("None");
 }
 
 #[test]

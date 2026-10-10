@@ -22,8 +22,6 @@
  *   ams-agent-origin   project/branch the agent runs in (muted)
  *   ams-ws-attn        steady green W<n>:<count> badge for unread completions
  *   ams-ws-attn-current the badge points at the workspace you are already on
- *   ams-unread-glow    gentle green background behind this indicator only
- *   ams-unread-flow-N four small gradient shifts across that background
  *   ams-agent-unread  steady green glow on each unread agent menu row
  *   ams-harness-rates  per-harness tok/s / tok/min / tok/hour strip at the top
  *   ams-harness-rate   one harness rate line
@@ -31,33 +29,6 @@
 
 .ams-box {
   spacing: 2px;
-}
-
-.ams-unread-glow {
-  border-radius: 7px;
-  background-color: rgba(34, 197, 94, 0.10);
-  background-gradient-direction: horizontal;
-  box-shadow: 0 0 5px 1px rgba(34, 197, 94, 0.24);
-}
-
-.ams-unread-flow-0 {
-  background-gradient-start: rgba(34, 197, 94, 0.22);
-  background-gradient-end: rgba(34, 197, 94, 0.08);
-}
-
-.ams-unread-flow-1 {
-  background-gradient-start: rgba(34, 197, 94, 0.17);
-  background-gradient-end: rgba(34, 197, 94, 0.14);
-}
-
-.ams-unread-flow-2 {
-  background-gradient-start: rgba(34, 197, 94, 0.08);
-  background-gradient-end: rgba(34, 197, 94, 0.22);
-}
-
-.ams-unread-flow-3 {
-  background-gradient-start: rgba(34, 197, 94, 0.14);
-  background-gradient-end: rgba(34, 197, 94, 0.17);
 }
 
 .ams-segment {
