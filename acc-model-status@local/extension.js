@@ -1461,7 +1461,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             return;
         }
 
-        // Counted once and shared, so the bar and the drop-down never disagree.
+        // Completion counts belong to workspace headings in the drop-down.
         const attention = workspaceAttentionCounts(payload);
         const shownKinds = new Set();
         for (const provider of payload.providers) {
@@ -1470,7 +1470,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         this._renderPanelHarnessRates(payload, stale, shownKinds);
         this._updatePanelProgress(payload, stale);
-        this._renderWorkspaceAttention(attention, stale);
         this._renderMenu(payload, stale, attention);
         this._updatePanelTaskEstimate(panelEstimate, stale);
         this._syncRunClockTimer();
@@ -1608,28 +1607,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         else
             this._panelTaskEstimate.remove_style_class_name('ams-stale');
         print(undefined);
-    }
-
-    /**
-     * Render steady green workspace badges for finished, unopened turns.
-     * The menu repeats these badges beside their corresponding workspaces.
-     *
-     * @param {Array<object>} entries - result of {@link workspaceAttentionCounts}.
-     * @param {boolean} stale - whether the payload is stale (dims the badges).
-     */
-    _renderWorkspaceAttention(entries, stale) {
-        for (const entry of entries) {
-            const badge = new St.Label({
-                text: entry.label,
-                style_class: entry.current
-                    ? 'ams-ws-attn ams-ws-attn-current'
-                    : 'ams-ws-attn',
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            if (stale)
-                badge.add_style_class_name('ams-stale');
-            this._box.add_child(badge);
-        }
     }
 
     /**
@@ -1794,7 +1771,7 @@ class AccModelStatusButton extends PanelMenu.Button {
                 workspaceEntries.push({provider, agent});
         }
         const workspaceGroups = groupWorkspaceEntries(workspaceEntries);
-        // Same counts the panel badges show, keyed for the workspace headings.
+        // Unread counts keyed for the workspace headings in the drop-down.
         const attentionByWorkspace = new Map(
             (attention || []).map(entry => [entry.workspace, entry]));
 
@@ -1813,7 +1790,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             heading.label.add_style_class_name('ams-menu-heading');
             const waiting = attentionByWorkspace.get(workspace);
             if (waiting) {
-                // Mirror the steady panel badge inside the drop-down.
+                // Show unread workspace counts only inside the drop-down.
                 const badge = new St.Label({
                     text: waiting.label,
                     style_class: 'ams-ws-attn',

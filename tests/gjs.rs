@@ -914,7 +914,7 @@ const PAYLOAD = {providers: [
         .map(|e| e["label"].as_str().unwrap())
         .collect();
     assert_eq!(labels, ["W2:1", "W5:1"]);
-    assert!(source.contains("this._renderWorkspaceAttention("));
+    assert!(!source.contains("this._renderWorkspaceAttention("));
     assert!(source.contains("agent.unread_completion = unread"));
     assert!(!source.contains("ams-unread-glow"));
     assert!(!source.contains("ams-ws-attn-dim"));
@@ -2018,7 +2018,6 @@ const button = Object.assign({_file: {get_parent: () => ({get_child: name => ({}
     _openWindowDescriptors: () => [], _renderHarnessRates: payload => {},
     _renderProvider: (provider, stale, payload) => chip(provider.kind),
     _renderPanelHarnessRates: (payload, stale, kinds) => chip('rate'),
-    _renderWorkspaceAttention: (attention, stale) => chip('attention'),
     _renderMenu: (payload, stale, attention) => {}, _renderEmpty: payload => chip('empty'),
     _syncGlowTimer: () => {}, _syncRunClockTimer: () => {}, _updateTaskRows: payload => {}, _syncMuteIndicator: muted => {}, _updatePanelProgress: (payload, stale) => {}}, methods);
 button._refresh();
@@ -2048,7 +2047,7 @@ emit(JSON.stringify({initial, open, missing, recovered, closed, emptyHidden: !em
     assert_eq!(
         result,
         serde_json::json!({
-            "initial": {"text": "~9m left", "preceding": ["codex", "rate", "attention"], "style": "ams-panel-estimate", "visible": true},
+            "initial": {"text": "~9m left", "preceding": ["codex", "rate"], "style": "ams-panel-estimate", "visible": true},
             "open": {"text": "~4m left", "sameActor": true, "sameTarget": true, "stale": true},
             "missing": {"hidden": true, "sameTarget": true},
             "recovered": {"text": "~2m left", "visible": true, "stale": false},
