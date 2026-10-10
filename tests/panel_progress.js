@@ -41,7 +41,15 @@ class Actor {
     }
     add_child = child => this.children.push(child);
     destroy_all_children = () => { this.children = []; };
-    destroy = () => { this.destroyed = true; };
+    /** Destroy the isolated mock actor.
+     * Parameters: this - mock actor receiver.
+     * Returns: undefined.
+     */
+    destroy() {
+        print(`this=${this}`);
+        this.destroyed = true;
+        print(undefined);
+    }
     connect = (signal, callback) => { this[signal] = callback; return 1; };
     queue_repaint = () => { this.repaints++; this.repaint?.(this); };
     get_surface_size = () => [this.width, this.height];
@@ -54,12 +62,20 @@ class Actor {
 
 const St = {BoxLayout: Actor, DrawingArea: Actor};
 const Clutter = {ActorAlign: {CENTER: 0}};
-const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'paintPanelTaskProgress', 'buildPanelTaskProgress']
+const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress']
     .map(name => declaration(name));
-const makeOwners = new Function('St', 'Clutter', 'print', `${snippets.join('\n')}
-    return {panelTaskProgressValue, paintPanelTaskProgress, buildPanelTaskProgress,
-        updater: {${declaration('_updatePanelProgress', true)}}};`);
-const owners = makeOwners(St, Clutter, print);
+const timers = new Map();
+let nextTimer = 1;
+const GLib = {PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true,
+    timeout_add: (_priority, _delay, callback) => { const id = nextTimer++; timers.set(id, callback); return id; },
+    source_remove: id => timers.delete(id),
+};
+const makeOwners = new Function('St', 'Clutter', 'GLib', 'print', `${snippets.join('\n')}
+    class Destroyer extends St.BoxLayout { ${declaration('destroy', true)} }
+    return {panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
+        Destroyer,
+        updater: {${['_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse'].map(name => declaration(name, true)).join(',')}}};`);
+const owners = makeOwners(St, Clutter, GLib, print);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const a = {session_id: 'a', phase: 'RUNNING', run_active: true, workflow: {available: true, fraction: 0.25}};
 const b = {session_id: 'b', phase: 'STOPPED', workflow: {available: true, fraction: 0.6}};
@@ -111,3 +127,37 @@ for (const [fraction, expected] of [
         check(bar.draws.length === 1 && bar.draws[0].color[3] < 1, '0% shows a faint red track with no invented fill');
 }
 print('PASS: progress color moves continuously from red at 0% to green at 100%.');
+
+for (const [now, opacity] of [[0, 255], [750, 166], [1500, 77], [2250, 166], [3000, 255], [4500, 77]])
+    check(owners.panelProgressOpacity(true, now, false) === opacity, 'full → 30% → full in three seconds');
+for (const phase of ['DONE', 'STOPPED', 'ATTN', 'INTERRUPTED', 'TRANSFERRED', 'DRAFT'])
+    check(owners.panelProgressUnderway({...a, phase}) === false, 'only underway agents pulse');
+check(owners.panelProgressUnderway(a) === true, 'active running turn is underway');
+check(owners.panelProgressUnderway({...a, run_active: false}) === false, 'inactive turn stays steady');
+check(owners.panelProgressOpacity(false, 1500, false) === 255, 'idle snapshot stays steady');
+check(owners.panelProgressOpacity(true, 1500, true) === 128, 'stale snapshot stays steadily dim');
+button._updatePanelProgress(payload, false);
+check(timers.size === 1, 'one pulse timer for all underway bars');
+button._updatePanelProgress(payload, false);
+check(timers.size === 1, 'updates retain the existing animation source');
+const runningBar = button._panelProgressBars.get('a');
+const stoppedBar = button._panelProgressBars.get('b');
+const paints = runningBar.repaints;
+button._applyPanelProgressPulse(1500);
+check(runningBar.opacity === 77 && stoppedBar.opacity === 255, 'live tick dims only underway bar');
+check(runningBar.repaints === paints, 'pulse updates compositor opacity without repainting progress pixels');
+button._updatePanelProgress(payload, true);
+check(timers.size === 0, 'stale data stops animation');
+button._updatePanelProgress({providers: [{agents: [b]}]}, false);
+check(timers.size === 0, 'idle agents have no animation source');
+button._updatePanelProgress(payload, false);
+check(timers.size === 1, 'new active work starts animation again');
+button._updatePanelProgress(null, false);
+check(timers.size === 0, 'closing all agents removes animation source');
+button._updatePanelProgress(payload, false);
+const destroyer = new owners.Destroyer();
+Object.assign(destroyer, {_panelPulseId: button._panelPulseId, _taskRows: new Map(),
+    _shellSignals: [], _windowSignals: new Map()});
+destroyer.destroy();
+check(timers.size === 0 && destroyer.destroyed === true, 'disable releases timer and destroys the actor');
+print('PASS: underway bars pulse smoothly and animation sources stop on idle, stale data and disable.');

@@ -525,19 +525,24 @@ fn model_status_phase_palette_and_rows() {
 }
 
 #[test]
+/// Check every panel timer is released during teardown.
+/// Parameters: none.
+/// Returns: None after teardown contract assertions pass.
 fn model_status_destroy_releases_timers() {
+    println!("parameters=none");
     let js = read("acc-model-status@local/extension.js");
     let destroy = Regex::new(r"    destroy\(\) \{(?s)(.*?)\n    \}")
         .unwrap()
         .captures(&js)
         .unwrap();
     let body = &destroy[1];
-    assert_eq!(body.matches("GLib.source_remove").count(), 4);
+    assert_eq!(body.matches("GLib.source_remove").count(), 5);
     assert!(body.contains("this._monitor.cancel()"));
     assert!(body.contains("object.disconnect(id)"));
     assert!(body.contains("win.disconnect(id)"));
     assert!(body.contains("this._windowSignals.clear()"));
     assert!(body.contains("super.destroy()"));
+    println!("None");
 }
 
 #[test]
