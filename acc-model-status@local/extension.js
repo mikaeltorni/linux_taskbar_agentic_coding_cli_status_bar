@@ -987,6 +987,43 @@ function buildPanelTaskProgress(agent) {
     return area;
 }
 
+/**
+ * Draw a dotted grey workspace boundary vertically through the panel row.
+ * Parameters: area - divider DrawingArea with its current allocated size.
+ * Returns: undefined after releasing the Cairo drawing context.
+ */
+function paintPanelWorkspaceSeparator(area) {
+    print(`area=${area}`);
+    const [width, height] = area.get_surface_size();
+    const context = area.get_context();
+    context.setSourceRGBA(0.63, 0.63, 0.63, 0.55);
+    context.setLineWidth(1);
+    context.setDash([1, 3], 0);
+    context.moveTo(width / 2, 0);
+    context.lineTo(width / 2, height);
+    context.stroke();
+    context.$dispose();
+    print(undefined);
+}
+
+/**
+ * Build an inert vertical dotted separator between workspace progress groups.
+ * Parameters: none.
+ * Returns: a compact DrawingArea with no label or added interaction.
+ */
+function buildPanelWorkspaceSeparator() {
+    print('parameters=none');
+    const area = new St.DrawingArea({
+        style_class: 'ams-panel-workspace-divider',
+        width: 6, height: 16,
+        reactive: false,
+        y_align: Clutter.ActorAlign.CENTER,
+    });
+    area.connect('repaint', paintPanelWorkspaceSeparator);
+    print(area);
+    return area;
+}
+
 /** Lay out measured phase/action blocks with the terminal overlay's palette. */
 function taskProgressRectangles(agent, width) {
     const phases = ['Plan', 'Establish worktree', 'Write code', 'Write documentation'];
@@ -1460,16 +1497,24 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._box.add_child(this._panelProgress);
         }
         const entries = (payload?.providers || []).flatMap(provider =>
-            (provider.agents || []).map((agent, index) => ({agent,
+            (provider.agents || []).map((agent, index) => ({provider, agent,
                 key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)})));
-        const key = JSON.stringify(entries.map(entry => entry.key));
+        const groups = groupWorkspaceEntries(entries);
+        const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry => entry.key)]));
         if (key !== this._panelProgressKey) {
             this._panelProgress.destroy_all_children();
             this._panelProgressBars.clear();
-            for (const entry of entries) {
-                const bar = buildPanelTaskProgress(entry.agent);
-                this._panelProgressBars.set(entry.key, bar);
-                this._panelProgress.add_child(bar);
+            for (const [index, group] of groups.entries()) {
+                if (index > 0)
+                    this._panelProgress.add_child(buildPanelWorkspaceSeparator());
+                const box = new St.BoxLayout({style_class: 'ams-panel-workspace'});
+                box._amsWorkspace = group.workspace;
+                for (const entry of group.entries) {
+                    const bar = buildPanelTaskProgress(entry.agent);
+                    this._panelProgressBars.set(entry.key, bar);
+                    box.add_child(bar);
+                }
+                this._panelProgress.add_child(box);
             }
             this._panelProgressKey = key;
         }
