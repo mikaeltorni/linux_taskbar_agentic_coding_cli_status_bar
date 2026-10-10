@@ -108,7 +108,7 @@ const button = Object.assign({_box: new Actor()}, owners.updater);
 button._updatePanelProgress(payload, false);
 let bars = visibleBars(button._panelProgress);
 check(bars.length === 2, 'one bar for every open agent');
-check(bars.every(bar => bar.width === 50 && bar.height === 8), '50px compact bars');
+check(bars.every(bar => bar.width === 52 && bar.height === 10), '52x10 drawing room preserves the 50x8 fill and outside outline');
 check(bars[0].draws.at(-1).rect[2] === 12.5, 'actual 25% fill');
 check(bars[1].draws.at(-1).rect[2] === 30, 'actual 60% fill');
 const retained = bars[0];
@@ -205,7 +205,7 @@ const groups = children.filter(child => child.style_class === 'ams-panel-workspa
 check(JSON.stringify(groups.map(group => group._amsWorkspace)) === '[1,2,0]', 'numeric workspace order with unknown last');
 check(JSON.stringify(visibleBars(button._panelProgress).map(bar => bar._amsAgent.session_id)) ===
     '["ws1-1","ws1-2","ws2-2","ws2-10","unknown"]', 'agents use workspace and numeric window order across providers');
-check(visibleBars(button._panelProgress).every(bar => bar.width === 50 && !bar.text && !bar.reactive),
+check(visibleBars(button._panelProgress).every(bar => bar.width === 52 && !bar.text && !bar.reactive),
     'bars add no labels, percentages as text, or extra click targets');
 const dividers = children.filter(child => child.style_class === 'ams-panel-workspace-divider');
 for (const divider of dividers) {
@@ -326,12 +326,21 @@ const focusedBar = button._panelProgressBars.get('focus');
 const nearbyBar = button._panelProgressBars.get('nearby');
 check(focusedBar.strokes.length === 1, 'selected instance paints a border');
 const edge = focusedBar.strokes.at(-1);
-check(edge.width === 1 && JSON.stringify(edge.rect) === '[0.5,0.5,49,7]',
-    'one-pixel edge is contained within the 50 by 8 bar');
+check(edge.width === 1 && JSON.stringify(edge.rect) === '[0.5,0.5,51,9]',
+    'one-pixel edge sits outside the 50 by 8 fill in reserved drawing room');
 check(JSON.stringify(edge.color.slice(0,3).map(channel => Math.round(channel*255))) === '[0,255,230]' &&
     edge.color[3] === 0.8, 'subtle teal matches CLI selection color #00ffe6');
 check(nearbyBar.strokes.length === 0, 'same workspace does not imply selection');
-check(focusedBar.draws.at(-2).rect[2] === 40, 'border preserves the measured progress fill');
+check(JSON.stringify(focusedBar.draws.at(-2).rect) === '[1,1,40,8]',
+    'outward border preserves the measured fill dimensions and origin');
+check(JSON.stringify(focusedBar.draws.at(-3).rect) === '[1,1,50,8]',
+    'full progress track remains 50x8 inside reserved drawing room');
+const track = focusedBar.draws.at(-3).rect;
+check(edge.rect[0] + edge.width / 2 <= track[0] &&
+    edge.rect[1] + edge.width / 2 <= track[1] &&
+    edge.rect[0] + edge.rect[2] - edge.width / 2 >= track[0] + track[2] &&
+    edge.rect[1] + edge.rect[3] - edge.width / 2 >= track[1] + track[3],
+    'teal stroke never overlaps any progress fill pixel');
 const oldEdges = focusedBar.strokes.length;
 focused.focused = false;
 nearby.focused = true;
@@ -350,7 +359,7 @@ for (const agent of [
     const bar = owners.buildPanelTaskProgress(agent);
     bar._amsPulseAt = 1500;
     bar.queue_repaint();
-    check(bar.strokes.length === 1 && bar.width === 50 && bar.height === 8,
+    check(bar.strokes.length === 1 && bar.width === 52 && bar.height === 10,
         'focused running, stopped, ready and unavailable bars all retain a compact outline');
     if (agent.unread_completion)
         check(bar.draws.at(-2).color.slice(0,3).every(channel => channel === 1),
@@ -392,3 +401,7 @@ for (const state of [{phase: 'RATE'}, {phase: 'RUNNING', run_active: true, goal_
         'unavailable workflow stays neutral');
 }
 print('PASS: goal and RATE fills match state colors without changing progress or opacity.');
+
+check(/\.ams-panel-workspace\s*\{[^}]*spacing:\s*6px;/.test(css),
+    'same-workspace bars have a slightly wider six-pixel actor gap');
+print('PASS: outward focus outline leaves the 50x8 fill clear and bars have wider spacing.');
