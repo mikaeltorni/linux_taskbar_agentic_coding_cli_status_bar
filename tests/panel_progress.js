@@ -39,8 +39,10 @@ class Actor {
         this.repaints = 0;
         print(undefined);
     }
-    add_child = child => this.children.push(child);
-    destroy_all_children = () => { this.children = []; };
+    add_child = child => { child._parent = this; this.children.push(child); };
+    remove_child = child => { child._parent = null; this.children = this.children.filter(item => item !== child); };
+    get_parent = () => this._parent || null;
+    destroy_all_children = () => { this.children.forEach(child => child.destroy()); this.children = []; };
     /** Destroy the isolated mock actor.
      * Parameters: this - mock actor receiver.
      * Returns: undefined.
@@ -77,12 +79,22 @@ const GLib = {PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true,
     timeout_add: (_priority, _delay, callback) => { const id = nextTimer++; timers.set(id, callback); return id; },
     source_remove: id => timers.delete(id),
 };
-const makeOwners = new Function('St', 'Clutter', 'GLib', 'print', `${snippets.join('\n')}
+let snapshot = null;
+const services = {readPayload: () => snapshot, scopePayloadToWindows: value => value,
+    withWindowDisplayIds: value => value, readWindowDisplayIds: () => new Map(),
+    activeTaskEstimates: () => [], longestTaskEstimate: () => ({}), formatPanelTaskEstimate: () => '',
+    ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
+    saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [], panelHarnessRateRows: () => [],
+};
+const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', `${snippets.join('\n')}
+    const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
+        activeTaskEstimates, longestTaskEstimate, formatPanelTaskEstimate, ageSeconds, STALE_SECONDS,
+        unreadCompletionCount, saveUnreadStates, log, workspaceAttentionCounts, panelHarnessRateRows} = services;
     class Destroyer extends St.BoxLayout { ${declaration('destroy', true)} }
     return {panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer,
-        updater: {${['_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse'].map(name => declaration(name, true)).join(',')}}};`);
-const owners = makeOwners(St, Clutter, GLib, print);
+        updater: {${['_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse'].map(name => declaration(name, true)).join(',')}}};`);
+const owners = makeOwners(St, Clutter, GLib, services, print);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
     child.style_class === 'ams-panel-workspace' ? child.children : []);
@@ -208,3 +220,23 @@ button._updatePanelProgress({providers: [{kind: 'codex', agents: [tasks[2], {...
 check(button._panelProgress.children.length === 1 && visibleBars(button._panelProgress).length === 2,
     'one workspace has no divider even across monitors');
 print('PASS: compact bars group by workspace with vertical dotted dividers and no added details.');
+
+Object.assign(button, {_file: {get_parent: () => ({get_child: () => ({})})},
+    _unreadStates: new Map(), _unreadCount: 0, _taskRows: new Map(),
+    menu: {isOpen: false, removeAll: () => {}},
+    _openWindowDescriptors: () => [], _syncMuteIndicator: () => {}, _renderHarnessRates: () => {},
+    _renderProvider: () => {}, _renderPanelHarnessRates: () => {}, _renderWorkspaceAttention: () => {},
+    _renderMenu: () => {}, _updatePanelTaskEstimate: () => {}, _syncGlowTimer: () => {}, _syncRunClockTimer: () => {},
+});
+snapshot = payload;
+button._refresh();
+const retainedStrip = button._panelProgress;
+const retainedBar = visibleBars(retainedStrip)[0];
+for (let i = 0; i < 5; i++) {
+    a.workflow.fraction = 0.5 + i * 0.1;
+    button._refresh();
+    check(button._panelProgress === retainedStrip && visibleBars(retainedStrip)[0] === retainedBar && !retainedBar.destroyed,
+        'closed-menu snapshot refreshes retain painted bar actors');
+}
+check(retainedStrip.get_parent() === button._box, 'retained strip remains attached to panel');
+print('PASS: real closed-menu snapshot refreshes preserve existing progress actors and painted surfaces.');
