@@ -297,6 +297,7 @@ by their terminal window numbers within each group. A vertical grey dotted
 line separates workspace groups. While a turn is actively running, its bar
 smoothly pulses from 100% opacity to 30% and back every three seconds, matching
 the terminal indicator. Idle bars stay steady; stale snapshots stay dimmed.
+Status refreshes reuse the bars so they remain visible throughout the pulse.
 Updates continue while the drop-down is open. The public render probe runs with
 `cargo test --test panel_progress` (or `gjs tests/panel_progress.js .`) using
 isolated actors without changing the desktop or user metadata.
