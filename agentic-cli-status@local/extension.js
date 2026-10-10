@@ -634,57 +634,6 @@ function codexBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 1000000
 }
 
 /**
- * Clamp a forecast probability to an integer 0-100, or null when missing.
- *
- * @param {*} value - Raw consensus percentage from status.json.
- * @returns {?number} Rounded percent, or null when the side is absent.
- */
-function roundedForecastPercent(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value))
-    return null;
-  return Math.round(Math.min(100, Math.max(0, value)));
-}
-
-/**
- * Read the 24h and 48h consensus values without inventing a missing side.
- *
- * Prefers explicit `consensus_percent_24h` / `consensus_percent_48h`. Falls
- * back to `consensus_percent` only for the configured `horizon` so a snapshot
- * that still publishes a single number keeps working.
- *
- * @param {?object} forecast - The `codex_reset_forecast` status entry.
- * @returns {{p24: ?number, p48: ?number}} Rounded percents; null means omit.
- */
-function forecastHorizonPercents(forecast) {
-  let p24 = roundedForecastPercent(forecast?.consensus_percent_24h);
-  let p48 = roundedForecastPercent(forecast?.consensus_percent_48h);
-  const configured = roundedForecastPercent(forecast?.consensus_percent);
-  const horizon = String(forecast?.horizon ?? '24h');
-  if (p24 === null && horizon !== '48h')
-    p24 = configured;
-  if (p48 === null && horizon === '48h')
-    p48 = configured;
-  return {p24, p48};
-}
-
-/**
- * Visible 24-48h consensus text: `26%-48%`, or one side when the other is absent.
- *
- * @param {?number} p24 - Rounded 24h consensus, or null.
- * @param {?number} p48 - Rounded 48h consensus, or null.
- * @returns {string} Compact pair (or a single `NN%`); empty when both missing.
- */
-function formatForecastConsensusPair(p24, p48) {
-  if (p24 !== null && p48 !== null)
-    return `${p24}%-${p48}%`;
-  if (p24 !== null)
-    return `${p24}%`;
-  if (p48 !== null)
-    return `${p48}%`;
-  return '';
-}
-
-/**
  * Color one forecast percent with the shared remaining-budget scale.
  *
  * 100% is green (`#8ff0a4`), 0% is red (`#ff0000`) — the same
@@ -707,63 +656,10 @@ function forecastMenuMarkup(text) {
 }
 
 /**
- * Pango 24-48h consensus: each side uses percentColor; the hyphen is neutral.
- *
- * @param {?number} p24 - Rounded 24h consensus, or null.
- * @param {?number} p48 - Rounded 48h consensus, or null.
- * @returns {string} Colored pair markup, or empty when both sides are missing.
- */
-function formatForecastConsensusMarkup(p24, p48) {
-  if (p24 !== null && p48 !== null)
-    return `${forecastPercentMarkup(p24)}` +
-      `<span foreground="${NEUTRAL_COLOR}">-</span>` +
-      `${forecastPercentMarkup(p48)}`;
-  if (p24 !== null)
-    return forecastPercentMarkup(p24);
-  if (p48 !== null)
-    return forecastPercentMarkup(p48);
-  return '';
-}
-
-/**
- * Format the consensus probability of a discretionary Codex limit reset.
- *
- * When both 24h and 48h values exist the compact bar shows `26%-48%`. A
- * missing side is omitted rather than filled with a made-up number.
- *
- * @param {?object} forecast - The `codex_reset_forecast` status entry.
- * @returns {string} Pango markup for the percentage, or an empty string when
- *   forecasting is disabled or no consensus is available.
- */
-function codexResetForecastMarkup(forecast) {
-  if (forecast?.enabled !== true)
-    return '';
-  const {p24, p48} = forecastHorizonPercents(forecast);
-  const markup = formatForecastConsensusMarkup(p24, p48);
-  if (!markup)
-    return '';
-  log('debug', `forecast compact consensus ${formatForecastConsensusPair(p24, p48)}`);
-  const staleMark = forecast.stale
-    ? `<span foreground="${NEUTRAL_COLOR}">?</span>`
-    : '';
-  // ClutterText ignores `foreground` on the first glyph (mutter#1324). A
-  // wrapping span is not enough: the 24h digit would still start at index 0
-  // and stay the theme color while 48h painted. Prefix a hair-space glyph so
-  // percentColor applies to 24h.
-  return `${CLUTTER_MARKUP_PREFIX}<span>${markup}${staleMark}</span>`;
-}
-
-/**
- * Put the reset forecast immediately left of all enabled Codex instances.
- *
- * The caller only invokes this helper for an enabled Codex snapshot, so the
- * forecast can never occupy the bar by itself when Codex monitoring is off.
- *
- * @param {?object} forecast - The `codex_reset_forecast` status entry.
- * @param {string} tag - Compact Codex tag.
- * @param {object} snapshot - Codex CLI status entry.
- * @param {number} [nowEpoch] - Current epoch seconds; injectable for tests.
- * @returns {string} Combined forecast and Codex Pango markup.
+ * Render Codex usage while accepting snapshots containing retired consensus data.
+ * Parameters: forecast - reset source snapshot; tag - compact Codex tag;
+ *   snapshot - Codex usage snapshot; nowEpoch - current epoch seconds.
+ * Returns: Codex usage Pango markup.
  */
 function codexBarWithForecastMarkup(
   forecast,
@@ -771,11 +667,10 @@ function codexBarWithForecastMarkup(
   snapshot,
   nowEpoch = GLib.get_real_time() / 1000000,
 ) {
+  print(`forecast=${JSON.stringify(forecast)}, tag=${tag}, snapshot=${JSON.stringify(snapshot)}, nowEpoch=${nowEpoch}`);
   const codex = codexBarMarkup(tag, snapshot, nowEpoch);
-  const resetForecast = codexResetForecastMarkup(forecast);
-  if (!resetForecast)
-    return codex;
-  return `${resetForecast}<span foreground="${NEUTRAL_COLOR}"> | </span>${codex}`;
+  print(codex);
+  return codex;
 }
 
 /** Format a forecast probability for the details menu. */
@@ -814,27 +709,20 @@ function formatPolymarketDate(label) {
  * failed forecast source remains visible as unavailable; link-only reference
  * sources show their purpose without implying they contributed a percentage.
  *
- * @param {?object} forecast - The `codex_reset_forecast` status entry.
- * @returns {object[]} Heading followed by one linked entry per source.
+ * Parameters: forecast - reset source snapshot.
+ * Returns: Heading followed by one linked entry per source.
  */
 function codexResetForecastMenuEntries(forecast) {
-  if (forecast?.enabled !== true)
+  print(`forecast=${JSON.stringify(forecast)}`);
+  if (forecast?.enabled !== true) {
+    print('[]');
     return [];
+  }
   const horizon = String(forecast.horizon ?? '24h');
-  const {p24, p48} = forecastHorizonPercents(forecast);
-  const pair = formatForecastConsensusPair(p24, p48);
-  let heading;
-  if (p24 !== null && p48 !== null)
-    heading = `Codex reset forecast — 24-48h consensus: ${pair}`;
-  else if (pair)
-    heading = `Codex reset forecast — ${p24 === null ? '48h' : horizon} consensus: ${pair}`;
-  else
-    heading = `Codex reset forecast — ${horizon} consensus unavailable`;
-  log('debug', `forecast menu heading ${heading}`);
   const entries = [{
     kind: 'heading',
     name: 'Codex reset forecast',
-    text: heading,
+    text: 'Codex reset forecast',
     url: null,
   }];
   for (const site of forecast.sites ?? []) {
@@ -870,6 +758,7 @@ function codexResetForecastMenuEntries(forecast) {
       url: site?.url ?? null,
     });
   }
+  print(JSON.stringify(entries));
   return entries;
 }
 
