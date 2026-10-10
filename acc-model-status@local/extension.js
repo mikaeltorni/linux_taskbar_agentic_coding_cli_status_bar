@@ -976,7 +976,7 @@ function panelProgressOpacity(underway, now, stale, ready = false) {
 }
 
 /**
- * Paint measured progress and a thin teal edge around the focused instance.
+ * Paint measured progress with the focused teal edge outside the fill.
  * Parameters: area - taskbar DrawingArea carrying its current agent.
  * Returns: undefined after releasing the Cairo drawing context.
  */
@@ -984,20 +984,22 @@ function paintPanelTaskProgress(area) {
     print(`area=${area}`);
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
+    const fillWidth = Math.max(0, width - 2);
+    const fillHeight = Math.max(0, height - 2);
     const fraction = panelTaskProgressValue(area._amsAgent);
     const ready = area._amsAgent.unread_completion === true && !area._amsStale;
     const color = panelProgressColor(fraction, ready, area._amsPulseAt ?? Date.now(), area._amsAgent)
         .map(channel => channel / 255);
     context.setSourceRGBA(...color, fraction === null ? 1 : 0.22);
-    context.rectangle(0, 0, width, height);
+    context.rectangle(1, 1, fillWidth, fillHeight);
     context.fill();
     if (fraction !== null && fraction > 0) {
         context.setSourceRGBA(...color, 1);
-        context.rectangle(0, 0, width * fraction, height);
+        context.rectangle(1, 1, fillWidth * fraction, fillHeight);
         context.fill();
     }
     if (area._amsAgent.focused === true) {
-        // Match the CLI selection color, with a one-pixel inset stroke.
+        // Reserve one pixel outside the fill for the CLI selection color.
         context.setSourceRGBA(0, 1, 230 / 255, 0.8);
         context.setLineWidth(1);
         context.rectangle(0.5, 0.5, Math.max(0, width - 1), Math.max(0, height - 1));
@@ -1008,7 +1010,7 @@ function paintPanelTaskProgress(area) {
 }
 
 /**
- * Build one 50px progress bar without adding text to the panel.
+ * Build a 50x8 progress fill with one pixel of outer drawing room.
  * Parameters: agent - scoped open-window agent.
  * Returns: a DrawingArea showing actual progress on its next repaint.
  */
@@ -1016,7 +1018,7 @@ function buildPanelTaskProgress(agent) {
     print(`agent=${JSON.stringify(agent)}`);
     const area = new St.DrawingArea({
         style_class: 'ams-panel-progress-bar',
-        width: 50, height: 8,
+        width: 52, height: 10,
         reactive: false,
         y_align: Clutter.ActorAlign.CENTER,
     });
