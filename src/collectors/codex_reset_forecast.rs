@@ -2,7 +2,7 @@
 //!
 //! OpenAI grants discretionary ("goodwill") Codex weekly-limit resets on no
 //! published schedule. This collector reads Codex Reset Monitor probabilities,
-//! daily Polymarket contracts, and WhenReset history. Only published 24h/48h
+//! and WhenReset history. Only published 24h/48h
 //! probabilities contribute to the percentage next to the Codex segments.
 //!
 //! Major components:
@@ -28,9 +28,8 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
-use crate::collectors::util::{now_epoch, parse_iso_epoch};
+use crate::collectors::util::now_epoch;
 use crate::http::{HttpOpener, HttpRequest, UreqOpener};
-use crate::logging;
 
 /// Shared fetch cadence floor when the config does not override it.
 pub const FORECAST_FETCH_MIN_INTERVAL_SECONDS: f64 = 30.0;
@@ -56,13 +55,12 @@ const USER_AGENT: &str = concat!(
 #[derive(Debug, Clone, PartialEq)]
 pub struct Prediction {
     /// Horizon label. `24h`/`48h` feed the consensus; anything else (e.g. a
-    /// prediction-market expiry like `by September 14`) is menu-only.
+    /// a dated forecast) is menu-only.
     pub label: String,
     pub percent: f64,
-    /// Cumulative traded volume in dollars for a Polymarket expiry, when published.
+    /// Optional published volume metadata from older snapshots.
     pub volume_usd: Option<f64>,
-    /// Vote-window end as a UTC epoch. Daily Polymarket rows set this from Gamma
-    /// `endDate`; 24h/48h horizons leave it unset.
+    /// Optional validity deadline as a UTC epoch; 24h/48h horizons leave it unset.
     pub end_at: Option<f64>,
 }
 
@@ -92,6 +90,7 @@ struct DatedCommitment {
 /// `endpoint` is what the collector fetches; `url` is the human page shown as
 /// provenance. `min_interval_seconds` is this source's politeness floor;
 /// `display_order` places its row in the popup.
+#[derive(Debug)]
 pub struct ForecastSite {
     pub id: &'static str,
     pub name: &'static str,
@@ -110,29 +109,15 @@ pub struct ForecastSite {
 /// - `codexreset.org` — "Codex Reset Monitor"; HTML only, so it is parsed from
 ///   stable `data-testid` attributes. Its page is ~1 MB and its own data
 ///   refreshes hourly, hence the 300 s floor.
-/// - Polymarket — a real-money prediction market on exactly this question,
-///   read through the documented public Gamma API.
-pub const FORECAST_SITES: &[ForecastSite] = &[
-    ForecastSite {
-        id: "codex_reset_monitor",
-        name: "codexreset.org",
-        url: "https://codexreset.org/",
-        endpoint: "https://codexreset.org/",
-        min_interval_seconds: 300.0,
-        display_order: 3,
-        parse: parse_codex_reset_monitor,
-    },
-    ForecastSite {
-        id: "polymarket",
-        name: "Polymarket",
-        url: "https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt",
-        endpoint:
-            "https://gamma-api.polymarket.com/events/slug/openai-resets-codex-weekly-limit-onptptpt",
-        min_interval_seconds: 30.0,
-        display_order: 0,
-        parse: parse_polymarket,
-    },
-];
+pub const FORECAST_SITES: &[ForecastSite] = &[ForecastSite {
+    id: "codex_reset_monitor",
+    name: "codexreset.org",
+    url: "https://codexreset.org/",
+    endpoint: "https://codexreset.org/",
+    min_interval_seconds: 300.0,
+    display_order: 3,
+    parse: parse_codex_reset_monitor,
+}];
 
 /// A vetted public supplemental source whose data is not an independent
 /// numeric forecast for the consensus.
@@ -289,108 +274,6 @@ fn parse_codex_reset_monitor(body: &str) -> Result<SiteForecast, String> {
     })
 }
 
-/// Decode Polymarket's stringified JSON arrays (`outcomes`, `outcomePrices`).
-fn polymarket_string_array(market: &Value, key: &str) -> Vec<String> {
-    market
-        .get(key)
-        .and_then(Value::as_str)
-        .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
-        .unwrap_or_default()
-}
-
-/// Price of one named binary-market outcome, as a percentage.
-fn polymarket_outcome_percent(market: &Value, outcome_name: &str) -> Option<f64> {
-    let outcomes = polymarket_string_array(market, "outcomes");
-    let prices = polymarket_string_array(market, "outcomePrices");
-    let index = outcomes
-        .iter()
-        .position(|outcome| outcome.eq_ignore_ascii_case(outcome_name))?;
-    let price: f64 = prices.get(index)?.parse().ok()?;
-    clamp_percent(Some(price * 100.0))
-}
-
-/// Gamma publishes cumulative per-market volume as `volumeNum` or a numeric string.
-fn polymarket_volume_usd(market: &Value) -> Option<f64> {
-    market
-        .get("volumeNum")
-        .and_then(Value::as_f64)
-        .or_else(|| market.get("volume").and_then(Value::as_str)?.parse().ok())
-        .filter(|volume: &f64| volume.is_finite() && *volume >= 0.0)
-}
-
-/// Parse the canonical daily Codex event from Gamma. The two earliest open
-/// contracts carry separate Yes prices for the current and next market days.
-fn parse_polymarket(body: &str) -> Result<SiteForecast, String> {
-    let event: Value =
-        serde_json::from_str(body).map_err(|exc| format!("invalid Gamma JSON ({exc})"))?;
-    if event.get("title").and_then(Value::as_str) != Some("OpenAI resets Codex weekly limit on...?")
-        || event.get("slug").and_then(Value::as_str)
-            != Some("openai-resets-codex-weekly-limit-onptptpt")
-    {
-        return Err("Gamma returned a different Codex reset event".to_string());
-    }
-    let mut open = Vec::new();
-    if event.get("closed").and_then(Value::as_bool) == Some(false)
-        && event.get("active").and_then(Value::as_bool) == Some(true)
-    {
-        for market in event
-            .get("markets")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if market.get("closed").and_then(Value::as_bool) != Some(false)
-                || market.get("active").and_then(Value::as_bool) != Some(true)
-            {
-                continue;
-            }
-            let Some(label) = market.get("groupItemTitle").and_then(Value::as_str) else {
-                continue;
-            };
-            let question = format!("OpenAI resets Codex weekly limit on {label}?");
-            if market.get("question").and_then(Value::as_str) != Some(question.as_str()) {
-                continue;
-            }
-            let Some(end) = market
-                .get("endDate")
-                .and_then(Value::as_str)
-                .and_then(parse_iso_epoch)
-            else {
-                continue;
-            };
-            let Some(percent) = polymarket_outcome_percent(market, "yes") else {
-                continue;
-            };
-            open.push((
-                end,
-                Prediction {
-                    label: label.to_string(),
-                    percent,
-                    volume_usd: polymarket_volume_usd(market),
-                    end_at: Some(end as f64),
-                },
-            ));
-        }
-    }
-    open.sort_by_key(|(end, _)| *end);
-    let no_open_market = open.is_empty();
-
-    Ok(SiteForecast {
-        predictions: open.into_iter().map(|(_, prediction)| prediction).collect(),
-        url: None,
-        detail: Some(
-            if no_open_market {
-                "no open market"
-            } else {
-                "daily markets · Yes price"
-            }
-            .to_string(),
-        ),
-        observed_at: None,
-        commitment: None,
-    })
-}
-
 /// Fetch one site's endpoint and parse it.
 fn fetch_site(
     endpoint: &str,
@@ -419,21 +302,25 @@ fn fetch_site(
 
 /// Whether a dated prediction is still inside its vote window at `now`.
 ///
-/// Daily Codex markets resolve by 11:59 PM ET on the named date. Gamma stores
-/// that instant as UTC `endDate` (during EDT, `…T03:59:00Z` on the following
-/// UTC calendar day). Compare that epoch to the collector's `SystemTime`
-/// clock. `endDateIso` is the UTC date of expiry, and `groupItemTitle` is a
-/// timezone-less label, so neither one is the cutoff.
+/// An optional cached validity deadline is compared with the collector clock.
+/// Parameters: prediction - cached prediction; now - current epoch.
+/// Returns: whether the optional validity deadline has not passed.
 fn vote_window_open(prediction: &Prediction, now: f64) -> bool {
-    match prediction.end_at {
+    println!("prediction={prediction:?}, now={now}");
+    let result = match prediction.end_at {
         Some(end_at) => now < end_at,
         None => true,
-    }
+    };
+    println!("{result}");
+    result
 }
 
-/// Predictions still valid at `now`. Dated Polymarket rows keep the two
+/// Predictions still valid at `now`. Dated rows keep the two
 /// earliest remaining windows; undated 24h/48h rows are unchanged.
+/// Parameters: predictions - cached forecast values; now - current epoch.
+/// Returns: the still-valid predictions.
 fn visible_predictions(predictions: &[Prediction], now: f64) -> Vec<Prediction> {
+    println!("predictions={predictions:?}, now={now}");
     let mut open: Vec<Prediction> = predictions
         .iter()
         .filter(|prediction| vote_window_open(prediction, now))
@@ -448,10 +335,13 @@ fn visible_predictions(predictions: &[Prediction], now: f64) -> Vec<Prediction> 
         });
         open.truncate(2);
     }
+    println!("{open:?}");
     open
 }
 
 /// Serialize a site's state for `status.json`.
+/// Parameters: site - source metadata; forecast - parsed data; checked_at - fetch epoch; error - optional failure; now - current epoch.
+/// Returns: the serialized forecast source row.
 fn site_value(
     site: &ForecastSite,
     forecast: &SiteForecast,
@@ -459,6 +349,9 @@ fn site_value(
     error: Option<String>,
     now: f64,
 ) -> Value {
+    println!(
+        "site={site:?}, forecast={forecast:?}, checked_at={checked_at}, error={error:?}, now={now}"
+    );
     let visible = visible_predictions(&forecast.predictions, now);
     let baseline_predictions: Vec<Value> = visible
         .iter()
@@ -500,11 +393,7 @@ fn site_value(
         },
         "url": forecast.url.as_deref().unwrap_or(site.url),
         "predictions": predictions,
-        "detail": if site.id == "polymarket" && visible.is_empty() {
-            Some("no open market".to_string())
-        } else {
-            forecast.detail.clone()
-        },
+        "detail": forecast.detail,
         "observed_at": forecast.observed_at,
         "checked_at": checked_at,
         "error": error,
@@ -517,6 +406,7 @@ fn site_value(
         });
         row["commitment_applied"] = json!(commitment_applied);
     }
+    println!("{row}");
     row
 }
 
@@ -616,10 +506,13 @@ fn previous_sites(last_result: Option<&Value>) -> Map<String, Value> {
 
 /// Median consensus and contributor count for one published horizon label.
 ///
-/// Sites that do not publish that label (Polymarket market expiries, a
-/// missing 48h ring) are omitted rather than filled in, so a missing side
+/// Sources without that horizon (history rows or a missing 48h ring)
+/// are omitted rather than filled in, so a missing side
 /// stays missing.
+/// Parameters: rows - public source rows; horizon - requested forecast horizon.
+/// Returns: median estimate and contributor count.
 fn consensus_for(rows: &[Value], horizon: &str) -> (Option<f64>, usize) {
+    println!("rows={rows:?}, horizon={horizon}");
     let sample: Vec<f64> = rows
         .iter()
         .filter_map(|row| row.get("predictions").and_then(Value::as_array))
@@ -628,7 +521,9 @@ fn consensus_for(rows: &[Value], horizon: &str) -> (Option<f64>, usize) {
         .filter_map(|prediction| prediction.get("percent").and_then(Value::as_f64))
         .collect();
     let contributors = sample.len();
-    (median(sample), contributors)
+    let result = (median(sample), contributors);
+    println!("{result:?}");
+    result
 }
 
 /// Whether a site is enabled in `codex_reset_forecast.sites.<id>.enabled`.
@@ -655,7 +550,11 @@ fn checked_within_interval(previous: Option<&Value>, now: f64, interval: f64) ->
 /// carried values unchanged, which is what keeps the bar updating at the bar's
 /// tick rate rather than at the fetch cadence.
 ///
-/// Parameters:
+/// Parameters: last_result - previous forecast snapshot; now - optional epoch;
+/// min_interval - fetch cadence; horizon - selected forecast horizon;
+/// site_config - source toggles; opener - optional HTTP transport.
+/// Returns: the retained-source forecast snapshot.
+///
 /// - `last_result` — the previous `codex_reset_forecast` snapshot, if any.
 /// - `now` — epoch seconds override (tests pass a fixed clock).
 /// - `min_interval` — configured fetch cadence; raised per site to that site's
@@ -672,6 +571,7 @@ pub fn collect_codex_reset_forecast(
     site_config: Option<&Value>,
     opener: Option<&dyn HttpOpener>,
 ) -> Value {
+    println!("last_result={last_result:?}, now={now:?}, min_interval={min_interval:?}, horizon={horizon:?}, site_config={site_config:?}, opener={:?}", opener.map(|value| value as *const dyn HttpOpener));
     let now = now.unwrap_or_else(now_epoch);
     let min_interval = min_interval.unwrap_or(FORECAST_FETCH_MIN_INTERVAL_SECONDS);
     let horizon = horizon.unwrap_or(DEFAULT_HORIZON);
@@ -682,17 +582,11 @@ pub fn collect_codex_reset_forecast(
         if !site_enabled(site_config, site.id) {
             continue;
         }
-        // A former Polymarket event must be replaced immediately, including
-        // when its old quote is still inside the normal fetch interval.
-        let last_site = previous.get(site.id).filter(|row| {
-            site.id != "polymarket" || row.get("url").and_then(Value::as_str) == Some(site.url)
-        });
+        let last_site = previous.get(site.id);
         let interval = min_interval.max(site.min_interval_seconds);
         if let Some(checked) = checked_within_interval(last_site, now, interval) {
-            // A dated commitment or Polymarket vote window can expire before
-            // the next site fetch, so re-serialize carried rows against `now`.
-            if last_site.and_then(|row| row.get("commitment")).is_some() || site.id == "polymarket"
-            {
+            // Re-serialize any dated commitment that can expire before refetch.
+            if last_site.and_then(|row| row.get("commitment")).is_some() {
                 let carried = carried_forecast(last_site);
                 let error = last_site
                     .and_then(|row| row.get("error"))
@@ -712,7 +606,7 @@ pub fn collect_codex_reset_forecast(
                     .and_then(|row| row.get("error"))
                     .and_then(Value::as_str);
                 if previous_error != Some(exc.as_str()) {
-                    logging::warn(format!("codex reset forecast {}: {exc}", site.id));
+                    println!("codex reset forecast {}: {exc}", site.id);
                 }
                 rows.push(site_value(site, &carried, now, Some(exc), now));
             }
@@ -749,7 +643,7 @@ pub fn collect_codex_reset_forecast(
                     .and_then(|row| row.get("error"))
                     .and_then(Value::as_str);
                 if previous_error != Some(exc.as_str()) {
-                    logging::warn(format!("codex reset reference {}: {exc}", site.id));
+                    println!("codex reset reference {}: {exc}", site.id);
                 }
                 rows.push(reference_site_value(site, &carried, now, Some(exc)));
             }
@@ -781,14 +675,17 @@ pub fn collect_codex_reset_forecast(
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if active != was_active {
-            logging::info(format!(
-                "codex reset forecast official commitment {}",
-                if active {
-                    "active"
-                } else {
-                    "expired or withdrawn"
-                }
-            ));
+            println!(
+                "{}",
+                format!(
+                    "codex reset forecast official commitment {}",
+                    if active {
+                        "active"
+                    } else {
+                        "expired or withdrawn"
+                    }
+                )
+            );
         }
     }
 
@@ -799,9 +696,9 @@ pub fn collect_codex_reset_forecast(
     } else {
         (consensus_24h, contrib_24h)
     };
-    logging::debug(format!(
+    println!(
         "codex reset forecast consensus horizon={horizon} 24h={consensus_24h:?} 48h={consensus_48h:?}"
-    ));
+    );
 
     let observed_at = rows
         .iter()
@@ -822,7 +719,7 @@ pub fn collect_codex_reset_forecast(
         None
     };
 
-    json!({
+    let result = json!({
         "source": "codex_reset_forecast",
         "horizon": horizon,
         "consensus_percent": consensus,
@@ -833,7 +730,9 @@ pub fn collect_codex_reset_forecast(
         "checked_at": now,
         "sites": rows,
         "error": error,
-    })
+    });
+    println!("{result}");
+    result
 }
 
 #[cfg(test)]
@@ -938,35 +837,6 @@ mod tests {
             .to_string()
     }
 
-    fn gamma_json() -> String {
-        json!({
-        "title": "OpenAI resets Codex weekly limit on...?",
-        "slug": "openai-resets-codex-weekly-limit-onptptpt",
-        "active": true,
-        "closed": false,
-        "markets": [
-            {"question": "OpenAI resets Codex weekly limit on September 24?",
-             "groupItemTitle": "September 24", "closed": false, "active": true,
-             "endDate": "2026-09-25T03:59:00Z",
-             "volumeNum": 1234.56,
-             "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.15\", \"0.85\"]"},
-            {"question": "OpenAI resets Codex weekly limit on September 23?",
-             "groupItemTitle": "September 23", "closed": false, "active": true,
-             "endDate": "2026-09-24T03:59:00Z",
-             "volume": "78.9",
-             "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.24\", \"0.76\"]"},
-            {"question": "OpenAI resets Codex weekly limit on September 25?",
-             "groupItemTitle": "September 25", "closed": false, "active": true,
-             "endDate": "2026-09-26T03:59:00Z",
-             "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.145\", \"0.855\"]"},
-            {"question": "OpenAI resets Codex weekly limit on September 22?",
-             "groupItemTitle": "September 22", "closed": true, "active": true,
-             "endDate": "2026-09-23T03:59:00Z",
-             "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"1\", \"0\"]"}
-        ]})
-        .to_string()
-    }
-
     /// Replay all retained public source endpoints.
     /// Parameters: calls - shared outgoing-request recorder.
     /// Returns: the fake opener with retained source bodies.
@@ -975,7 +845,6 @@ mod tests {
         let result = FakeOpener {
             bodies: vec![
                 ("codexreset.org".into(), Ok(monitor_html())),
-                ("gamma-api".into(), Ok(gamma_json())),
                 ("whenreset.dev".into(), Ok("<rss><channel><item><title>Tibo · Bonus reset</title><pubDate>Tue, 22 Sep 2026 18:23:37 GMT</pubDate></item></channel></rss>".into())),
             ],
             calls,
@@ -1032,118 +901,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_today_and_tomorrow_daily_polymarket_markets() {
-        let parsed = parse_polymarket(&gamma_json()).expect("parsed");
-        assert_eq!(parsed.predictions.len(), 3);
-        assert_eq!(
-            parsed.predictions[0],
-            Prediction {
-                label: "September 23".into(),
-                percent: 24.0,
-                volume_usd: Some(78.9),
-                end_at: Some(parse_iso_epoch("2026-09-24T03:59:00Z").unwrap() as f64),
-            }
-        );
-        assert_eq!(
-            parsed.predictions[1],
-            Prediction {
-                label: "September 24".into(),
-                percent: 15.0,
-                volume_usd: Some(1234.56),
-                end_at: Some(parse_iso_epoch("2026-09-25T03:59:00Z").unwrap() as f64),
-            }
-        );
-        assert_eq!(parsed.predictions[2].label, "September 25");
-        assert_eq!(
-            parsed.predictions[2].end_at,
-            Some(parse_iso_epoch("2026-09-26T03:59:00Z").unwrap() as f64)
-        );
-        assert_eq!(parsed.url, None);
-    }
-
-    #[test]
-    fn does_not_substitute_the_weekly_count_market() {
-        let body = json!({
-            "title": "How many Codex resets week of September 21?",
-            "slug": "how-many-codex-resets-week-of-september-21",
-            "active": true, "closed": false,
-            "markets": [{"question": "Will there be exactly 1 Codex weekly usage limit reset in the week of September 21?",
-                "active": true, "closed": false, "outcomes": "[\"Yes\",\"No\"]",
-                "outcomePrices": "[\"0.57\",\"0.43\"]"}]
-        }).to_string();
-        assert!(parse_polymarket(&body).is_err());
-    }
-
-    #[test]
-    fn closed_market_clears_its_old_quote() {
-        let body = json!({"title": "OpenAI resets Codex weekly limit on...?",
-            "slug": "openai-resets-codex-weekly-limit-onptptpt",
-            "active": true, "closed": true, "markets": []})
-        .to_string();
-        let parsed = parse_polymarket(&body).expect("valid event with no open market");
-        assert!(parsed.predictions.is_empty());
-        assert_eq!(parsed.detail.as_deref(), Some("no open market"));
-    }
-
-    #[test]
-    fn previous_weekly_market_quote_is_not_carried_on_refresh_failure() {
-        let previous = json!({"sites": [{
-            "id": "polymarket", "name": "Polymarket",
-            "url": "https://polymarket.com/event/how-many-codex-resets-week-of-september-21",
-            "checked_at": 999.0, "predictions": [{"label": "1 reset", "percent": 57.0}],
-            "detail": "count market · open outcome Yes shares"
-        }]});
-        let sites = json!({
-            "codex_reset": {"enabled": false},
-            "codex_reset_monitor": {"enabled": false},
-            "whenreset": {"enabled": false},
-            "will_codex_reset": {"enabled": false}
-        });
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let opener = FakeOpener {
-            bodies: vec![("gamma-api".into(), Err("offline".into()))],
-            calls: calls.clone(),
-        };
-        let result = collect_codex_reset_forecast(
-            Some(&previous),
-            Some(1_000.0),
-            None,
-            None,
-            Some(&sites),
-            Some(&opener),
-        );
-        assert_eq!(calls.lock().unwrap().len(), 1);
-        assert_eq!(result["sites"][0]["predictions"], json!([]));
-        assert_eq!(
-            result["sites"][0]["url"],
-            json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
-        );
-    }
-
-    #[test]
-    fn ignores_unrelated_polymarket_events() {
-        let body = json!({
-            "title": "Who wins the election?",
-            "markets": [{"question": "Will X win by November 3?", "closed": false, "active": true,
-                         "endDate": "2026-11-04T03:59:00Z",
-                         "outcomes": "[\"Yes\", \"No\"]", "outcomePrices": "[\"0.6\", \"0.4\"]"}]})
-        .to_string();
-        assert!(parse_polymarket(&body).is_err());
-    }
-
-    #[test]
-    fn ignores_invalid_polymarket_volume_without_losing_the_market() {
-        let mut payload: Value = serde_json::from_str(&gamma_json()).unwrap();
-        payload["markets"][0]["volumeNum"] = json!(-5);
-        payload["markets"][1]["volume"] = json!("unknown");
-        let parsed = parse_polymarket(&payload.to_string()).expect("market remains available");
-        assert!(parsed
-            .predictions
-            .iter()
-            .all(|row| row.volume_usd.is_none()));
-    }
-
-    #[test]
     /// Verify merges every site into one consensus.
     /// Parameters: none.
     /// Returns: None.
@@ -1155,13 +912,13 @@ mod tests {
             collect_codex_reset_forecast(None, Some(1_000.0), None, None, None, Some(&opener));
 
         assert_eq!(result["horizon"], json!("24h"));
-        // Polymarket expiries and supplemental rows do not vote in the medians.
+        // Historical reference rows do not vote in the forecast.
         assert_eq!(result["consensus_percent"], json!(24.0));
         assert_eq!(result["consensus_percent_24h"], json!(24.0));
         assert_eq!(result["consensus_percent_48h"], json!(42.0));
         assert_eq!(result["contributing_sites"], json!(1));
         assert_eq!(result["error"], Value::Null);
-        assert_eq!(result["sites"].as_array().unwrap().len(), 3);
+        assert_eq!(result["sites"].as_array().unwrap().len(), 2);
         assert_eq!(
             result["sites"]
                 .as_array()
@@ -1169,26 +926,15 @@ mod tests {
                 .iter()
                 .map(|site| site["id"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["polymarket", "codex_reset_monitor", "whenreset"]
+            vec!["codex_reset_monitor", "whenreset"]
         );
         assert!(!result["sites"]
             .as_array()
             .unwrap()
             .iter()
             .any(|site| site["id"] == "nextreset"));
-        assert_eq!(
-            result["sites"][0]["predictions"][0]["volume_usd"],
-            json!(78.9)
-        );
-        assert_eq!(
-            result["sites"][0]["predictions"][1]["volume_usd"],
-            json!(1234.56)
-        );
-        assert_eq!(
-            result["sites"][0]["url"],
-            json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
-        );
-        assert_eq!(calls.lock().unwrap().len(), 3);
+        assert_eq!(result["sites"][0]["url"], json!("https://codexreset.org/"));
+        assert_eq!(calls.lock().unwrap().len(), 2);
         println!("None");
     }
 
@@ -1260,7 +1006,7 @@ mod tests {
         );
         calls.lock().unwrap().clear();
 
-        // 60 s later: the 30 s sites refetch; the 300 s sources do not.
+        // Both retained sources hold their 300 s minimum interval.
         let second = collect_codex_reset_forecast(
             Some(&first),
             Some(1_060.0),
@@ -1270,7 +1016,7 @@ mod tests {
             Some(&all_sites_opener(calls.clone())),
         );
         let fetched = calls.lock().unwrap().clone();
-        assert_eq!(fetched.len(), 1);
+        assert!(fetched.is_empty());
         assert!(fetched.iter().all(|url| !url.contains("codexreset.org")));
         // The throttled site still reports its carried value.
         assert_eq!(second["consensus_percent"], json!(24.0));
@@ -1358,7 +1104,7 @@ mod tests {
         let broken = FakeOpener {
             bodies: vec![
                 ("codexreset.org".into(), Err("connection refused".into())),
-                ("gamma-api".into(), Err("connection refused".into())),
+                ("whenreset.dev".into(), Err("connection refused".into())),
             ],
             calls: Arc::new(Mutex::new(Vec::new())),
         };
@@ -1371,52 +1117,59 @@ mod tests {
             Some(&broken),
         );
 
-        let failed = &result["sites"][1];
+        let failed = &result["sites"][0];
         assert_eq!(failed["id"], json!("codex_reset_monitor"));
         assert_eq!(failed["error"], json!("connection refused"));
         assert_eq!(failed["predictions"][0]["percent"], json!(24.0));
-        let failed_market = &result["sites"][0];
-        assert_eq!(failed_market["error"], json!("connection refused"));
-        assert_eq!(failed_market["predictions"][0]["volume_usd"], json!(78.9));
-        assert_eq!(
-            failed_market["url"],
-            json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
-        );
+        assert_eq!(failed["url"], json!("https://codexreset.org/"));
+        assert_eq!(result["sites"][1]["id"], json!("whenreset"));
+        assert_eq!(result["sites"][1]["error"], json!("connection refused"));
+        assert!(result["sites"][1]["detail"]
+            .as_str()
+            .unwrap()
+            .ends_with(" · last known"));
         // The bar keeps a consensus rather than blanking on one bad source.
         assert_eq!(result["consensus_percent"], json!(24.0));
         println!("None");
     }
 
     #[test]
+    /// Verify a missing forecast horizon stays unavailable without fabricated estimates.
+    /// Parameters: none.
+    /// Returns: None.
     fn reports_an_error_when_no_site_publishes_the_horizon() {
+        println!("parameters=none");
         let opener = FakeOpener {
-            bodies: vec![("gamma-api".into(), Ok(gamma_json()))],
+            bodies: vec![(
+                "codexreset.org".into(),
+                Ok(
+                    r#"<div data-testid="probability-ring-24h" data-target-value="24"></div>"#
+                        .into(),
+                ),
+            )],
             calls: Arc::new(Mutex::new(Vec::new())),
         };
-        let sites = json!({
-            "codex_reset": {"enabled": false},
-            "codex_reset_monitor": {"enabled": false},
-        });
+        let sites = json!({"whenreset": {"enabled": false}});
         let result = collect_codex_reset_forecast(
             None,
-            Some(1_000.0),
+            Some(1000.0),
             None,
-            None,
+            Some("48h"),
             Some(&sites),
             Some(&opener),
         );
         assert_eq!(result["consensus_percent"], Value::Null);
-        assert_eq!(result["consensus_percent_24h"], Value::Null);
+        assert_eq!(result["consensus_percent_24h"], json!(24.0));
         assert_eq!(result["consensus_percent_48h"], Value::Null);
         assert_eq!(
             result["error"],
-            json!("no site published a 24h probability")
+            json!("no site published a 48h probability")
         );
-        // Polymarket still contributes its market rows to the menu.
         assert_eq!(
             result["sites"][0]["predictions"].as_array().unwrap().len(),
-            2
+            1
         );
+        println!("None");
     }
 
     #[test]
@@ -1440,7 +1193,7 @@ mod tests {
     /// Returns: None.
     fn every_registry_entry_is_a_public_https_endpoint() {
         println!("parameters=none");
-        assert_eq!(FORECAST_SITES.len(), 2);
+        assert_eq!(FORECAST_SITES.len(), 1);
         for site in FORECAST_SITES {
             assert!(site.endpoint.starts_with("https://"), "{}", site.id);
             assert!(site.url.starts_with("https://"), "{}", site.id);
@@ -1476,188 +1229,5 @@ mod tests {
         assert_eq!(clamp_percent(Some(-4.0)), Some(0.0));
         assert_eq!(clamp_percent(Some(f64::NAN)), None);
         assert_eq!(clamp_percent(None), None);
-    }
-
-    fn polymarket_only_sites() -> Value {
-        json!({
-            "codex_reset": {"enabled": false},
-            "codex_reset_monitor": {"enabled": false},
-            "whenreset": {"enabled": false},
-            "will_codex_reset": {"enabled": false},
-        })
-    }
-
-    fn daily_gamma_market(label: &str, end_date: &str, end_date_iso: &str) -> Value {
-        json!({
-            "question": format!("OpenAI resets Codex weekly limit on {label}?"),
-            "groupItemTitle": label,
-            "closed": false,
-            "active": true,
-            "endDate": end_date,
-            "endDateIso": end_date_iso,
-            "volumeNum": 78.9,
-            "outcomes": "[\"Yes\", \"No\"]",
-            "outcomePrices": "[\"0.24\", \"0.76\"]",
-        })
-    }
-
-    fn daily_gamma_event(markets: Vec<Value>) -> String {
-        json!({
-            "title": "OpenAI resets Codex weekly limit on...?",
-            "slug": "openai-resets-codex-weekly-limit-onptptpt",
-            "active": true,
-            "closed": false,
-            "markets": markets,
-        })
-        .to_string()
-    }
-
-    fn collect_polymarket_at(body: &str, now: f64, last: Option<&Value>) -> Value {
-        let opener = FakeOpener {
-            bodies: vec![("gamma-api".into(), Ok(body.to_string()))],
-            calls: Arc::new(Mutex::new(Vec::new())),
-        };
-        collect_codex_reset_forecast(
-            last,
-            Some(now),
-            None,
-            None,
-            Some(&polymarket_only_sites()),
-            Some(&opener),
-        )
-    }
-
-    fn polymarket_site(result: &Value) -> &Value {
-        result["sites"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|site| site["id"] == "polymarket")
-            .expect("polymarket row")
-    }
-
-    #[test]
-    fn omits_a_still_listed_polymarket_market_after_its_vote_window_ends() {
-        let end = "2026-09-30T03:59:00Z";
-        let now = parse_iso_epoch(end).unwrap() as f64 + 1.0;
-        let body = daily_gamma_event(vec![daily_gamma_market("September 29", end, "2026-09-30")]);
-        let result = collect_polymarket_at(&body, now, None);
-        let site = polymarket_site(&result);
-        assert_eq!(site["predictions"], json!([]));
-        assert_eq!(site["detail"], json!("no open market"));
-    }
-
-    #[test]
-    fn keeps_a_polymarket_market_while_its_vote_window_is_open() {
-        let end = "2026-09-30T03:59:00Z";
-        let now = parse_iso_epoch(end).unwrap() as f64 - 1.0;
-        let body = daily_gamma_event(vec![daily_gamma_market("September 29", end, "2026-09-30")]);
-        let result = collect_polymarket_at(&body, now, None);
-        let site = polymarket_site(&result);
-        assert_eq!(site["predictions"][0]["label"], json!("September 29"));
-        assert_eq!(site["predictions"][0]["percent"], json!(24.0));
-        assert_eq!(site["predictions"][0]["volume_usd"], json!(78.9));
-        assert_eq!(site["detail"], json!("daily markets · Yes price"));
-    }
-
-    #[test]
-    fn expired_polymarket_days_use_the_no_open_market_empty_state() {
-        let first_end = parse_iso_epoch("2026-09-30T03:59:00Z").unwrap() as f64;
-        let second_end = parse_iso_epoch("2026-10-01T03:59:00Z").unwrap() as f64;
-        let body = daily_gamma_event(vec![
-            daily_gamma_market("September 29", "2026-09-30T03:59:00Z", "2026-09-30"),
-            daily_gamma_market("September 30", "2026-10-01T03:59:00Z", "2026-10-01"),
-        ]);
-        let result = collect_polymarket_at(&body, second_end.max(first_end) + 1.0, None);
-        let site = polymarket_site(&result);
-        assert_eq!(site["predictions"], json!([]));
-        assert_eq!(site["detail"], json!("no open market"));
-    }
-
-    #[test]
-    fn september_daily_polymarket_fixtures_stay_visible_on_an_injected_epoch_clock() {
-        let result = collect_polymarket_at(&gamma_json(), 1_000.0, None);
-        let site = polymarket_site(&result);
-        let predictions = site["predictions"].as_array().unwrap();
-        assert_eq!(predictions.len(), 2);
-        assert_eq!(predictions[0]["label"], json!("September 23"));
-        assert_eq!(predictions[0]["percent"], json!(24.0));
-        assert_eq!(predictions[0]["volume_usd"], json!(78.9));
-        assert_eq!(predictions[1]["label"], json!("September 24"));
-        assert_eq!(predictions[1]["percent"], json!(15.0));
-        assert_eq!(predictions[1]["volume_usd"], json!(1234.56));
-        assert_eq!(site["detail"], json!("daily markets · Yes price"));
-    }
-
-    #[test]
-    fn drops_an_expired_polymarket_date_from_a_carried_snapshot() {
-        let end = parse_iso_epoch("2026-09-30T03:59:00Z").unwrap() as f64;
-        let body = daily_gamma_event(vec![daily_gamma_market(
-            "September 29",
-            "2026-09-30T03:59:00Z",
-            "2026-09-30",
-        )]);
-        let first = collect_polymarket_at(&body, end - 10.0, None);
-        assert_eq!(
-            polymarket_site(&first)["predictions"][0]["label"],
-            json!("September 29")
-        );
-        let opener = FakeOpener {
-            bodies: vec![("gamma-api".into(), Ok(body))],
-            calls: Arc::new(Mutex::new(Vec::new())),
-        };
-        let second = collect_codex_reset_forecast(
-            Some(&first),
-            Some(end + 10.0),
-            None,
-            None,
-            Some(&polymarket_only_sites()),
-            Some(&opener),
-        );
-        assert!(
-            opener.calls.lock().unwrap().is_empty(),
-            "expired date must drop inside the throttle window without a refetch"
-        );
-        let site = polymarket_site(&second);
-        assert_eq!(site["predictions"], json!([]));
-        assert_eq!(site["detail"], json!("no open market"));
-    }
-
-    #[test]
-    fn polymarket_visibility_flips_at_the_et_vote_deadline_encoded_as_utc() {
-        // 11:59 PM ET on September 29 during EDT is 2026-09-30T03:59:00Z.
-        let end = parse_iso_epoch("2026-09-30T03:59:00Z").unwrap() as f64;
-        let body = daily_gamma_event(vec![daily_gamma_market(
-            "September 29",
-            "2026-09-30T03:59:00Z",
-            "2026-09-30",
-        )]);
-        let before = collect_polymarket_at(&body, end - 1.0, None);
-        assert_eq!(
-            polymarket_site(&before)["predictions"][0]["label"],
-            json!("September 29")
-        );
-        let at_deadline = collect_polymarket_at(&body, end, None);
-        assert_eq!(polymarket_site(&at_deadline)["predictions"], json!([]));
-        assert_eq!(
-            polymarket_site(&at_deadline)["detail"],
-            json!("no open market")
-        );
-    }
-
-    #[test]
-    fn end_date_iso_utc_calendar_day_does_not_keep_a_market_alive_after_end_date() {
-        // Named September 29; endDateIso is 2026-09-30 (UTC date of expiry).
-        // 04:00 UTC on September 30 is still that ISO date, after 11:59 PM ET.
-        let now = parse_iso_epoch("2026-09-30T04:00:00Z").unwrap() as f64;
-        let body = daily_gamma_event(vec![daily_gamma_market(
-            "September 29",
-            "2026-09-30T03:59:00Z",
-            "2026-09-30",
-        )]);
-        let result = collect_polymarket_at(&body, now, None);
-        let site = polymarket_site(&result);
-        assert_eq!(site["predictions"], json!([]));
-        assert_eq!(site["detail"], json!("no open market"));
     }
 }
