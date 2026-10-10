@@ -36,6 +36,7 @@ class Actor {
         Object.assign(this, options);
         this.children = [];
         this.draws = [];
+        this.strokes = [];
         this.repaints = 0;
         print(undefined);
     }
@@ -63,7 +64,7 @@ class Actor {
         setDash: (dash, offset) => { this.dash = dash; },
         moveTo: (...point) => { this.start = point; },
         lineTo: (...point) => { this.end = point; },
-        stroke: () => { this.stroked = true; },
+        stroke: () => { this.stroked = true; this.strokes.push({rect: this.draws.at(-1)?.rect, color: this.color, width: this.lineWidth}); },
     });
 }
 
@@ -313,3 +314,50 @@ for (let refresh = 0; refresh < 2; refresh++) {
 button._updatePanelProgress(null, false);
 check(timers.size === 0, 'empty snapshot cleans up the ready timer');
 print('PASS: repeated ready snapshots render the instance bar without a W5:1 workspace badge.');
+
+// The focused terminal has a one-pixel teal edge, independent of its workspace.
+const focused = {...a, session_id: 'focus', focused: true, workspace: 1,
+    workflow: {available: true, fraction: 0.8}};
+const nearby = {...b, session_id: 'nearby', focused: false, workspace: 1, current_workspace: true};
+const focusPayload = {providers: [{kind: 'codex', agents: [focused, nearby]}]};
+button._updatePanelProgress(focusPayload, false);
+const focusedBar = button._panelProgressBars.get('focus');
+const nearbyBar = button._panelProgressBars.get('nearby');
+check(focusedBar.strokes.length === 1, 'selected instance paints a border');
+const edge = focusedBar.strokes.at(-1);
+check(edge.width === 1 && JSON.stringify(edge.rect) === '[0.5,0.5,49,7]',
+    'one-pixel edge is contained within the 50 by 8 bar');
+check(JSON.stringify(edge.color.slice(0,3).map(channel => Math.round(channel*255))) === '[0,255,230]' &&
+    edge.color[3] === 0.8, 'subtle teal matches CLI selection color #00ffe6');
+check(nearbyBar.strokes.length === 0, 'same workspace does not imply selection');
+check(focusedBar.draws.at(-2).rect[2] === 40, 'border preserves the measured progress fill');
+const oldEdges = focusedBar.strokes.length;
+focused.focused = false;
+nearby.focused = true;
+button._updatePanelProgress(focusPayload, false);
+check(button._panelProgressBars.get('focus') === focusedBar && button._panelProgressBars.get('nearby') === nearbyBar,
+    'focus transfer retains bar actor identity');
+check(focusedBar.strokes.length === oldEdges && nearbyBar.strokes.length === 1,
+    'outline follows focus and clears from the old selection');
+nearby.focused = false;
+button._updatePanelProgress(focusPayload, false);
+check(nearbyBar.strokes.length === 1, 'focusing outside agent terminals clears selection');
+for (const agent of [
+    {...a, focused: true}, {...b, focused: true}, {...ready, focused: true},
+    {phase: 'STOPPED', focused: true, workflow: {available: false}},
+]) {
+    const bar = owners.buildPanelTaskProgress(agent);
+    bar._amsPulseAt = 1500;
+    bar.queue_repaint();
+    check(bar.strokes.length === 1 && bar.width === 50 && bar.height === 8,
+        'focused running, stopped, ready and unavailable bars all retain a compact outline');
+    if (agent.unread_completion)
+        check(bar.draws.at(-2).color.slice(0,3).every(channel => channel === 1),
+            'teal outline does not replace the ready white fill');
+}
+nearby.focused = true;
+button._updatePanelProgress(focusPayload, true);
+check(nearbyBar.strokes.length === 2 && nearbyBar.opacity === 128, 'stale selected bar keeps the outline and stale opacity');
+button._updatePanelProgress(null, false);
+check(timers.size === 0, 'selection does not start an extra animation source');
+print('PASS: selected instance uses a one-pixel teal edge matching CLI focus and follows focus changes.');
