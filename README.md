@@ -286,7 +286,22 @@ number of Agent Command Center agents of each provider that are **currently
 running in open terminal windows** to the left of that provider's icon. The
 panel prints a compact tok/s figure to the right of the icon for each active
 harness (`12/s` or `131k/s`, or the last-minute average when the 1-second
-window is 0). The drop-down
+window is 0). Each open agent also gets a **50px progress bar** beside those
+counts and rates. Its fill shows ACC's actual workflow completion percentage,
+with a continuous color gradient from red at 0% to green at 100%. Confirmed
+finished agents show a full bar; unavailable workflow progress shows an empty
+neutral track. The bars contain no added labels or percentage text.
+
+Progress bars are grouped by ascending workspace number, with agents ordered
+by their terminal window numbers within each group. A vertical grey dotted
+line separates workspace groups. While a turn is actively running, its bar
+smoothly pulses from 100% opacity to 30% and back every three seconds, matching
+the terminal indicator. Idle bars stay steady; stale snapshots stay dimmed.
+Updates continue while the drop-down is open. The public render probe runs with
+`cargo test --test panel_progress` (or `gjs tests/panel_progress.js .`) using
+isolated actors without changing the desktop or user metadata.
+
+The drop-down
 starts with per-harness tok/s, tok/min, and tok/hour for those same active
 harnesses (aggregated by harness, not by numbered instance such as `ca1`/`ca2`;
 idle 0 tok/s rows and missing counters are omitted) and then lists those
