@@ -80,6 +80,11 @@
   margin-left: 2px;
 }
 
+.ams-panel-progress {
+  spacing: 4px;
+  margin: 0 4px;
+}
+
 .ams-active {
   color: #8ff0a4;
 }
