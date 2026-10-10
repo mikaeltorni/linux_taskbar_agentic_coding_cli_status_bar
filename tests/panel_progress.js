@@ -70,7 +70,7 @@ class Actor {
 
 const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor};
 const Clutter = {ActorAlign: {CENTER: 0}};
-const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
+const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator']
     .map(name => declaration(name));
@@ -87,7 +87,8 @@ const services = {readPayload: () => snapshot, scopePayloadToWindows: value => v
     ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
     saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [{workspace: 5, count: 1, current: false, label: 'W5:1'}], panelHarnessRateRows: () => [],
 };
-const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', `${snippets.join('\n')}
+const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
+${snippets.join('\n')}
     const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
         activeTaskEstimates, longestTaskEstimate, formatPanelTaskEstimate, ageSeconds, STALE_SECONDS,
         unreadCompletionCount, saveUnreadStates, log, workspaceAttentionCounts, panelHarnessRateRows} = services;
@@ -361,3 +362,33 @@ check(nearbyBar.strokes.length === 2 && nearbyBar.opacity === 128, 'stale select
 button._updatePanelProgress(null, false);
 check(timers.size === 0, 'selection does not start an extra animation source');
 print('PASS: selected instance uses a one-pixel teal edge matching CLI focus and follows focus changes.');
+
+// State colors must preserve the measured fill and every existing alpha.
+for (const [state, expected] of [
+    [{phase: 'RUNNING', run_active: true, goal_active: true}, [168, 85, 247]],
+    [{phase: 'RATE', goal_active: true}, [244, 114, 182]],
+    [{phase: 'RATE'}, [244, 114, 182]],
+    [{phase: 'RUNNING', run_active: true, goal_active: false}, [137, 133, 81]],
+    [{phase: 'STOPPED', goal_active: true}, [137, 133, 81]],
+    [{phase: 'DONE', goal_active: true, ready_completed_at: '2026-10-10T10:00:00Z'}, [34, 197, 94]],
+]) {
+    const agent = {...state, workflow: {available: true, fraction: .5}};
+    const bar = owners.buildPanelTaskProgress(agent);
+    bar._amsPulseAt = 0;
+    bar.queue_repaint();
+    const fill = bar.draws.at(-1);
+    check(JSON.stringify(fill.color.slice(0, 3).map(channel => Math.round(channel * 255))) === JSON.stringify(expected),
+        `state color follows ${JSON.stringify(state)}`);
+    check(bar.draws[0].color[3] === .22 && fill.color[3] === 1,
+        'state colors preserve track and fill alpha');
+    check(fill.rect[2] === (state.phase === 'DONE' ? 50 : 25), 'state color preserves measured width');
+}
+for (const state of [{phase: 'RATE'}, {phase: 'RUNNING', run_active: true, goal_active: true}]) {
+    const bar = owners.buildPanelTaskProgress({...state, workflow: {available: false}});
+    bar.queue_repaint();
+    check(bar.draws.length === 1 && bar.draws[0].color[3] === 1,
+        'unavailable state preserves neutral track and alpha');
+    check(JSON.stringify(bar.draws[0].color.slice(0, 3).map(channel => Math.round(channel * 255))) === '[48,52,64]',
+        'unavailable workflow stays neutral');
+}
+print('PASS: goal and RATE fills match state colors without changing progress or opacity.');
