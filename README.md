@@ -280,7 +280,9 @@ Progress bars are grouped by ascending workspace number, with agents ordered
 by their terminal window numbers within each group. A vertical grey dotted
 line separates workspace groups. While a turn is actively running, its bar
 smoothly pulses from 100% opacity to 30% and back every three seconds, matching
-the terminal indicator. Idle bars stay steady; stale snapshots stay dimmed.
+the terminal indicator. A finished, unopened instance uses the same three-second
+cycle in the opposite direction: its full green bar brightens from 65% to 100%
+opacity and returns. Other idle bars stay steady; stale snapshots stay dimmed.
 Status refreshes reuse the bars so they remain visible throughout the pulse.
 Updates continue while the drop-down is open. The public render probe runs with
 `cargo test --test panel_progress` (or `gjs tests/panel_progress.js .`) using
@@ -316,12 +318,12 @@ rate-limit indicator. Other live ACC kinds place `GK1`, `CC1`, `QA1`, `OA1`,
 kind is open. Only the
 active workspace heading gets a translucent teal background. Agent rows keep
 their text and CX instance colors, with measured task progress behind the text. A finished agent that
-has not been opened since its turn ended gives
-only this indicator a soft green flow. Its workspace gets a steady green
-`W<n>:<count>` marker and its row in the expanded menu gets the same steady
-glow. The markers count only finished, unopened turns; waiting, stopped, and
-already opened turns do not appear in them. Focusing that agent's CLI window
-clears all three highlights; a turn that finishes while its window is focused
+has not been opened since its turn ended pulses brighter on its individual
+bar, with no green glow around the panel and no `W<n>:<count>` workspace labels
+on the panel. The expanded menu retains a steady green unread row highlight
+and workspace completion counts. These counts include only finished, unopened
+turns; waiting, stopped, and already opened turns do not appear in them.
+Focusing that agent's CLI window stops its pulse and clears its menu highlights; a turn that finishes while its window is focused
 starts acknowledged. The extension keeps acknowledgements in
 `~/.local/state/codex-agent-tracker/model-status-unread.json` so a Shell reload
 does not revive an opened completion. Each new turn can raise a new highlight.
