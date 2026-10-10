@@ -176,22 +176,14 @@ starts with the 24-48h consensus (`26%-48%` when both horizons exist) followed
 by one named row per source. Forecast rows show every published horizon;
 WhenReset links to reset history without adding a percentage to the forecast.
 The 24h/48h percentages come from Codex Reset Monitor (`codexreset.org`).
-Clicking or pressing Enter on a source row opens its public page in the desktop's default browser; Polymarket points directly to
-the daily Codex-reset event returned by its public API. Each daily Polymarket
-date is shown only while that market's vote window is still open: 11:59 PM ET
-on the named date, published by Gamma as UTC `endDate` and compared to the
-poller's system clock. After that instant the date is omitted even if Gamma
-still lists the contract as active. Remaining open days use a compact
-day.month date and show cumulative trading volume in whole dollars beside the
-Yes probability when the API publishes it (for example, `22.9: 79.5% $705`).
-When none remain, the row reads `no open market`. Each source can be disabled
-with its `codex_reset_forecast.sites.<id>.enabled` setting.
+Clicking or pressing Enter on a source row opens its public page in the
+desktop's default browser. Each source can be disabled with its
+`codex_reset_forecast.sites.<id>.enabled` setting.
 
-The retired `codex_reset` (codex-reset.com) and `will_codex_reset` (Will Codex
-Reset) sources are no longer fetched or shown. Old enable settings and cached
-rows for them are ignored automatically. The existing Polymarket daily-event
-integration remains configured; it shows `no open market` once every listed
-vote window has expired.
+Polymarket, `codex_reset` (codex-reset.com), and `will_codex_reset` (Will Codex
+Reset) are retired sources: they are no longer fetched or shown. Old enable
+settings and cached rows for them are ignored automatically. Only
+`codex_reset_monitor` and `whenreset` remain in the source catalog.
 
 ### Public Codex reset sources
 
@@ -201,7 +193,6 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 
 | Site | What it publishes | Available surface |
 | --- | --- | --- |
-| [Polymarket](https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt) | Yes prices for daily Codex reset markets still inside their 11:59 PM ET vote window (Gamma `endDate`), with each date and volume | Public market API; daily odds differ from 24h/48h forecasts |
 | [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
 | [WhenReset](https://whenreset.dev/codex) | Latest direct or banked reset, with original posts and history | Public Codex RSS feed; shown as context, not a consensus vote |
 
