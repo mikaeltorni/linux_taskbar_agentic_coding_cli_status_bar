@@ -671,7 +671,11 @@ mod tests {
     }
 
     #[test]
+    /// Verify stale site settings are discarded and retained defaults are filled.
+    /// Parameters: none.
+    /// Returns: None.
     fn codex_reset_forecast_drops_unknown_sites_and_fills_missing_ones() {
+        println!("parameters=none");
         let _sandbox = Sandbox::new();
         let forecast = load_with(json!({
             "sites": {
@@ -693,8 +697,9 @@ mod tests {
         assert!(!sites.contains_key("codex_resets"));
         // An explicit opt-out survives; unlisted sites default to on.
         assert_eq!(sites["polymarket"]["enabled"], json!(false));
-        assert_eq!(sites["codex_reset"]["enabled"], json!(true));
+        assert_eq!(sites["codex_reset_monitor"]["enabled"], json!(true));
         assert_eq!(sites["whenreset"]["enabled"], json!(true));
+        println!("None");
     }
 
     #[test]

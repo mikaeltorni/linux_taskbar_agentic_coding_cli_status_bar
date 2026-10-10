@@ -1,16 +1,15 @@
 //! Codex weekly-limit reset forecasts from public community trackers.
 //!
 //! OpenAI grants discretionary ("goodwill") Codex weekly-limit resets on no
-//! published schedule, so several independent public trackers publish a
-//! probability that the next one lands inside a given horizon. This collector
-//! reads those numbers so the status bar can show one consensus percentage
-//! next to the Codex segments.
+//! published schedule. This collector reads Codex Reset Monitor probabilities,
+//! daily Polymarket contracts, and WhenReset history. Only published 24h/48h
+//! probabilities contribute to the percentage next to the Codex segments.
 //!
 //! Major components:
 //! - [`FORECAST_SITES`] — the vetted source registry (id, display name, page,
 //!   endpoint, politeness floor, parser). Adding a source is a registry entry
 //!   plus a parser, never a new fetch/throttle path.
-//! - [`RESET_REFERENCE_SITES`] — public history or mirrored forecast sources
+//! - [`RESET_REFERENCE_SITES`] — public reset-history sources
 //!   summarized in linked rows without adding a consensus vote.
 //! - [`collect_codex_reset_forecast`] — per-site throttled fetch and parse,
 //!   merged into one snapshot carrying 24h and 48h consensus percentages
@@ -108,23 +107,12 @@ pub struct ForecastSite {
 /// Selection criteria: a public read-only endpoint, a `robots.txt` that allows
 /// it, a stated methodology, and a machine-readable published probability.
 ///
-/// - `codex-reset.com` — documents a public JSON API (`/api/forecast`) and
-///   publishes 24h/48h probabilities derived from verified reset history.
 /// - `codexreset.org` — "Codex Reset Monitor"; HTML only, so it is parsed from
 ///   stable `data-testid` attributes. Its page is ~1 MB and its own data
 ///   refreshes hourly, hence the 300 s floor.
 /// - Polymarket — a real-money prediction market on exactly this question,
 ///   read through the documented public Gamma API.
 pub const FORECAST_SITES: &[ForecastSite] = &[
-    ForecastSite {
-        id: "codex_reset",
-        name: "codex-reset.com",
-        url: "https://codex-reset.com/",
-        endpoint: "https://codex-reset.com/api/forecast",
-        min_interval_seconds: 30.0,
-        display_order: 1,
-        parse: parse_codex_reset,
-    },
     ForecastSite {
         id: "codex_reset_monitor",
         name: "codexreset.org",
@@ -159,26 +147,15 @@ pub struct ResetReferenceSite {
 }
 
 /// Supplemental sources with live summaries, excluded from the consensus.
-pub const RESET_REFERENCE_SITES: &[ResetReferenceSite] = &[
-    ResetReferenceSite {
-        id: "whenreset",
-        name: "WhenReset",
-        url: "https://whenreset.dev/codex",
-        endpoint: "https://whenreset.dev/api/reset-feed?provider=codex",
-        parse: parse_whenreset_feed,
-        min_interval_seconds: 300.0,
-        display_order: 4,
-    },
-    ResetReferenceSite {
-        id: "will_codex_reset",
-        name: "Will Codex Reset",
-        url: "https://willcodexreset.org/",
-        endpoint: "https://willcodexreset.org/",
-        parse: parse_will_codex_reset_mirror,
-        min_interval_seconds: 300.0,
-        display_order: 2,
-    },
-];
+pub const RESET_REFERENCE_SITES: &[ResetReferenceSite] = &[ResetReferenceSite {
+    id: "whenreset",
+    name: "WhenReset",
+    url: "https://whenreset.dev/codex",
+    endpoint: "https://whenreset.dev/api/reset-feed?provider=codex",
+    parse: parse_whenreset_feed,
+    min_interval_seconds: 300.0,
+    display_order: 4,
+}];
 
 /// Look up a registry entry by id.
 pub fn forecast_site(id: &str) -> Option<&'static ForecastSite> {
@@ -206,87 +183,6 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
     } else {
         Some((values[middle - 1] + values[middle]) / 2.0)
     }
-}
-
-/// Parse `codex-reset.com`'s documented `/api/forecast` JSON.
-fn parse_codex_reset(body: &str) -> Result<SiteForecast, String> {
-    let root: Value =
-        serde_json::from_str(body).map_err(|exc| format!("invalid forecast JSON ({exc})"))?;
-    let probabilities = root
-        .get("probabilities")
-        .ok_or_else(|| "forecast JSON has no probabilities object".to_string())?;
-
-    let mut predictions = Vec::new();
-    for (rounded_key, raw_key, label) in [
-        ("rounded_24h", "raw_24h", "24h"),
-        ("rounded_48h", "raw_48h", "48h"),
-    ] {
-        let percent = clamp_percent(
-            probabilities
-                .get(rounded_key)
-                .and_then(Value::as_f64)
-                .or_else(|| {
-                    probabilities
-                        .get(raw_key)
-                        .and_then(Value::as_f64)
-                        .map(|fraction| fraction * 100.0)
-                }),
-        );
-        if let Some(percent) = percent {
-            predictions.push(Prediction {
-                label: label.to_string(),
-                percent,
-                volume_usd: None,
-                end_at: None,
-            });
-        }
-    }
-    if predictions.is_empty() {
-        return Err("forecast JSON published no 24h/48h probability".into());
-    }
-
-    // `mode` distinguishes a history-only baseline from a signal-driven
-    // forecast; `confidence` is the site's own calibration caveat.
-    let mut parts = Vec::new();
-    if let Some(mode) = root.get("mode").and_then(Value::as_str) {
-        parts.push(mode.to_string());
-    }
-    if let Some(confidence) = root.get("confidence").and_then(Value::as_str) {
-        parts.push(format!("{confidence} confidence"));
-    }
-
-    Ok(SiteForecast {
-        predictions,
-        url: None,
-        detail: (!parts.is_empty()).then(|| parts.join(" · ")),
-        observed_at: root
-            .get("updated_at")
-            .and_then(Value::as_str)
-            .and_then(parse_iso_epoch)
-            .map(|epoch| epoch as f64),
-        commitment: (root.get("mode").and_then(Value::as_str) == Some("announced")
-            && root
-                .pointer("/official_signal/signal_type")
-                .and_then(Value::as_str)
-                == Some("dated_commitment")
-            && root
-                .pointer("/official_signal/window/target_kind")
-                .and_then(Value::as_str)
-                == Some("deadline"))
-        .then(|| {
-            Some(DatedCommitment {
-                percent: clamp_percent(
-                    root.pointer("/probabilities/commitment_floor_percent")
-                        .and_then(Value::as_f64),
-                )?,
-                deadline_at: root
-                    .pointer("/official_signal/window/target_at")
-                    .and_then(Value::as_str)
-                    .and_then(parse_iso_epoch)? as f64,
-            })
-        })
-        .flatten(),
-    })
 }
 
 /// Format a published UTC event timestamp for a compact source row.
@@ -328,27 +224,6 @@ fn parse_whenreset_feed(body: &str) -> Result<SiteForecast, String> {
             event_time(date.timestamp())?
         )),
         observed_at: Some(date.timestamp() as f64),
-        ..SiteForecast::default()
-    })
-}
-
-/// Show the rendered mirror's numbers as context without double-counting its
-/// upstream codex-reset.com forecast in the consensus.
-fn parse_will_codex_reset_mirror(body: &str) -> Result<SiteForecast, String> {
-    let mut values = Vec::new();
-    for hours in [24, 48] {
-        let pattern = format!(r#"id="probability{hours}">([0-9]+(?:\.[0-9]+)?)</span>"#);
-        let percent = regex::Regex::new(&pattern)
-            .ok()
-            .and_then(|re| re.captures(body))
-            .and_then(|captures| captures.get(1))
-            .and_then(|value| value.as_str().parse::<f64>().ok())
-            .filter(|value| (0.0..=100.0).contains(value))
-            .ok_or_else(|| format!("Will Codex Reset page has no valid {hours}h probability"))?;
-        values.push(format!("{hours}h {percent}%"));
-    }
-    Ok(SiteForecast {
-        detail: Some(values.join(" · ")),
         ..SiteForecast::default()
     })
 }
@@ -993,19 +868,12 @@ mod tests {
         }
     }
 
-    fn forecast_json() -> String {
-        json!({
-            "mode": "model",
-            "confidence": "low",
-            "updated_at": "2026-09-10T23:42:50.300Z",
-            "probabilities": {"rounded_24h": 22, "rounded_48h": 39,
-                              "raw_24h": 0.2178, "raw_48h": 0.3882},
-        })
-        .to_string()
-    }
-
     #[test]
+    /// Verify reference sites publish live context without changing consensus.
+    /// Parameters: none.
+    /// Returns: None.
     fn reference_sites_publish_live_context_without_changing_consensus() {
+        println!("parameters=none");
         let calls = Arc::new(Mutex::new(Vec::new()));
         let result = collect_codex_reset_forecast(
             None,
@@ -1016,17 +884,11 @@ mod tests {
             Some(&all_sites_opener(calls.clone())),
         );
         let sites = result["sites"].as_array().unwrap();
-        for (id, url) in [
-            ("whenreset", "https://whenreset.dev/codex"),
-            ("will_codex_reset", "https://willcodexreset.org/"),
-        ] {
+        for (id, url) in [("whenreset", "https://whenreset.dev/codex")] {
             let site = sites.iter().find(|site| site["id"] == id).expect(id);
             assert_eq!(site["url"], json!(url));
             assert_eq!(site["reference"], json!(true));
             assert_eq!(site["predictions"], json!([]));
-            if id == "will_codex_reset" {
-                assert_eq!(site["detail"], json!("24h 20% · 48h 35%"));
-            }
             assert!(site["detail"]
                 .as_str()
                 .is_some_and(|detail| !detail.is_empty()));
@@ -1035,40 +897,8 @@ mod tests {
             calls.lock().unwrap().len(),
             FORECAST_SITES.len() + RESET_REFERENCE_SITES.len()
         );
-        assert_eq!(result["contributing_sites"], json!(2));
-    }
-
-    #[test]
-    fn cached_will_codex_reset_rows_drop_the_retired_caption() {
-        let previous = json!({"sites": [{
-            "id": "will_codex_reset",
-            "name": "Will Codex Reset",
-            "url": "https://willcodexreset.org/",
-            "reference": true,
-            "predictions": [],
-            "detail": "24h 20% · 48h 35% · mirrored outlook",
-            "observed_at": 998.0,
-            "checked_at": 999.0,
-            "error": null
-        }]});
-        let sites = json!({
-            "codex_reset": {"enabled": false},
-            "codex_reset_monitor": {"enabled": false},
-            "polymarket": {"enabled": false},
-            "whenreset": {"enabled": false}
-        });
-        let result = collect_codex_reset_forecast(
-            Some(&previous),
-            Some(1_000.0),
-            None,
-            None,
-            Some(&sites),
-            None,
-        );
-        assert_eq!(result["sites"].as_array().unwrap().len(), 1);
-        assert_eq!(result["sites"][0]["id"], json!("will_codex_reset"));
-        assert_eq!(result["sites"][0]["detail"], json!("24h 20% · 48h 35%"));
-        assert_eq!(result["sites"][0]["checked_at"], json!(999.0));
+        assert_eq!(result["contributing_sites"], json!(1));
+        println!("None");
     }
 
     #[test]
@@ -1095,138 +925,6 @@ mod tests {
             row["detail"],
             "latest banked reset · Sep 22 18:23 UTC · last known"
         );
-    }
-
-    fn announced_forecast_json(deadline: &str) -> String {
-        json!({
-            "mode": "announced",
-            "probabilities": {
-                "rounded_24h": 20,
-                "rounded_48h": 35,
-                "commitment_floor_percent": 93
-            },
-            "official_signal": {
-                "signal_type": "dated_commitment",
-                "window": {"target_kind": "deadline", "target_at": deadline}
-            }
-        })
-        .to_string()
-    }
-
-    #[test]
-    fn announced_commitment_replaces_model_forecast_only_within_its_horizon() {
-        let deadline = "2026-09-23T06:59:59.999Z";
-        let deadline_at = parse_iso_epoch(deadline).unwrap() as f64;
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let opener = FakeOpener {
-            bodies: vec![
-                (
-                    "codex-reset.com".into(),
-                    Ok(announced_forecast_json(deadline)),
-                ),
-                ("codexreset.org".into(), Ok(monitor_html())),
-                ("gamma-api".into(), Ok(gamma_json())),
-            ],
-            calls: calls.clone(),
-        };
-
-        let before_48h = collect_codex_reset_forecast(
-            None,
-            Some(deadline_at - 36.0 * 3600.0),
-            None,
-            None,
-            None,
-            Some(&opener),
-        );
-        assert_eq!(
-            before_48h["sites"][1]["predictions"][0]["percent"],
-            json!(20.0)
-        );
-        assert_eq!(
-            before_48h["sites"][1]["predictions"][1]["percent"],
-            json!(93.0)
-        );
-        assert_eq!(before_48h["consensus_percent_24h"], json!(22.0));
-        assert_eq!(before_48h["consensus_percent_48h"], json!(67.5));
-
-        let within_24h = collect_codex_reset_forecast(
-            Some(&before_48h),
-            Some(deadline_at - 3600.0),
-            None,
-            None,
-            None,
-            Some(&opener),
-        );
-        assert_eq!(
-            within_24h["sites"][1]["predictions"][0]["percent"],
-            json!(93.0)
-        );
-        assert_eq!(
-            within_24h["sites"][1]["predictions"][1]["percent"],
-            json!(93.0)
-        );
-        assert_eq!(
-            within_24h["sites"][1]["name"],
-            json!("codex-reset.com (official commitment)")
-        );
-        assert_eq!(within_24h["consensus_percent_24h"], json!(58.5));
-        calls.lock().unwrap().clear();
-
-        let just_before_deadline = collect_codex_reset_forecast(
-            Some(&within_24h),
-            Some(deadline_at - 5.0),
-            None,
-            None,
-            None,
-            Some(&opener),
-        );
-        calls.lock().unwrap().clear();
-        let expired = collect_codex_reset_forecast(
-            Some(&just_before_deadline),
-            Some(deadline_at + 1.0),
-            None,
-            None,
-            None,
-            Some(&FakeOpener {
-                bodies: vec![("codex-reset.com".into(), Err("offline".into()))],
-                calls: calls.clone(),
-            }),
-        );
-        assert_eq!(
-            expired["sites"][1]["predictions"][0]["percent"],
-            json!(20.0)
-        );
-        assert_eq!(
-            expired["sites"][1]["predictions"][1]["percent"],
-            json!(35.0)
-        );
-        assert_eq!(expired["sites"][1]["name"], json!("codex-reset.com"));
-        assert!(
-            calls.lock().unwrap().is_empty(),
-            "expiry needs no HTTP fetch"
-        );
-    }
-
-    #[test]
-    fn incomplete_commitment_does_not_override_model_forecast() {
-        let mut payload: Value =
-            serde_json::from_str(&announced_forecast_json("2026-09-23T06:59:59.999Z")).unwrap();
-        payload["official_signal"]["window"]["target_at"] = Value::Null;
-        let opener = FakeOpener {
-            bodies: vec![("codex-reset.com".into(), Ok(payload.to_string()))],
-            calls: Arc::new(Mutex::new(Vec::new())),
-        };
-        let sites =
-            json!({"codex_reset_monitor": {"enabled": false}, "polymarket": {"enabled": false}});
-        let result = collect_codex_reset_forecast(
-            None,
-            Some(1_000.0),
-            None,
-            None,
-            Some(&sites),
-            Some(&opener),
-        );
-        assert_eq!(result["consensus_percent"], json!(20.0));
     }
 
     fn monitor_html() -> String {
@@ -1269,56 +967,21 @@ mod tests {
         .to_string()
     }
 
+    /// Replay all retained public source endpoints.
+    /// Parameters: calls - shared outgoing-request recorder.
+    /// Returns: the fake opener with retained source bodies.
     fn all_sites_opener(calls: Arc<Mutex<Vec<String>>>) -> FakeOpener {
-        FakeOpener {
+        println!("calls={calls:?}");
+        let result = FakeOpener {
             bodies: vec![
-                ("codex-reset.com".into(), Ok(forecast_json())),
-                ("willcodexreset.org".into(), Ok("<span id=\"probability24\">20</span><span id=\"probability48\">35</span>".into())),
                 ("codexreset.org".into(), Ok(monitor_html())),
                 ("gamma-api".into(), Ok(gamma_json())),
                 ("whenreset.dev".into(), Ok("<rss><channel><item><title>Tibo · Bonus reset</title><pubDate>Tue, 22 Sep 2026 18:23:37 GMT</pubDate></item></channel></rss>".into())),
             ],
             calls,
-        }
-    }
-
-    #[test]
-    fn parses_the_documented_forecast_api() {
-        let parsed = parse_codex_reset(&forecast_json()).expect("parsed");
-        assert_eq!(
-            parsed.predictions,
-            vec![
-                Prediction {
-                    label: "24h".into(),
-                    percent: 22.0,
-                    volume_usd: None,
-                    end_at: None,
-                },
-                Prediction {
-                    label: "48h".into(),
-                    percent: 39.0,
-                    volume_usd: None,
-                    end_at: None,
-                },
-            ]
-        );
-        assert_eq!(parsed.detail.as_deref(), Some("model · low confidence"));
-        assert!(parsed.observed_at.is_some());
-    }
-
-    #[test]
-    fn falls_back_to_raw_probabilities() {
-        let body = json!({"probabilities": {"raw_24h": 0.25, "raw_48h": 0.5}}).to_string();
-        let parsed = parse_codex_reset(&body).expect("parsed");
-        assert_eq!(parsed.predictions[0].percent, 25.0);
-        assert_eq!(parsed.predictions[1].percent, 50.0);
-    }
-
-    #[test]
-    fn rejects_a_forecast_payload_without_probabilities() {
-        assert!(parse_codex_reset("{}").is_err());
-        assert!(parse_codex_reset("not json").is_err());
-        assert!(parse_codex_reset(&json!({"probabilities": {}}).to_string()).is_err());
+        };
+        println!("bodies={:?}, calls={:?}", result.bodies, result.calls);
+        result
     }
 
     #[test]
@@ -1481,7 +1144,11 @@ mod tests {
     }
 
     #[test]
+    /// Verify merges every site into one consensus.
+    /// Parameters: none.
+    /// Returns: None.
     fn merges_every_site_into_one_consensus() {
+        println!("parameters=none");
         let calls = Arc::new(Mutex::new(Vec::new()));
         let opener = all_sites_opener(calls.clone());
         let result =
@@ -1489,12 +1156,12 @@ mod tests {
 
         assert_eq!(result["horizon"], json!("24h"));
         // Polymarket expiries and supplemental rows do not vote in the medians.
-        assert_eq!(result["consensus_percent"], json!(23.0));
-        assert_eq!(result["consensus_percent_24h"], json!(23.0));
-        assert_eq!(result["consensus_percent_48h"], json!(40.5));
-        assert_eq!(result["contributing_sites"], json!(2));
+        assert_eq!(result["consensus_percent"], json!(24.0));
+        assert_eq!(result["consensus_percent_24h"], json!(24.0));
+        assert_eq!(result["consensus_percent_48h"], json!(42.0));
+        assert_eq!(result["contributing_sites"], json!(1));
         assert_eq!(result["error"], Value::Null);
-        assert_eq!(result["sites"].as_array().unwrap().len(), 5);
+        assert_eq!(result["sites"].as_array().unwrap().len(), 3);
         assert_eq!(
             result["sites"]
                 .as_array()
@@ -1502,13 +1169,7 @@ mod tests {
                 .iter()
                 .map(|site| site["id"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            vec![
-                "polymarket",
-                "codex_reset",
-                "will_codex_reset",
-                "codex_reset_monitor",
-                "whenreset"
-            ]
+            vec!["polymarket", "codex_reset_monitor", "whenreset"]
         );
         assert!(!result["sites"]
             .as_array()
@@ -1527,11 +1188,16 @@ mod tests {
             result["sites"][0]["url"],
             json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
         );
-        assert_eq!(calls.lock().unwrap().len(), 5);
+        assert_eq!(calls.lock().unwrap().len(), 3);
+        println!("None");
     }
 
     #[test]
+    /// Verify honors the configured horizon.
+    /// Parameters: none.
+    /// Returns: None.
     fn honors_the_configured_horizon() {
+        println!("parameters=none");
         let opener = all_sites_opener(Arc::new(Mutex::new(Vec::new())));
         let result = collect_codex_reset_forecast(
             None,
@@ -1542,17 +1208,22 @@ mod tests {
             Some(&opener),
         );
         // Both horizons stay published regardless of which is configured.
-        assert_eq!(result["consensus_percent"], json!(40.5));
-        assert_eq!(result["consensus_percent_24h"], json!(23.0));
-        assert_eq!(result["consensus_percent_48h"], json!(40.5));
+        assert_eq!(result["consensus_percent"], json!(42.0));
+        assert_eq!(result["consensus_percent_24h"], json!(24.0));
+        assert_eq!(result["consensus_percent_48h"], json!(42.0));
+        println!("None");
     }
 
     #[test]
+    /// Verify skips sites disabled in config.
+    /// Parameters: none.
+    /// Returns: None.
     fn skips_sites_disabled_in_config() {
+        println!("parameters=none");
         let calls = Arc::new(Mutex::new(Vec::new()));
         let opener = all_sites_opener(calls.clone());
         let sites = json!({
-            "codex_reset_monitor": {"enabled": false},
+            "codex_reset_monitor": {"enabled": true},
             "polymarket": {"enabled": false},
             "whenreset": {"enabled": false},
             "will_codex_reset": {"enabled": false}
@@ -1566,13 +1237,18 @@ mod tests {
             Some(&opener),
         );
         assert_eq!(result["sites"].as_array().unwrap().len(), 1);
-        assert_eq!(result["sites"][0]["id"], json!("codex_reset"));
-        assert_eq!(result["consensus_percent"], json!(22.0));
+        assert_eq!(result["sites"][0]["id"], json!("codex_reset_monitor"));
+        assert_eq!(result["consensus_percent"], json!(24.0));
         assert_eq!(calls.lock().unwrap().len(), 1);
+        println!("None");
     }
 
     #[test]
+    /// Verify throttles each site against its own floor.
+    /// Parameters: none.
+    /// Returns: None.
     fn throttles_each_site_against_its_own_floor() {
+        println!("parameters=none");
         let calls = Arc::new(Mutex::new(Vec::new()));
         let first = collect_codex_reset_forecast(
             None,
@@ -1594,10 +1270,11 @@ mod tests {
             Some(&all_sites_opener(calls.clone())),
         );
         let fetched = calls.lock().unwrap().clone();
-        assert_eq!(fetched.len(), 2);
+        assert_eq!(fetched.len(), 1);
         assert!(fetched.iter().all(|url| !url.contains("codexreset.org")));
         // The throttled site still reports its carried value.
-        assert_eq!(second["consensus_percent"], json!(23.0));
+        assert_eq!(second["consensus_percent"], json!(24.0));
+        println!("None");
     }
 
     #[test]
@@ -1665,7 +1342,11 @@ mod tests {
     }
 
     #[test]
+    /// Verify failed sites carry their last values links and errors.
+    /// Parameters: none.
+    /// Returns: None.
     fn failed_sites_carry_their_last_values_links_and_errors() {
+        println!("parameters=none");
         let good = collect_codex_reset_forecast(
             None,
             Some(1_000.0),
@@ -1676,8 +1357,7 @@ mod tests {
         );
         let broken = FakeOpener {
             bodies: vec![
-                ("codex-reset.com".into(), Err("connection refused".into())),
-                ("codexreset.org".into(), Ok(monitor_html())),
+                ("codexreset.org".into(), Err("connection refused".into())),
                 ("gamma-api".into(), Err("connection refused".into())),
             ],
             calls: Arc::new(Mutex::new(Vec::new())),
@@ -1692,9 +1372,9 @@ mod tests {
         );
 
         let failed = &result["sites"][1];
-        assert_eq!(failed["id"], json!("codex_reset"));
+        assert_eq!(failed["id"], json!("codex_reset_monitor"));
         assert_eq!(failed["error"], json!("connection refused"));
-        assert_eq!(failed["predictions"][0]["percent"], json!(22.0));
+        assert_eq!(failed["predictions"][0]["percent"], json!(24.0));
         let failed_market = &result["sites"][0];
         assert_eq!(failed_market["error"], json!("connection refused"));
         assert_eq!(failed_market["predictions"][0]["volume_usd"], json!(78.9));
@@ -1703,7 +1383,8 @@ mod tests {
             json!("https://polymarket.com/event/openai-resets-codex-weekly-limit-onptptpt")
         );
         // The bar keeps a consensus rather than blanking on one bad source.
-        assert_eq!(result["consensus_percent"], json!(23.0));
+        assert_eq!(result["consensus_percent"], json!(24.0));
+        println!("None");
     }
 
     #[test]
@@ -1754,8 +1435,12 @@ mod tests {
     }
 
     #[test]
+    /// Verify every registry entry is a public https endpoint.
+    /// Parameters: none.
+    /// Returns: None.
     fn every_registry_entry_is_a_public_https_endpoint() {
-        assert!(FORECAST_SITES.len() >= 3, "multiple sites are the point");
+        println!("parameters=none");
+        assert_eq!(FORECAST_SITES.len(), 2);
         for site in FORECAST_SITES {
             assert!(site.endpoint.starts_with("https://"), "{}", site.id);
             assert!(site.url.starts_with("https://"), "{}", site.id);
@@ -1774,6 +1459,7 @@ mod tests {
             assert!(site.min_interval_seconds >= FORECAST_FETCH_MIN_INTERVAL_SECONDS);
             assert!(forecast_site(site.id).is_none(), "{}", site.id);
         }
+        println!("None");
     }
 
     #[test]
