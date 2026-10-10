@@ -68,6 +68,7 @@ const INSTANCE_TAG_LAST_RGB = [0xa8, 0x56, 0xe8];
 const PHASE_COLORS = {
     RUNNING: '#e6c200',
     GOAL: '#a855f7',
+    RATE: '#f472b6',
     ATTN: '#ffb454',
     WAITING: '#ffb454',
     DONE: '#22c55e',
@@ -905,17 +906,33 @@ function panelTaskProgressValue(agent) {
 /**
  * Paint measured progress colors, lightening unread ready fills toward white.
  * Parameters: fraction - bounded progress or null; ready - unopened completion;
- * now - epoch milliseconds for the three-second pulse.
+ * now - epoch milliseconds for the three-second pulse; agent - published state.
  * Returns: red, green and blue byte values for the progress color.
  */
-function panelProgressColor(fraction, ready = false, now = Date.now()) {
-    print(`fraction=${fraction} ready=${ready} now=${now}`);
+function panelProgressColor(fraction, ready = false, now = Date.now(), agent = null) {
+    print(`fraction=${fraction} ready=${ready} now=${now} agent=${JSON.stringify(agent)}`);
     const red = [239, 68, 68];
     const green = [34, 197, 94];
-    const base = fraction === null ? [48, 52, 64] :
-        red.map((channel, index) => Math.round(channel + (green[index] - channel) * fraction));
+    const stateColor = !ready && fraction !== null ? panelProgressStateColor(agent) : null;
+    const base = stateColor || (fraction === null ? [48, 52, 64] :
+        red.map((channel, index) => Math.round(channel + (green[index] - channel) * fraction)));
     const wave = ready ? panelProgressWave(now) : 0;
     const result = base.map(channel => Math.round(channel + (255 - channel) * wave));
+    print(result);
+    return result;
+}
+
+/**
+ * Match goal and rate-limited bars to the shared agent badge palette.
+ * Parameters: agent - published agent state, or null for ordinary progress.
+ * Returns: state RGB bytes, or null to retain the measured progress gradient.
+ */
+function panelProgressStateColor(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const phase = String(agent?.phase || '').trim().toUpperCase();
+    const hex = phase === 'RATE' ? PHASE_COLORS.RATE :
+        phase === 'RUNNING' && agent?.run_active && agent?.goal_active ? PHASE_COLORS.GOAL : null;
+    const result = hex ? [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) : null;
     print(result);
     return result;
 }
@@ -969,7 +986,7 @@ function paintPanelTaskProgress(area) {
     const context = area.get_context();
     const fraction = panelTaskProgressValue(area._amsAgent);
     const ready = area._amsAgent.unread_completion === true && !area._amsStale;
-    const color = panelProgressColor(fraction, ready, area._amsPulseAt ?? Date.now())
+    const color = panelProgressColor(fraction, ready, area._amsPulseAt ?? Date.now(), area._amsAgent)
         .map(channel => channel / 255);
     context.setSourceRGBA(...color, fraction === null ? 1 : 0.22);
     context.rectangle(0, 0, width, height);
