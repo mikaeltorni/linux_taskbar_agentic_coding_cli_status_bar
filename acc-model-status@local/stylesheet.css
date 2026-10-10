@@ -85,6 +85,10 @@
   margin: 0 4px;
 }
 
+.ams-panel-workspace {
+  spacing: 4px;
+}
+
 .ams-active {
   color: #8ff0a4;
 }

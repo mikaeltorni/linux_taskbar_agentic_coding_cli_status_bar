@@ -57,12 +57,19 @@ class Actor {
         setSourceRGBA: (...rgb) => { this.color = rgb; },
         rectangle: (...rect) => this.draws.push({rect, color: this.color}),
         fill: () => {}, $dispose: () => {},
+        setLineWidth: width => { this.lineWidth = width; },
+        setDash: (dash, offset) => { this.dash = dash; },
+        moveTo: (...point) => { this.start = point; },
+        lineTo: (...point) => { this.end = point; },
+        stroke: () => { this.stroked = true; },
     });
 }
 
 const St = {BoxLayout: Actor, DrawingArea: Actor};
 const Clutter = {ActorAlign: {CENTER: 0}};
-const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress']
+const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
+    'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
+    'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator']
     .map(name => declaration(name));
 const timers = new Map();
 let nextTimer = 1;
@@ -77,12 +84,14 @@ const makeOwners = new Function('St', 'Clutter', 'GLib', 'print', `${snippets.jo
         updater: {${['_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse'].map(name => declaration(name, true)).join(',')}}};`);
 const owners = makeOwners(St, Clutter, GLib, print);
 const check = (condition, message) => { if (!condition) throw Error(message); };
+const visibleBars = container => container.children.flatMap(child =>
+    child.style_class === 'ams-panel-workspace' ? child.children : []);
 const a = {session_id: 'a', phase: 'RUNNING', run_active: true, workflow: {available: true, fraction: 0.25}};
 const b = {session_id: 'b', phase: 'STOPPED', workflow: {available: true, fraction: 0.6}};
 const payload = {providers: [{kind: 'codex', agents: [a]}, {kind: 'claude', agents: [b]}]};
 const button = Object.assign({_box: new Actor()}, owners.updater);
 button._updatePanelProgress(payload, false);
-let bars = button._panelProgress.children;
+let bars = visibleBars(button._panelProgress);
 check(bars.length === 2, 'one bar for every open agent');
 check(bars.every(bar => bar.width === 50 && bar.height === 8), '50px compact bars');
 check(bars[0].draws.at(-1).rect[2] === 12.5, 'actual 25% fill');
@@ -90,7 +99,7 @@ check(bars[1].draws.at(-1).rect[2] === 30, 'actual 60% fill');
 const retained = bars[0];
 a.workflow.fraction = 0.8;
 button._updatePanelProgress(payload, false);
-bars = button._panelProgress.children;
+bars = visibleBars(button._panelProgress);
 check(bars[0] === retained, 'reuse actor during progress updates');
 check(bars[0].draws.at(-1).rect[2] === 40, 'progress refresh to 80%');
 const cases = [
@@ -161,3 +170,41 @@ Object.assign(destroyer, {_panelPulseId: button._panelPulseId, _taskRows: new Ma
 destroyer.destroy();
 check(timers.size === 0 && destroyer.destroyed === true, 'disable releases timer and destroys the actor');
 print('PASS: underway bars pulse smoothly and animation sources stop on idle, stale data and disable.');
+
+const tasks = [
+    {session_id: 'ws2-10', workspace: 2, window_display_id: 10, monitor: 0, workflow: {fraction: .2}},
+    {session_id: 'ws1-2', workspace: 1, window_display_id: 2, monitor: 2, workflow: {fraction: .4}},
+    {session_id: 'ws1-1', workspace: 1, window_display_id: 1, monitor: 1, workflow: {fraction: .6}},
+    {session_id: 'ws2-2', workspace: 2, window_display_id: 2, monitor: 1, workflow: {fraction: .8}},
+    {session_id: 'unknown', workspace: 0, workflow: {fraction: .1}},
+];
+const grouped = {providers: [{kind: 'claude', agents: [tasks[0], tasks[1], tasks[4]]},
+    {kind: 'codex', agents: [tasks[2], tasks[3]]}]};
+button._updatePanelProgress(grouped, false);
+const children = button._panelProgress.children;
+check(JSON.stringify(children.map(child => child.style_class)) === JSON.stringify([
+    'ams-panel-workspace', 'ams-panel-workspace-divider', 'ams-panel-workspace',
+    'ams-panel-workspace-divider', 'ams-panel-workspace']), 'vertical dividers only between workspace groups');
+const groups = children.filter(child => child.style_class === 'ams-panel-workspace');
+check(JSON.stringify(groups.map(group => group._amsWorkspace)) === '[1,2,0]', 'numeric workspace order with unknown last');
+check(JSON.stringify(visibleBars(button._panelProgress).map(bar => bar._amsAgent.session_id)) ===
+    '["ws1-1","ws1-2","ws2-2","ws2-10","unknown"]', 'agents use workspace and numeric window order across providers');
+check(visibleBars(button._panelProgress).every(bar => bar.width === 50 && !bar.text && !bar.reactive),
+    'bars add no labels, percentages as text, or extra click targets');
+const dividers = children.filter(child => child.style_class === 'ams-panel-workspace-divider');
+for (const divider of dividers) {
+    divider.queue_repaint();
+    check(JSON.stringify(divider.dash) === '[1,3]', 'dotted divider');
+    check(divider.start[0] === divider.end[0] && divider.end[1] === divider.height && divider.height === 16,
+        'divider follows the vertical axis across its height');
+}
+const before = groups[0];
+button._updatePanelProgress(grouped, false);
+check(button._panelProgress.children[0] === before, 'stable updates retain workspace groups');
+tasks[1].workspace = 2;
+button._updatePanelProgress(grouped, false);
+check(button._panelProgress.children[0].children.length === 1, 'moved agent leaves its old workspace group');
+button._updatePanelProgress({providers: [{kind: 'codex', agents: [tasks[2], {...tasks[3], workspace: 1}]}]}, false);
+check(button._panelProgress.children.length === 1 && visibleBars(button._panelProgress).length === 2,
+    'one workspace has no divider even across monitors');
+print('PASS: compact bars group by workspace with vertical dotted dividers and no added details.');
