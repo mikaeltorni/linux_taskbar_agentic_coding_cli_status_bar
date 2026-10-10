@@ -170,11 +170,12 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 | `model_status_bar` | **off (opt-in)** | Separate ACC model status bar extension (provider icons + running counts) |
 
 The Codex reset forecast is part of the default Codex monitoring experience:
-a clean install enables its public-site consensus automatically, and disabling
-the Codex monitor also suppresses forecast fetching and display. The popup
-starts with the 24-48h consensus (`26%-48%` when both horizons exist) followed
-by one named row per source. Forecast rows show every published horizon;
-WhenReset links to reset history without adding a percentage to the forecast.
+a clean install enables its public sources automatically, and disabling
+the Codex monitor also suppresses forecast fetching and display. The panel
+shows Codex usage counters without a reset consensus counter. The popup has a
+plain `Codex reset forecast` heading followed by one named row per source.
+Forecast rows show every published horizon; WhenReset links to reset history
+without adding a percentage to the forecast.
 The 24h/48h percentages come from Codex Reset Monitor (`codexreset.org`).
 Clicking or pressing Enter on a source row opens its public page in the
 desktop's default browser. Each source can be disabled with its
@@ -194,7 +195,7 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 | Site | What it publishes | Available surface |
 | --- | --- | --- |
 | [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
-| [WhenReset](https://whenreset.dev/codex) | Latest direct or banked reset, with original posts and history | Public Codex RSS feed; shown as context, not a consensus vote |
+| [WhenReset](https://whenreset.dev/codex) | Latest direct or banked reset, with original posts and history | Public Codex RSS feed; shown as historical context |
 
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):
