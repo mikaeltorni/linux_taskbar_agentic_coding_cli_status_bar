@@ -292,8 +292,10 @@ Other idle bars stay steady; stale snapshots stay dimmed.
 Status refreshes reuse the bars so they remain visible throughout the pulse.
 Updates continue while the drop-down is open. The focused terminal's bar gets
 a subtle **one-pixel teal outline** (`#00ffe6`, matching the CLI selection cue).
-The outline sits inside the existing 50×8 bar without adding width and follows
-window focus; other terminals on the same workspace stay unoutlined.
+The outline sits one pixel outside the unchanged 50×8 fill, using a 52×10
+drawing area so it never covers progress pixels. Bars within each workspace
+have a six-pixel gap between their drawing areas. The outline follows window
+focus; other terminals on the same workspace stay unoutlined.
 The public render probe runs with
 `cargo test --test panel_progress` (or `gjs tests/panel_progress.js .`) using
 isolated actors without changing the desktop or user metadata.
