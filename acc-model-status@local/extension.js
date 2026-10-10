@@ -903,16 +903,31 @@ function panelTaskProgressValue(agent) {
 }
 
 /**
- * Interpolate the bar color continuously from red at zero to green at one.
- * Parameters: fraction - measured bounded fraction, or null when unavailable.
+ * Paint measured progress colors, lightening unread ready fills toward white.
+ * Parameters: fraction - bounded progress or null; ready - unopened completion;
+ * now - epoch milliseconds for the three-second pulse.
  * Returns: red, green and blue byte values for the progress color.
  */
-function panelProgressColor(fraction) {
-    print(`fraction=${fraction}`);
+function panelProgressColor(fraction, ready = false, now = Date.now()) {
+    print(`fraction=${fraction} ready=${ready} now=${now}`);
     const red = [239, 68, 68];
     const green = [34, 197, 94];
-    const result = fraction === null ? [48, 52, 64] :
+    const base = fraction === null ? [48, 52, 64] :
         red.map((channel, index) => Math.round(channel + (green[index] - channel) * fraction));
+    const wave = ready ? panelProgressWave(now) : 0;
+    const result = base.map(channel => Math.round(channel + (255 - channel) * wave));
+    print(result);
+    return result;
+}
+
+/**
+ * Sample the shared zero-to-one-to-zero pulse over three seconds.
+ * Parameters: now - epoch milliseconds.
+ * Returns: the brightness wave from zero to one.
+ */
+function panelProgressWave(now) {
+    print(`now=${now}`);
+    const result = (1 - Math.cos(2 * Math.PI * (now % 3000) / 3000)) / 2;
     print(result);
     return result;
 }
@@ -930,16 +945,15 @@ function panelProgressUnderway(agent) {
 }
 
 /**
- * Sample opposite running and ready opacity cycles lasting three seconds.
+ * Dim running bars while keeping ready bars fully opaque for color pulses.
  * Parameters: underway - whether the turn is active; now - epoch milliseconds;
  * stale - whether the snapshot is out of date; ready - unopened completion.
  * Returns: compositor opacity from 0 to 255, steadily dim when stale.
  */
 function panelProgressOpacity(underway, now, stale, ready = false) {
     print(`underway=${underway} now=${now} stale=${stale} ready=${ready}`);
-    const wave = (1 - Math.cos(2 * Math.PI * (now % 3000) / 3000)) / 2;
-    const alpha = ready ? 0.65 + 0.35 * wave : 1 - 0.7 * wave;
-    const result = stale ? 128 : (ready || underway) ? Math.round(255 * alpha) : 255;
+    const alpha = underway && !ready ? 1 - 0.7 * panelProgressWave(now) : 1;
+    const result = stale ? 128 : Math.round(255 * alpha);
     print(result);
     return result;
 }
@@ -954,7 +968,9 @@ function paintPanelTaskProgress(area) {
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
     const fraction = panelTaskProgressValue(area._amsAgent);
-    const color = panelProgressColor(fraction).map(channel => channel / 255);
+    const ready = area._amsAgent.unread_completion === true && !area._amsStale;
+    const color = panelProgressColor(fraction, ready, area._amsPulseAt ?? Date.now())
+        .map(channel => channel / 255);
     context.setSourceRGBA(...color, fraction === null ? 1 : 0.22);
     context.rectangle(0, 0, width, height);
     context.fill();
@@ -1519,7 +1535,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             bar._amsUnderway = panelProgressUnderway(entry.agent);
             bar._amsReady = entry.agent.unread_completion === true;
             bar._amsStale = stale;
-            bar.opacity = panelProgressOpacity(bar._amsUnderway, Date.now(), stale, bar._amsReady);
+            bar._amsPulseAt = Date.now();
+            bar.opacity = panelProgressOpacity(bar._amsUnderway, bar._amsPulseAt, stale, bar._amsReady);
             bar.queue_repaint();
         }
         this._panelProgress.visible = entries.length > 0;
@@ -1550,15 +1567,20 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Animate active actors in place without repainting pixels or panel text.
+     * Pulse running opacity and ready fill colors without replacing actors.
      * Parameters: this - status button; now - optional epoch milliseconds.
      * Returns: undefined.
      */
     _applyPanelProgressPulse(now = Date.now()) {
         print(`this=${this} now=${now}`);
         for (const bar of this._panelProgressBars.values()) {
-            if ((bar._amsUnderway || bar._amsReady) && !bar._amsStale)
+            if ((bar._amsUnderway || bar._amsReady) && !bar._amsStale) {
                 bar.opacity = panelProgressOpacity(bar._amsUnderway, now, false, bar._amsReady);
+                if (bar._amsReady) {
+                    bar._amsPulseAt = now;
+                    bar.queue_repaint();
+                }
+            }
         }
         print(undefined);
     }

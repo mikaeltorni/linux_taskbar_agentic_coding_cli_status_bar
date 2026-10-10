@@ -69,7 +69,7 @@ class Actor {
 
 const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor};
 const Clutter = {ActorAlign: {CENTER: 0}};
-const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
+const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator']
     .map(name => declaration(name));
@@ -243,32 +243,45 @@ for (let i = 0; i < 5; i++) {
 check(retainedStrip.get_parent() === button._box, 'retained strip remains attached to panel');
 print('PASS: real closed-menu snapshot refreshes preserve existing progress actors and painted surfaces.');
 
-// Ready bars rise toward full opacity on the same clock as running bars dim.
+// Ready bars stay fully opaque and lighten from green to white on the running clock.
 const ready = {session_id: 'ready', phase: 'DONE', unread_completion: true,
     ready_completed_at: '2026-10-10T10:00:00Z', workflow: {available: true, fraction: 1}};
 const readyPayload = {providers: [{kind: 'codex', agents: [a, ready, b]}]};
 button._updatePanelProgress(readyPayload, false);
 let readyBar = button._panelProgressBars.get('ready');
 const readyPaints = readyBar.repaints;
-for (const [now, expectedReady, expectedRunning] of [
-    [0, 166, 255], [750, 210, 166], [1500, 255, 77],
-    [2250, 210, 166], [3000, 166, 255],
+const runningPaints = button._panelProgressBars.get('a').repaints;
+button._applyPanelProgressPulse(1500);
+check(readyBar.draws.at(-1).color.slice(0, 3).every(channel => channel === 1),
+    'unopened ready instance is painted white at the bright peak');
+for (const [now, expectedColor, expectedRunning] of [
+    [0, [34, 197, 94], 255], [750, [145, 226, 175], 166], [1500, [255, 255, 255], 77],
+    [2250, [145, 226, 175], 166], [3000, [34, 197, 94], 255],
 ]) {
     button._applyPanelProgressPulse(now);
-    check(readyBar.opacity === expectedReady, 'unopened ready bar brightens then returns in three seconds');
+    const painted = readyBar.draws.at(-1);
+    const rgb = painted.color.slice(0, 3).map(channel => Math.round(channel * 255));
+    check(rgb.every((channel, index) => Math.abs(channel - expectedColor[index]) <= 1),
+        'ready fill follows green → white → green in three seconds');
+    check(readyBar.opacity === 255 && painted.color[3] === 1,
+        'ready bars never fade darker through actor or fill opacity');
+    check(painted.rect[2] === 50, 'white pulse retains full completed width');
     check(button._panelProgressBars.get('a').opacity === expectedRunning, 'running bar retains its dim cycle');
     check(button._panelProgressBars.get('b').opacity === 255, 'stopped bar remains steady');
 }
-check(readyBar.repaints === readyPaints, 'ready pulse changes compositor opacity without repainting');
+check(readyBar.repaints > readyPaints, 'ready pulse repaints actual brighter pixels');
+check(button._panelProgressBars.get('a').repaints === runningPaints, 'running pulse still uses compositor opacity only');
 button._updatePanelProgress({providers: [{agents: [ready]}]}, false);
 readyBar = button._panelProgressBars.get('ready');
 check(timers.size === 1, 'ready-only panel keeps the single pulse timer');
 button._updatePanelProgress({providers: [{agents: [ready]}]}, true);
 check(timers.size === 0 && readyBar.opacity === 128, 'stale ready bar stops animation and stays dim');
+check(Math.round(readyBar.draws.at(-1).color[0] * 255) === 34, 'stale completion stays green without a white pulse');
 ready.unread_completion = false;
 button._updatePanelProgress({providers: [{agents: [ready]}]}, false);
 button._applyPanelProgressPulse(1500);
 check(timers.size === 0 && readyBar.opacity === 255, 'acknowledged completion is steady');
+check(Math.round(readyBar.draws.at(-1).color[0] * 255) === 34, 'acknowledgement restores the steady green fill');
 ready.unread_completion = true;
 button._updatePanelProgress({providers: [{agents: [ready]}]}, false);
 const readyDestroyer = new owners.Destroyer();
