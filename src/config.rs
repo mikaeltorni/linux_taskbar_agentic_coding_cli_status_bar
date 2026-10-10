@@ -679,7 +679,8 @@ mod tests {
         let _sandbox = Sandbox::new();
         let forecast = load_with(json!({
             "sites": {
-                "polymarket": {"enabled": false},
+                "polymarket": {"enabled": true},
+                "codex_reset_monitor": {"enabled": false},
                 "nextreset": {"enabled": true},
                 "codex_observatory": {"enabled": true},
                 "codex_resets": {"enabled": true},
@@ -696,8 +697,8 @@ mod tests {
         assert!(!sites.contains_key("codex_observatory"));
         assert!(!sites.contains_key("codex_resets"));
         // An explicit opt-out survives; unlisted sites default to on.
-        assert_eq!(sites["polymarket"]["enabled"], json!(false));
-        assert_eq!(sites["codex_reset_monitor"]["enabled"], json!(true));
+        assert!(!sites.contains_key("polymarket"));
+        assert_eq!(sites["codex_reset_monitor"]["enabled"], json!(false));
         assert_eq!(sites["whenreset"]["enabled"], json!(true));
         println!("None");
     }
