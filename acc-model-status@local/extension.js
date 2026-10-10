@@ -891,6 +891,60 @@ function taskProgressValue(agent) {
         ? Math.max(0, Math.min(1, value)) : null;
 }
 
+/**
+ * Resolve measured progress for a compact panel bar, retaining confirmed finishes.
+ * Parameters: agent - scoped open-window agent with published workflow data.
+ * Returns: a fraction from zero to one, or null when progress is unavailable.
+ */
+function panelTaskProgressValue(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const result = String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at
+        ? 1 : agent.workflow?.available === false ? null : taskProgressValue(agent);
+    print(result);
+    return result;
+}
+
+/**
+ * Paint a compact track with its agent's actual completed fraction.
+ * Parameters: area - taskbar DrawingArea carrying its current agent.
+ * Returns: undefined after releasing the Cairo drawing context.
+ */
+function paintPanelTaskProgress(area) {
+    print(`area=${area}`);
+    const [width, height] = area.get_surface_size();
+    const context = area.get_context();
+    context.setSourceRGBA(0.18, 0.20, 0.25, 1);
+    context.rectangle(0, 0, width, height);
+    context.fill();
+    const fraction = panelTaskProgressValue(area._amsAgent);
+    if (fraction !== null && fraction > 0) {
+        context.setSourceRGBA(0.22, 0.83, 0.75, 1);
+        context.rectangle(0, 0, width * fraction, height);
+        context.fill();
+    }
+    context.$dispose();
+    print(undefined);
+}
+
+/**
+ * Build one 50px progress bar without adding text to the panel.
+ * Parameters: agent - scoped open-window agent.
+ * Returns: a DrawingArea showing actual progress on its next repaint.
+ */
+function buildPanelTaskProgress(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const area = new St.DrawingArea({
+        style_class: 'ams-panel-progress-bar',
+        width: 50, height: 8,
+        reactive: false,
+        y_align: Clutter.ActorAlign.CENTER,
+    });
+    area._amsAgent = agent;
+    area.connect('repaint', paintPanelTaskProgress);
+    print(area);
+    return area;
+}
+
 /** Lay out measured phase/action blocks with the terminal overlay's palette. */
 function taskProgressRectangles(agent, width) {
     const phases = ['Plan', 'Establish worktree', 'Write code', 'Write documentation'];
@@ -1295,6 +1349,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
             // Preserve row identities while refreshing progress and glow together.
             this._updateTaskRows(payload);
+            this._updatePanelProgress(payload, stale);
             this._updatePanelTaskEstimate(panelEstimate, stale);
             this._syncGlowTimer();
             print(undefined);
@@ -1302,6 +1357,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         this._taskRows.clear();
         this._box.destroy_all_children();
+        this._panelProgress = null;
         this._muteIcon = null;
         this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
         this._panelTaskEstimate = null;
@@ -1336,11 +1392,50 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._renderProvider(provider, stale, payload);
         }
         this._renderPanelHarnessRates(payload, stale, shownKinds);
+        this._updatePanelProgress(payload, stale);
         this._renderWorkspaceAttention(attention, stale);
         this._renderMenu(payload, stale, attention);
         this._updatePanelTaskEstimate(panelEstimate, stale);
         this._syncGlowTimer();
         this._syncRunClockTimer();
+        print(undefined);
+    }
+
+    /**
+     * Refresh one compact progress bar per open agent while retaining stable actors.
+     * Parameters: this - status button; payload - scoped snapshot or null;
+     * stale - whether the snapshot is older than the publication threshold.
+     * Returns: undefined.
+     */
+    _updatePanelProgress(payload, stale) {
+        print(`this=${this} payload=${JSON.stringify(payload)} stale=${stale}`);
+        if (!this._panelProgress) {
+            this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
+            this._panelProgressBars = new Map();
+            this._panelProgressKey = '';
+            this._box.add_child(this._panelProgress);
+        }
+        const entries = (payload?.providers || []).flatMap(provider =>
+            (provider.agents || []).map((agent, index) => ({agent,
+                key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)})));
+        const key = JSON.stringify(entries.map(entry => entry.key));
+        if (key !== this._panelProgressKey) {
+            this._panelProgress.destroy_all_children();
+            this._panelProgressBars.clear();
+            for (const entry of entries) {
+                const bar = buildPanelTaskProgress(entry.agent);
+                this._panelProgressBars.set(entry.key, bar);
+                this._panelProgress.add_child(bar);
+            }
+            this._panelProgressKey = key;
+        }
+        for (const entry of entries) {
+            const bar = this._panelProgressBars.get(entry.key);
+            bar._amsAgent = entry.agent;
+            bar.opacity = stale ? 128 : 255;
+            bar.queue_repaint();
+        }
+        this._panelProgress.visible = entries.length > 0;
         print(undefined);
     }
 
