@@ -536,7 +536,10 @@ fn model_status_destroy_releases_timers() {
         .captures(&js)
         .unwrap();
     let body = &destroy[1];
-    assert_eq!(body.matches("GLib.source_remove").count(), 5);
+    assert_eq!(body.matches("GLib.source_remove").count(), 4);
+    for timer in ["_panelPulseId", "_refreshId", "_pollId", "_runClockId"] {
+        assert!(body.contains(&format!("GLib.source_remove(this.{timer})")));
+    }
     assert!(body.contains("this._monitor.cancel()"));
     assert!(body.contains("object.disconnect(id)"));
     assert!(body.contains("win.disconnect(id)"));

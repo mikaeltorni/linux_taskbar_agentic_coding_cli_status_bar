@@ -116,6 +116,7 @@ check(bars[0] === retained, 'reuse actor during progress updates');
 check(bars[0].draws.at(-1).rect[2] === 40, 'progress refresh to 80%');
 const cases = [
     [{phase: 'DONE', ready_completed_at: '2026-10-10T10:00:00Z'}, 1],
+    [{phase: 'DONE', unread_completion: true}, 1],
     [{workflow: {available: true, fraction: 0}}, 0],
     [{workflow: {available: true, fraction: 1}}, 1],
     [{workflow: {available: false, fraction: 0}}, null],
@@ -240,3 +241,44 @@ for (let i = 0; i < 5; i++) {
 }
 check(retainedStrip.get_parent() === button._box, 'retained strip remains attached to panel');
 print('PASS: real closed-menu snapshot refreshes preserve existing progress actors and painted surfaces.');
+
+// Ready bars rise toward full opacity on the same clock as running bars dim.
+const ready = {session_id: 'ready', phase: 'DONE', unread_completion: true,
+    ready_completed_at: '2026-10-10T10:00:00Z', workflow: {available: true, fraction: 1}};
+const readyPayload = {providers: [{kind: 'codex', agents: [a, ready, b]}]};
+button._updatePanelProgress(readyPayload, false);
+let readyBar = button._panelProgressBars.get('ready');
+const readyPaints = readyBar.repaints;
+for (const [now, expectedReady, expectedRunning] of [
+    [0, 166, 255], [750, 210, 166], [1500, 255, 77],
+    [2250, 210, 166], [3000, 166, 255],
+]) {
+    button._applyPanelProgressPulse(now);
+    check(readyBar.opacity === expectedReady, 'unopened ready bar brightens then returns in three seconds');
+    check(button._panelProgressBars.get('a').opacity === expectedRunning, 'running bar retains its dim cycle');
+    check(button._panelProgressBars.get('b').opacity === 255, 'stopped bar remains steady');
+}
+check(readyBar.repaints === readyPaints, 'ready pulse changes compositor opacity without repainting');
+button._updatePanelProgress({providers: [{agents: [ready]}]}, false);
+readyBar = button._panelProgressBars.get('ready');
+check(timers.size === 1, 'ready-only panel keeps the single pulse timer');
+button._updatePanelProgress({providers: [{agents: [ready]}]}, true);
+check(timers.size === 0 && readyBar.opacity === 128, 'stale ready bar stops animation and stays dim');
+ready.unread_completion = false;
+button._updatePanelProgress({providers: [{agents: [ready]}]}, false);
+button._applyPanelProgressPulse(1500);
+check(timers.size === 0 && readyBar.opacity === 255, 'acknowledged completion is steady');
+ready.unread_completion = true;
+button._updatePanelProgress({providers: [{agents: [ready]}]}, false);
+const readyDestroyer = new owners.Destroyer();
+Object.assign(readyDestroyer, {_panelPulseId: button._panelPulseId, _taskRows: new Map(),
+    _shellSignals: [], _windowSignals: new Map()});
+readyDestroyer.destroy();
+check(timers.size === 0, 'disable releases ready-only animation source');
+button._panelPulseId = 0;
+button._updatePanelProgress(null, false);
+const [, cssBytes] = Gio.File.new_for_path(`${root}/acc-model-status@local/stylesheet.css`).load_contents(null);
+const css = new TextDecoder().decode(cssBytes);
+check(!source.includes('ams-unread-glow') && !css.includes('.ams-unread-glow'), 'no broad green panel glow');
+check(!source.includes('_syncGlowTimer'), 'no separate broad glow timer');
+print('PASS: ready instances brighten without a broad glow; acknowledgement, stale data and disable stop animation.');

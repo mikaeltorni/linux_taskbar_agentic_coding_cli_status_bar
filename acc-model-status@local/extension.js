@@ -56,9 +56,6 @@ const FALLBACK_ICON = 'acc-provider-generic-symbolic';
 /** Phases contributing to the scoped provider counters. */
 const RUNNING_PHASES = new Set(['RUNNING']);
 const ATTENTION_PHASES = new Set(['WAITING', 'INTERRUPTED']);
-/** A gentle green gradient step; four phases make one left-to-right flow. */
-const GLOW_INTERVAL_MS = 400;
-const GLOW_PHASES = 4;
 /** Keep the CX identity endpoints in sync with agentic-cli-status@local. */
 const INSTANCE_TAG_FIRST_RGB = [0x7e, 0xc8, 0xff];
 const INSTANCE_TAG_LAST_RGB = [0xa8, 0x56, 0xe8];
@@ -898,7 +895,8 @@ function taskProgressValue(agent) {
  */
 function panelTaskProgressValue(agent) {
     print(`agent=${JSON.stringify(agent)}`);
-    const result = String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at
+    const result = agent.unread_completion ||
+        (String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at)
         ? 1 : agent.workflow?.available === false ? null : taskProgressValue(agent);
     print(result);
     return result;
@@ -932,15 +930,16 @@ function panelProgressUnderway(agent) {
 }
 
 /**
- * Sample a smooth full-to-30%-to-full opacity cycle lasting three seconds.
+ * Sample opposite running and ready opacity cycles lasting three seconds.
  * Parameters: underway - whether the turn is active; now - epoch milliseconds;
- * stale - whether the published snapshot is out of date.
+ * stale - whether the snapshot is out of date; ready - unopened completion.
  * Returns: compositor opacity from 0 to 255, steadily dim when stale.
  */
-function panelProgressOpacity(underway, now, stale) {
-    print(`underway=${underway} now=${now} stale=${stale}`);
-    const alpha = 0.3 + 0.7 * (1 + Math.cos(2 * Math.PI * (now % 3000) / 3000)) / 2;
-    const result = stale ? 128 : underway ? Math.round(255 * alpha) : 255;
+function panelProgressOpacity(underway, now, stale, ready = false) {
+    print(`underway=${underway} now=${now} stale=${stale} ready=${ready}`);
+    const wave = (1 - Math.cos(2 * Math.PI * (now % 3000) / 3000)) / 2;
+    const alpha = ready ? 0.65 + 0.35 * wave : 1 - 0.7 * wave;
+    const result = stale ? 128 : (ready || underway) ? Math.round(255 * alpha) : 255;
     print(result);
     return result;
 }
@@ -1231,10 +1230,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._monitor = null;
         this._pollId = 0;
         this._refreshId = 0;
-        this._glowId = 0;
         this._runClockId = 0;
         this._panelPulseId = 0;
-        this._glowPhase = 0;
         this._unreadStates = readUnreadStates(this._unreadFile);
         this._unreadCount = 0;
         this._runClockActors = [];
@@ -1431,7 +1428,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._updateTaskRows(payload);
             this._updatePanelProgress(payload, stale);
             this._updatePanelTaskEstimate(panelEstimate, stale);
-            this._syncGlowTimer();
             print(undefined);
             return;
         }
@@ -1459,7 +1455,6 @@ class AccModelStatusButton extends PanelMenu.Button {
                     'No open agent terminals', {reactive: false}));
             }
             this._updatePanelTaskEstimate(panelEstimate, stale);
-            this._syncGlowTimer();
             this._syncRunClockTimer();
             this._updatePanelProgress(payload, stale);
             print(undefined);
@@ -1478,7 +1473,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._renderWorkspaceAttention(attention, stale);
         this._renderMenu(payload, stale, attention);
         this._updatePanelTaskEstimate(panelEstimate, stale);
-        this._syncGlowTimer();
         this._syncRunClockTimer();
         print(undefined);
     }
@@ -1524,8 +1518,9 @@ class AccModelStatusButton extends PanelMenu.Button {
             const bar = this._panelProgressBars.get(entry.key);
             bar._amsAgent = entry.agent;
             bar._amsUnderway = panelProgressUnderway(entry.agent);
+            bar._amsReady = entry.agent.unread_completion === true;
             bar._amsStale = stale;
-            bar.opacity = panelProgressOpacity(bar._amsUnderway, Date.now(), stale);
+            bar.opacity = panelProgressOpacity(bar._amsUnderway, Date.now(), stale, bar._amsReady);
             bar.queue_repaint();
         }
         this._panelProgress.visible = entries.length > 0;
@@ -1534,13 +1529,13 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Keep one animation source only while a fresh open agent is underway.
+     * Keep one animation source while a fresh agent is underway or unread.
      * Parameters: this - status button owning the bar actors and GLib source.
      * Returns: undefined.
      */
     _syncPanelPulseTimer() {
         print(`this=${this}`);
-        const active = [...this._panelProgressBars.values()].some(bar => bar._amsUnderway && !bar._amsStale);
+        const active = [...this._panelProgressBars.values()].some(bar => (bar._amsUnderway || bar._amsReady) && !bar._amsStale);
         if (!active) {
             if (this._panelPulseId) {
                 GLib.source_remove(this._panelPulseId);
@@ -1563,8 +1558,8 @@ class AccModelStatusButton extends PanelMenu.Button {
     _applyPanelProgressPulse(now = Date.now()) {
         print(`this=${this} now=${now}`);
         for (const bar of this._panelProgressBars.values()) {
-            if (bar._amsUnderway && !bar._amsStale)
-                bar.opacity = panelProgressOpacity(true, now, false);
+            if ((bar._amsUnderway || bar._amsReady) && !bar._amsStale)
+                bar.opacity = panelProgressOpacity(bar._amsUnderway, now, false, bar._amsReady);
         }
         print(undefined);
     }
@@ -1634,42 +1629,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             if (stale)
                 badge.add_style_class_name('ams-stale');
             this._box.add_child(badge);
-        }
-    }
-
-    /**
-     * Shift a subtle green gradient across this indicator while work is unread.
-     * Workspace badges and menu rows stay steady. An idle panel has no timer.
-     */
-    _syncGlowTimer() {
-        if (this._unreadCount === 0) {
-            if (this._glowId) {
-                GLib.source_remove(this._glowId);
-                this._glowId = 0;
-            }
-            this._glowPhase = 0;
-            this._applyGlowState();
-            return;
-        }
-        this._applyGlowState();
-        if (this._glowId)
-            return;
-        this._glowId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, GLOW_INTERVAL_MS, () => {
-            this._glowPhase = (this._glowPhase + 1) % GLOW_PHASES;
-            this._applyGlowState();
-            return GLib.SOURCE_CONTINUE;
-        });
-    }
-
-    /** Keep the indicator green while moving the brighter edge across it. */
-    _applyGlowState() {
-        for (let phase = 0; phase < GLOW_PHASES; phase++)
-            this._box.remove_style_class_name(`ams-unread-flow-${phase}`);
-        if (this._unreadCount > 0) {
-            this._box.add_style_class_name('ams-unread-glow');
-            this._box.add_style_class_name(`ams-unread-flow-${this._glowPhase}`);
-        } else {
-            this._box.remove_style_class_name('ams-unread-glow');
         }
     }
 
@@ -2035,10 +1994,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         if (this._pollId) {
             GLib.source_remove(this._pollId);
             this._pollId = 0;
-        }
-        if (this._glowId) {
-            GLib.source_remove(this._glowId);
-            this._glowId = 0;
         }
         if (this._runClockId) {
             GLib.source_remove(this._runClockId);
