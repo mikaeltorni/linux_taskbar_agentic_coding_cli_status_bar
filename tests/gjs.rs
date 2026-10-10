@@ -127,7 +127,11 @@ fn extract_const_block(source: &str, name: &str) -> String {
     panic!("unbalanced braces extracting const {name}");
 }
 
+/// Run extracted helpers and read the final JSON line after function traces.
+/// Parameters: snippets - JavaScript helpers; probe - fixture program.
+/// Returns: Parsed JSON probe results.
 fn run_gjs(snippets: &[String], probe: &str) -> Value {
+    println!("snippets={snippets:?}, probe={probe}");
     let gjs = which("gjs").unwrap_or_else(|| {
         panic!("skip: gjs not installed");
     });
@@ -142,7 +146,11 @@ fn run_gjs(snippets: &[String], probe: &str) -> Value {
         "gjs failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).expect("gjs JSON")
+    let stdout = String::from_utf8(output.stdout).expect("gjs UTF-8 output");
+    let result =
+        serde_json::from_str(stdout.lines().last().expect("gjs output")).expect("gjs JSON");
+    println!("{result}");
+    result
 }
 
 fn which(name: &str) -> Option<PathBuf> {
@@ -176,9 +184,14 @@ fn lerp_color(left: f64) -> String {
     format!("#{:02x}{:02x}{:02x}", channels[0], channels[1], channels[2])
 }
 
+/// Execute the agentic extension rendering helpers with public snapshot fixtures.
+/// Parameters: none.
+/// Returns: JSON probe results, or None when GJS is unavailable.
 fn agentic_results() -> Option<Value> {
+    println!("parameters=none");
     if !gjs_available() {
         eprintln!("gjs not installed; skipping");
+        println!("None");
         return None;
     }
     let source = fs::read_to_string(
@@ -215,14 +228,9 @@ fn agentic_results() -> Option<Value> {
         "codexLunaReserveWindow",
         "lunaReserveMarkup",
         "codexBarMarkup",
-        "codexResetForecastMarkup",
         "codexBarWithForecastMarkup",
-        "roundedForecastPercent",
-        "forecastHorizonPercents",
-        "formatForecastConsensusPair",
         "forecastPercentMarkup",
         "forecastMenuMarkup",
-        "formatForecastConsensusMarkup",
         "formatForecastPercent",
         "formatForecastVolume",
         "formatPolymarketDate",
@@ -242,12 +250,19 @@ fn agentic_results() -> Option<Value> {
         .collect();
     snippets.extend(functions.iter().map(|name| extract_function(&source, name)));
     let probe = include_str!("extension_color_probe.js");
-    Some(run_gjs(&snippets, probe))
+    let result = Some(run_gjs(&snippets, probe));
+    println!("{result:?}");
+    result
 }
 
+/// Verify panel usage, source rows, colors, and safe links.
+/// Parameters: none.
+/// Returns: None after successful assertions.
 #[test]
 fn gradient_and_segments() {
+    println!("parameters=none");
     let Some(js) = agentic_results() else {
+        println!("None");
         return;
     };
     assert_eq!(js["missing_forecast_volume"], "");
@@ -358,48 +373,47 @@ fn gradient_and_segments() {
     assert!(first.contains("CX1"));
     assert!(first.contains("CX2"));
     assert!(first.contains(" | "));
-    let forecast = js["codex_with_forecast"].as_str().unwrap();
-    assert!(forecast.contains(">64%</span>"), "{forecast}");
-    assert!(forecast.find("64%").unwrap() < forecast.find("CX1").unwrap());
-    assert!(forecast.contains("> | </span>"), "{forecast}");
-    let stale_forecast = js["codex_with_stale_forecast"].as_str().unwrap();
-    assert!(stale_forecast.contains("64%"), "{stale_forecast}");
-    assert!(stale_forecast.contains(">?</span>"), "{stale_forecast}");
-    assert_eq!(js["codex_without_forecast"], js["codex_without_consensus"]);
-    assert!(!js["codex_without_forecast"].as_str().unwrap().contains('%'));
-    let pango = regex::Regex::new(r"<[^>]+>").unwrap();
-    let forecast_24_48 = js["codex_with_24_48_forecast"].as_str().unwrap();
-    let forecast_24_48_plain = pango.replace_all(forecast_24_48, "");
-    assert!(
-        forecast_24_48_plain.contains("26%-48%"),
-        "compact 24-48h consensus must be visible as 26%-48%: {forecast_24_48}"
-    );
-    assert!(
-        forecast_24_48.find("26%").unwrap() < forecast_24_48.find("48%").unwrap(),
-        "24h consensus must precede 48h: {forecast_24_48}"
-    );
-    let only_48 = js["codex_with_only_48h_forecast"].as_str().unwrap();
-    let only_48_plain = pango.replace_all(only_48, "");
-    assert!(
-        only_48_plain.contains("48%"),
-        "48h-only compact forecast missing: {only_48}"
-    );
-    assert!(
-        !only_48_plain.contains("26%-") && !only_48_plain.contains("%-48%"),
-        "must not invent a missing 24h side: {only_48}"
+    for name in [
+        "codex_with_forecast",
+        "codex_with_stale_forecast",
+        "codex_without_consensus",
+        "codex_with_24_48_forecast",
+        "codex_with_only_48h_forecast",
+    ] {
+        assert_eq!(
+            js[name], js["codex_without_forecast"],
+            "{name} must show Codex usage without the consensus counter"
+        );
+    }
+    let codex = js["codex_without_forecast"].as_str().unwrap();
+    assert!(codex.contains("CX1") && codex.contains(">57<"));
+    assert!(!codex.contains('%'));
+    for name in [
+        "forecast_menu_24_48",
+        "forecast_menu_only_48h",
+        "forecast_menu_entries",
+        "forecast_menu_no_open_market",
+    ] {
+        assert_eq!(js[name][0]["text"], "Codex reset forecast");
+    }
+    assert_eq!(
+        js["forecast_menu_24_48"][1]["text"],
+        "codexreset.org — 24h: 24% · 48h: 42%"
     );
     assert_eq!(
-        js["forecast_menu_24_48"][0]["text"],
-        "Codex reset forecast — 24-48h consensus: 26%-48%"
+        js["forecast_menu_24_48"][1]["url"],
+        "https://codexreset.org/"
     );
     assert_eq!(
-        js["forecast_menu_only_48h"][0]["text"],
-        "Codex reset forecast — 48h consensus: 48%"
+        js["forecast_menu_24_48"][2]["text"],
+        "WhenReset — latest banked reset · Oct 8 18:23 UTC"
+    );
+    assert_eq!(
+        js["forecast_menu_24_48"][2]["url"],
+        "https://whenreset.dev/codex"
     );
     let color_100 = js["color_100"].as_str().unwrap();
     let color_0 = js["color_0"].as_str().unwrap();
-    let color_26 = js["color_26"].as_str().unwrap();
-    let color_48 = js["color_48"].as_str().unwrap();
     let color_50 = js["color_50"].as_str().unwrap();
     assert_eq!(color_100, "#8ff0a4");
     assert_eq!(color_0, "#ff0000");
@@ -420,65 +434,13 @@ fn gradient_and_segments() {
         forecast_menu_markup.contains(&format!(r#"<span foreground="{color_100}">100%</span>"#)),
         "100% reset forecast must use the green endpoint: {forecast_menu_markup}"
     );
-    let forecast_100_0 = js["forecast_color_100_0"].as_str().unwrap();
-    assert!(
-        forecast_100_0.contains(&format!(r#"<span foreground="{color_100}">100%</span>"#)),
-        "100% must use percentColor(100)={color_100}: {forecast_100_0}"
-    );
-    assert!(
-        forecast_100_0.contains(&format!(r#"<span foreground="{color_0}">0%</span>"#)),
-        "0% must use percentColor(0)={color_0}: {forecast_100_0}"
-    );
-    assert!(
-        forecast_100_0.contains("<span foreground=\"#9a9996\">-</span>"),
-        "hyphen must use NEUTRAL_COLOR: {forecast_100_0}"
-    );
-    let forecast_0_100 = js["forecast_color_0_100"].as_str().unwrap();
-    assert!(
-        forecast_0_100.contains(&format!(r#"<span foreground="{color_0}">0%</span>"#)),
-        "24h 0% must use percentColor(0): {forecast_0_100}"
-    );
-    assert!(
-        forecast_0_100.contains(&format!(r#"<span foreground="{color_100}">100%</span>"#)),
-        "48h 100% must use percentColor(100): {forecast_0_100}"
-    );
-    assert!(
-        forecast_24_48.contains(&format!(r#"<span foreground="{color_26}">26%</span>"#)),
-        "24h 26% must use percentColor(26)={color_26}: {forecast_24_48}"
-    );
-    assert!(
-        forecast_24_48.contains(&format!(r#"<span foreground="{color_48}">48%</span>"#)),
-        "48h 48% must use percentColor(48)={color_48}: {forecast_24_48}"
-    );
-    // ClutterText drops `foreground` on the first glyph (mutter#1324). A
-    // wrapping span is not enough; 24h must not start the string.
-    let prefix = js["clutter_markup_prefix"].as_str().unwrap();
-    assert_eq!(prefix, "\u{200A}");
-    assert!(
-        forecast_24_48.starts_with(prefix),
-        "24h percentColor needs a glyph before the first colored span: {forecast_24_48:?}"
-    );
-    assert!(
-        !forecast_24_48.starts_with("<span foreground="),
-        "24h percentColor is ignored when it is the leading span: {forecast_24_48}"
-    );
-    assert!(
-        forecast_24_48.contains(&format!(
-            "{prefix}<span><span foreground=\"{color_26}\">26%</span>"
-        )),
-        "24h digit must follow the prefix so Clutter applies percentColor: {forecast_24_48:?}"
-    );
-    assert!(
-        forecast_100_0.starts_with(prefix) && !forecast_100_0.starts_with("<span foreground="),
-        "forecast markup itself must not start with a foreground span: {forecast_100_0:?}"
-    );
     assert_eq!(
         js["forecast_menu_entries"],
         serde_json::json!([
             {
                 "kind": "heading",
                 "name": "Codex reset forecast",
-                "text": "Codex reset forecast — 24h consensus: 26%",
+                "text": "Codex reset forecast",
                 "url": null,
             },
             {
@@ -666,6 +628,7 @@ fn gradient_and_segments() {
     );
     assert!(!extra_blob.contains("ondemand"), "{extras:?}");
     assert!(!source.contains("usage limit reset${"));
+    println!("None");
 }
 
 #[test]

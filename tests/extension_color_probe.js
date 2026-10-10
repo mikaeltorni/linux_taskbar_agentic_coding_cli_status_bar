@@ -310,8 +310,10 @@ const results = {
     consensus_percent_24h: 26,
     consensus_percent_48h: 48,
     sites: [
-      {name: 'codex-reset.com', url: 'https://codex-reset.com/', predictions: [
+      {name: 'codexreset.org', url: 'https://codexreset.org/', predictions: [
         {label: '24h', percent: 24}, {label: '48h', percent: 42}]},
+      {name: 'WhenReset', url: 'https://whenreset.dev/codex', reference: true,
+        detail: 'latest banked reset · Oct 8 18:23 UTC', predictions: []},
     ],
   }),
   forecast_menu_only_48h: codexResetForecastMenuEntries({
@@ -319,16 +321,6 @@ const results = {
     horizon: '48h',
     consensus_percent: 48,
     consensus_percent_48h: 48,
-  }),
-  forecast_color_100_0: codexResetForecastMarkup({
-    enabled: true,
-    consensus_percent_24h: 100,
-    consensus_percent_48h: 0,
-  }),
-  forecast_color_0_100: codexResetForecastMarkup({
-    enabled: true,
-    consensus_percent_24h: 0,
-    consensus_percent_48h: 100,
   }),
   forecast_menu_markup: forecastMenuMarkup('Codex & reset <0%-100%> · 50%'),
   valid_forecast_launch: validForecastLaunch,
