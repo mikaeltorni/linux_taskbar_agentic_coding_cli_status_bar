@@ -54,7 +54,7 @@ class Actor {
 
 const St = {BoxLayout: Actor, DrawingArea: Actor};
 const Clutter = {ActorAlign: {CENTER: 0}};
-const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'paintPanelTaskProgress', 'buildPanelTaskProgress']
+const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'paintPanelTaskProgress', 'buildPanelTaskProgress']
     .map(name => declaration(name));
 const makeOwners = new Function('St', 'Clutter', 'print', `${snippets.join('\n')}
     return {panelTaskProgressValue, paintPanelTaskProgress, buildPanelTaskProgress,
@@ -96,3 +96,18 @@ check(button._panelProgress.children.length === 1, 'remove closed agents');
 button._updatePanelProgress(null, false);
 check(button._panelProgress.children.length === 0, 'clear unavailable snapshot');
 print('PASS: per-agent taskbar bars use real progress and update without replacing actors.');
+
+for (const [fraction, expected] of [
+    [0, [239, 68, 68]], [0.25, [188, 100, 75]], [0.5, [137, 133, 81]],
+    [0.75, [85, 165, 88]], [1, [34, 197, 94]],
+]) {
+    const bar = owners.buildPanelTaskProgress({workflow: {fraction}});
+    bar.queue_repaint();
+    const rgb = bar.draws.at(-1).color.slice(0, 3).map(channel => Math.round(channel * 255));
+    check(JSON.stringify(rgb) === JSON.stringify(expected), 'red-to-green gradient at actual progress');
+    if (fraction > 0)
+        check(bar.draws.at(-1).rect[2] === fraction * 50, 'color never changes measured fill width');
+    else
+        check(bar.draws.length === 1 && bar.draws[0].color[3] < 1, '0% shows a faint red track with no invented fill');
+}
+print('PASS: progress color moves continuously from red at 0% to green at 100%.');

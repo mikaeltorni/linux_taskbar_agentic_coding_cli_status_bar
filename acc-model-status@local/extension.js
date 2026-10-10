@@ -905,6 +905,21 @@ function panelTaskProgressValue(agent) {
 }
 
 /**
+ * Interpolate the bar color continuously from red at zero to green at one.
+ * Parameters: fraction - measured bounded fraction, or null when unavailable.
+ * Returns: red, green and blue byte values for the progress color.
+ */
+function panelProgressColor(fraction) {
+    print(`fraction=${fraction}`);
+    const red = [239, 68, 68];
+    const green = [34, 197, 94];
+    const result = fraction === null ? [48, 52, 64] :
+        red.map((channel, index) => Math.round(channel + (green[index] - channel) * fraction));
+    print(result);
+    return result;
+}
+
+/**
  * Paint a compact track with its agent's actual completed fraction.
  * Parameters: area - taskbar DrawingArea carrying its current agent.
  * Returns: undefined after releasing the Cairo drawing context.
@@ -913,12 +928,13 @@ function paintPanelTaskProgress(area) {
     print(`area=${area}`);
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
-    context.setSourceRGBA(0.18, 0.20, 0.25, 1);
+    const fraction = panelTaskProgressValue(area._amsAgent);
+    const color = panelProgressColor(fraction).map(channel => channel / 255);
+    context.setSourceRGBA(...color, fraction === null ? 1 : 0.22);
     context.rectangle(0, 0, width, height);
     context.fill();
-    const fraction = panelTaskProgressValue(area._amsAgent);
     if (fraction !== null && fraction > 0) {
-        context.setSourceRGBA(0.22, 0.83, 0.75, 1);
+        context.setSourceRGBA(...color, 1);
         context.rectangle(0, 0, width * fraction, height);
         context.fill();
     }
