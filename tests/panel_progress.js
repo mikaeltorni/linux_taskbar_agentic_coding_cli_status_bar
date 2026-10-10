@@ -67,7 +67,7 @@ class Actor {
     });
 }
 
-const St = {BoxLayout: Actor, DrawingArea: Actor};
+const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor};
 const Clutter = {ActorAlign: {CENTER: 0}};
 const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
@@ -84,7 +84,7 @@ const services = {readPayload: () => snapshot, scopePayloadToWindows: value => v
     withWindowDisplayIds: value => value, readWindowDisplayIds: () => new Map(),
     activeTaskEstimates: () => [], longestTaskEstimate: () => ({}), formatPanelTaskEstimate: () => '',
     ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
-    saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [], panelHarnessRateRows: () => [],
+    saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [{workspace: 5, count: 1, current: false, label: 'W5:1'}], panelHarnessRateRows: () => [],
 };
 const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', `${snippets.join('\n')}
     const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
@@ -93,7 +93,8 @@ const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', `$
     class Destroyer extends St.BoxLayout { ${declaration('destroy', true)} }
     return {panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer,
-        updater: {${['_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse'].map(name => declaration(name, true)).join(',')}}};`);
+        updater: {${['_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
+            ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
 const owners = makeOwners(St, Clutter, GLib, services, print);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
@@ -226,7 +227,7 @@ Object.assign(button, {_file: {get_parent: () => ({get_child: () => ({})})},
     _unreadStates: new Map(), _unreadCount: 0, _taskRows: new Map(),
     menu: {isOpen: false, removeAll: () => {}},
     _openWindowDescriptors: () => [], _syncMuteIndicator: () => {}, _renderHarnessRates: () => {},
-    _renderProvider: () => {}, _renderPanelHarnessRates: () => {}, _renderWorkspaceAttention: () => {},
+    _renderProvider: () => {}, _renderPanelHarnessRates: () => {},
     _renderMenu: () => {}, _updatePanelTaskEstimate: () => {}, _syncGlowTimer: () => {}, _syncRunClockTimer: () => {},
 });
 snapshot = payload;
@@ -282,3 +283,20 @@ const css = new TextDecoder().decode(cssBytes);
 check(!source.includes('ams-unread-glow') && !css.includes('.ams-unread-glow'), 'no broad green panel glow');
 check(!source.includes('_syncGlowTimer'), 'no separate broad glow timer');
 print('PASS: ready instances brighten without a broad glow; acknowledgement, stale data and disable stop animation.');
+
+// A public snapshot refresh must leave ready workspace badges out of the panel.
+ready.workspace = 5;
+snapshot = {providers: [{kind: 'codex', agents: [ready]}]};
+for (let refresh = 0; refresh < 2; refresh++) {
+    button._refresh();
+    check(!button._box.children.some(actor => /^W\d+:\d+$/.test(actor.text || '')),
+        'ready workspace W5:1 adds no label to the panel');
+    check(visibleBars(button._panelProgress).length === 1,
+        'workspace badge removal retains the ready instance bar');
+    button._applyPanelProgressPulse(1500);
+    check(button._panelProgressBars.get('ready').opacity === 255,
+        'ready bright pulse survives snapshot refresh without workspace badges');
+}
+button._updatePanelProgress(null, false);
+check(timers.size === 0, 'empty snapshot cleans up the ready timer');
+print('PASS: repeated ready snapshots render the instance bar without a W5:1 workspace badge.');
