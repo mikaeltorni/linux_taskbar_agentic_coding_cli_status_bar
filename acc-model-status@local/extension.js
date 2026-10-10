@@ -920,6 +920,32 @@ function panelProgressColor(fraction) {
 }
 
 /**
+ * Classify an agent whose current turn is actively doing work.
+ * Parameters: agent - published open-window agent state.
+ * Returns: true only for an active running turn.
+ */
+function panelProgressUnderway(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const result = agent.run_active === true && String(agent.phase || '').toUpperCase() === 'RUNNING';
+    print(result);
+    return result;
+}
+
+/**
+ * Sample a smooth full-to-30%-to-full opacity cycle lasting three seconds.
+ * Parameters: underway - whether the turn is active; now - epoch milliseconds;
+ * stale - whether the published snapshot is out of date.
+ * Returns: compositor opacity from 0 to 255, steadily dim when stale.
+ */
+function panelProgressOpacity(underway, now, stale) {
+    print(`underway=${underway} now=${now} stale=${stale}`);
+    const alpha = 0.3 + 0.7 * (1 + Math.cos(2 * Math.PI * (now % 3000) / 3000)) / 2;
+    const result = stale ? 128 : underway ? Math.round(255 * alpha) : 255;
+    print(result);
+    return result;
+}
+
+/**
  * Paint a compact track with its agent's actual completed fraction.
  * Parameters: area - taskbar DrawingArea carrying its current agent.
  * Returns: undefined after releasing the Cairo drawing context.
@@ -1170,6 +1196,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._refreshId = 0;
         this._glowId = 0;
         this._runClockId = 0;
+        this._panelPulseId = 0;
         this._glowPhase = 0;
         this._unreadStates = readUnreadStates(this._unreadFile);
         this._unreadCount = 0;
@@ -1396,6 +1423,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._updatePanelTaskEstimate(panelEstimate, stale);
             this._syncGlowTimer();
             this._syncRunClockTimer();
+            this._updatePanelProgress(payload, stale);
             print(undefined);
             return;
         }
@@ -1448,10 +1476,49 @@ class AccModelStatusButton extends PanelMenu.Button {
         for (const entry of entries) {
             const bar = this._panelProgressBars.get(entry.key);
             bar._amsAgent = entry.agent;
-            bar.opacity = stale ? 128 : 255;
+            bar._amsUnderway = panelProgressUnderway(entry.agent);
+            bar._amsStale = stale;
+            bar.opacity = panelProgressOpacity(bar._amsUnderway, Date.now(), stale);
             bar.queue_repaint();
         }
         this._panelProgress.visible = entries.length > 0;
+        this._syncPanelPulseTimer();
+        print(undefined);
+    }
+
+    /**
+     * Keep one animation source only while a fresh open agent is underway.
+     * Parameters: this - status button owning the bar actors and GLib source.
+     * Returns: undefined.
+     */
+    _syncPanelPulseTimer() {
+        print(`this=${this}`);
+        const active = [...this._panelProgressBars.values()].some(bar => bar._amsUnderway && !bar._amsStale);
+        if (!active) {
+            if (this._panelPulseId) {
+                GLib.source_remove(this._panelPulseId);
+                this._panelPulseId = 0;
+            }
+        } else if (!this._panelPulseId) {
+            this._panelPulseId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
+                this._applyPanelProgressPulse();
+                return GLib.SOURCE_CONTINUE;
+            });
+        }
+        print(undefined);
+    }
+
+    /**
+     * Animate active actors in place without repainting pixels or panel text.
+     * Parameters: this - status button; now - optional epoch milliseconds.
+     * Returns: undefined.
+     */
+    _applyPanelProgressPulse(now = Date.now()) {
+        print(`this=${this} now=${now}`);
+        for (const bar of this._panelProgressBars.values()) {
+            if (bar._amsUnderway && !bar._amsStale)
+                bar.opacity = panelProgressOpacity(true, now, false);
+        }
         print(undefined);
     }
 
@@ -1904,8 +1971,16 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
     }
 
-    /** Tear down timers and the file monitor before the actor goes away. */
+    /** Tear down timers and the file monitor before the actor goes away.
+     * Parameters: this - status button being destroyed.
+     * Returns: undefined.
+     */
     destroy() {
+        print(`this=${this}`);
+        if (this._panelPulseId) {
+            GLib.source_remove(this._panelPulseId);
+            this._panelPulseId = 0;
+        }
         if (this._refreshId) {
             GLib.source_remove(this._refreshId);
             this._refreshId = 0;
@@ -1937,6 +2012,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         this._windowSignals.clear();
         super.destroy();
+        print(undefined);
     }
 });
 
