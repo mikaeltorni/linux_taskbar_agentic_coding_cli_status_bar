@@ -20,6 +20,7 @@
  *   readPayload()         parses/validates the document, tolerating partial writes
  */
 
+import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -987,6 +988,20 @@ function panelProgressOpacity(underway, now, stale, ready = false) {
 }
 
 /**
+ * Keep goal hosts steady so only their progress pixels animate.
+ * Parameters: agent - published agent; now - animation time; stale - old data;
+ * ready - unread completion flag.
+ * Returns: compositor opacity byte, preserving ordinary and stale behavior.
+ */
+function panelProgressHostOpacity(agent, now, stale, ready) {
+    print(`agent=${JSON.stringify(agent)} now=${now} stale=${stale} ready=${ready}`);
+    const result = panelProgressGoalActive(agent) ? (stale ? 128 : 255) :
+        panelProgressOpacity(panelProgressUnderway(agent), now, stale, ready);
+    print(result);
+    return result;
+}
+
+/**
  * Paint progress with outer teal focus edges and a purple bottom goal edge.
  * Parameters: area - taskbar DrawingArea carrying its current agent.
  * Returns: undefined after releasing the Cairo drawing context.
@@ -999,13 +1014,15 @@ function paintPanelTaskProgress(area) {
     const fillHeight = Math.max(0, height - 3);
     const fraction = panelTaskProgressValue(area._amsAgent);
     const ready = area._amsAgent.unread_completion === true && !area._amsStale;
+    const fillAlpha = panelProgressGoalActive(area._amsAgent) && !area._amsStale ?
+        panelProgressOpacity(true, area._amsPulseAt ?? Date.now(), false, ready) / 255 : 1;
     const color = panelProgressColor(fraction, ready, area._amsPulseAt ?? Date.now(), area._amsAgent)
         .map(channel => channel / 255);
-    context.setSourceRGBA(...color, fraction === null ? 1 : 0.22);
+    context.setSourceRGBA(...color, (fraction === null ? 1 : 0.22) * fillAlpha);
     context.rectangle(1, 1, fillWidth, fillHeight);
     context.fill();
     if (fraction !== null && fraction > 0) {
-        context.setSourceRGBA(...color, 1);
+        context.setSourceRGBA(...color, fillAlpha);
         context.rectangle(1, 1, fillWidth * fraction, fillHeight);
         context.fill();
     }
@@ -1018,6 +1035,7 @@ function paintPanelTaskProgress(area) {
     }
     if (panelProgressGoalActive(area._amsAgent)) {
         const goalRgb = [1, 3, 5].map(offset => parseInt(PHASE_COLORS.GOAL.slice(offset, offset + 2), 16) / 255);
+        context.setOperator(Cairo.Operator.SOURCE);
         context.setSourceRGBA(...goalRgb, 0.8);
         context.setLineWidth(3);
         context.moveTo(1, height - 1.5);
@@ -1581,7 +1599,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             bar._amsReady = entry.agent.unread_completion === true;
             bar._amsStale = stale;
             bar._amsPulseAt = Date.now();
-            bar.opacity = panelProgressOpacity(bar._amsUnderway, bar._amsPulseAt, stale, bar._amsReady);
+            bar.opacity = panelProgressHostOpacity(entry.agent, bar._amsPulseAt, stale, bar._amsReady);
             bar.queue_repaint();
         }
         this._panelProgress.visible = entries.length > 0;
@@ -1620,8 +1638,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         print(`this=${this} now=${now}`);
         for (const bar of this._panelProgressBars.values()) {
             if ((bar._amsUnderway || bar._amsReady) && !bar._amsStale) {
-                bar.opacity = panelProgressOpacity(bar._amsUnderway, now, false, bar._amsReady);
-                if (bar._amsReady) {
+                bar.opacity = panelProgressHostOpacity(bar._amsAgent, now, false, bar._amsReady);
+                if (bar._amsReady || panelProgressGoalActive(bar._amsAgent)) {
                     bar._amsPulseAt = now;
                     bar.queue_repaint();
                 }
