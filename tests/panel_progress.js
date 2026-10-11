@@ -502,3 +502,19 @@ for (const focused of [false, true]) {
 }
 check(phaseOwners.phaseColor('RUNNING') === '#e6c200', 'Running stays yellow');
 check(phaseOwners.phaseColor('unknown-phase') === '#7f8ea3', 'Unknown stays muted');
+
+// Interruption must also color the actual taskbar fill, at every progress fraction.
+for (const fraction of [null, 0, .5, 1]) {
+    for (const focused of [false, true]) {
+        const agent = {phase: 'INTERRUPTED', focused, goal_active: true, run_active: false,
+            workflow: {available: fraction !== null, fraction}, unread_completion: false};
+        const bar = owners.buildPanelTaskProgress(agent);
+        bar._amsPulseAt = 1500;
+        bar.queue_repaint();
+        const fills = bar.draws.filter(item => item.rect[0] === 1 && item.rect[1] === 1);
+        check(fills.length > 0 && fills.every(item =>
+            JSON.stringify(item.color.slice(0, 3).map(channel => Math.round(channel * 255))) === '[239,68,68]'),
+            `Interrupted track/fill must be red with fraction=${fraction} focused=${focused}`);
+    }
+}
+print('PASS: interrupted taskbar progress fills stay red at every fraction.');
