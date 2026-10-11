@@ -276,9 +276,9 @@ counts and rates. Its fill shows ACC's actual workflow completion percentage,
 with a continuous red-to-green gradient for ordinary and goal runs: red at
 0%, green at 100%, and intermediate colors based on measured completion.
 Active goal bars retain this gradient
-and add a **four-pixel purple bottom stripe** (`#a855f7`, matching the goal timer)
+and add a **three-pixel purple bottom stripe** (`#a855f7`, matching the goal timer)
 instead of a solid purple fill. The stripe extends upward inside the existing
-box, doubling the previous 2px marker without changing the box size or alpha.
+box, reduced from the previous 4px marker without changing the box size or alpha.
 It overlays the bottom of the 50×8 progress fill; the remaining fill retains
 the measured red-to-green gradient. A focused goal
 keeps its teal top and side edges with purple along the bottom. A
