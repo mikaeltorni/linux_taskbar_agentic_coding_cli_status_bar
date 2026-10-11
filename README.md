@@ -276,10 +276,11 @@ counts and rates. Its fill shows ACC's actual workflow completion percentage,
 with a continuous red-to-green gradient for ordinary and goal runs: red at
 0%, green at 100%, and intermediate colors based on measured completion.
 Active goal bars retain this gradient
-and add a **two-pixel purple bottom edge** (`#a855f7`, matching the goal timer)
-instead of a solid purple fill. The marker occupies the existing outer drawing
-room, at twice the teal focus outline thickness with the same alpha.
-The drawing area reserves one extra bottom pixel so the progress fill stays 50×8. A focused goal
+and add a **four-pixel purple bottom stripe** (`#a855f7`, matching the goal timer)
+instead of a solid purple fill. The stripe extends upward inside the existing
+box, doubling the previous 2px marker without changing the box size or alpha.
+It overlays the bottom of the 50×8 progress fill; the remaining fill retains
+the measured red-to-green gradient. A focused goal
 keeps its teal top and side edges with purple along the bottom. A
 rate-limited agent uses the Notes RATE pink/purple (`#f472b6`), also used by
 its menu badge. These state colors preserve fill widths, track/fill alpha,
