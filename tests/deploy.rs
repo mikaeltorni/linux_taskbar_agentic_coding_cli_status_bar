@@ -474,8 +474,12 @@ fn model_status_metadata_and_styles() {
         .is_match(&current[1]));
 }
 
+/// Verify the shared palette and menu row presentation.
+/// Parameters: none.
+/// Returns: None.
 #[test]
 fn model_status_phase_palette_and_rows() {
+    println!("parameters=none");
     let js = read("acc-model-status@local/extension.js");
     let palette_block = Regex::new(r"const PHASE_COLORS = \{(?s)(.*?)\n\};")
         .unwrap()
@@ -492,7 +496,7 @@ fn model_status_phase_palette_and_rows() {
         ("DONE", "22c55e"),
         ("DRAFT", "84c32f"),
         ("STOPPED", "ef4444"),
-        ("INTERRUPTED", "c084fc"),
+        ("INTERRUPTED", "ef4444"),
         ("TRANSFERRED", "c45c5c"),
         ("UNKNOWN", "7f8ea3"),
     ];
@@ -522,6 +526,7 @@ fn model_status_phase_palette_and_rows() {
     assert!(body.contains("agentPhaseBadgeText(agent)"));
     assert!(body.contains("agentPhaseBadgeColor(agent)"));
     assert!(!body.contains("text: phase"));
+    println!("None");
 }
 
 #[test]

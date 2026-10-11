@@ -76,7 +76,7 @@ const PHASE_COLORS = {
     DRAFT: '#84c32f',
     QUEUED_RESET: '#b5d747',
     STOPPED: '#ef4444',
-    INTERRUPTED: '#c084fc',
+    INTERRUPTED: '#ef4444',
     TRANSFERRED: '#c45c5c',
     UNKNOWN: '#7f8ea3',
 };
@@ -147,26 +147,24 @@ function agentPhaseBadgeText(agent, nowMs) {
 }
 
 /**
- * Color for one click-menu agent badge.
- *
- * Queued reset clocks use their distinct yellow-green; live-run clocks use
- * RUNNING yellow, or goal purple while a live goal timer is shown.
- *
- * @param {object} agent - payload agent row.
- * @returns {string} CSS color from {@link PHASE_COLORS}.
+ * Color for one click-menu badge, retaining interruption red over retry clocks.
+ * Parameters: agent - payload row; nowMs - optional reference clock.
+ * Returns: CSS color from the phase palette.
  */
 function agentPhaseBadgeColor(agent, nowMs) {
+    print(`agent=${JSON.stringify(agent)} nowMs=${nowMs}`);
     const now = Number.isFinite(nowMs) ? nowMs : Date.now();
-    if (agent && agent.queued_reset_at && Date.parse(agent.queued_reset_at) > now)
-        return PHASE_COLORS.QUEUED_RESET;
     const phase = String(agent && agent.phase || '').trim().toUpperCase();
-    if (phase === 'RUNNING') {
-        if (agent && agent.goal_active && agent.run_active &&
+    let result = phaseColor(phase);
+    if (phase !== 'INTERRUPTED') {
+        if (agent && agent.queued_reset_at && Date.parse(agent.queued_reset_at) > now)
+            result = PHASE_COLORS.QUEUED_RESET;
+        else if (phase === 'RUNNING' && agent && agent.goal_active && agent.run_active &&
             !Number.isNaN(Date.parse(agent.run_started_at || '')))
-            return PHASE_COLORS.GOAL;
-        return PHASE_COLORS.RUNNING;
+            result = PHASE_COLORS.GOAL;
     }
-    return phaseColor(phase);
+    print(result);
+    return result;
 }
 
 /**
