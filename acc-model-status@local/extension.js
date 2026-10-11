@@ -912,24 +912,25 @@ function panelProgressColor(fraction, ready = false, now = Date.now(), agent = n
     print(`fraction=${fraction} ready=${ready} now=${now} agent=${JSON.stringify(agent)}`);
     const red = [239, 68, 68];
     const green = [34, 197, 94];
-    const stateColor = !ready && fraction !== null ? panelProgressStateColor(agent) : null;
+    const interrupted = String(agent?.phase || '').trim().toUpperCase() === 'INTERRUPTED';
+    const stateColor = interrupted || (!ready && fraction !== null) ? panelProgressStateColor(agent) : null;
     const base = stateColor || (fraction === null ? [48, 52, 64] :
         red.map((channel, index) => Math.round(channel + (green[index] - channel) * fraction)));
-    const wave = ready ? panelProgressWave(now) : 0;
+    const wave = ready && !interrupted ? panelProgressWave(now) : 0;
     const result = base.map(channel => Math.round(channel + (255 - channel) * wave));
     print(result);
     return result;
 }
 
 /**
- * Match rate-limited fills to the shared badge palette.
+ * Match provider waits and interrupted fills to the shared badge palette.
  * Parameters: agent - published agent state, or null for ordinary progress.
  * Returns: state RGB bytes, or null to retain the measured progress gradient.
  */
 function panelProgressStateColor(agent) {
     print(`agent=${JSON.stringify(agent)}`);
     const phase = String(agent?.phase || '').trim().toUpperCase();
-    const hex = phase === 'RATE' ? PHASE_COLORS.RATE : null;
+    const hex = ['RATE', 'INTERRUPTED'].includes(phase) ? PHASE_COLORS[phase] : null;
     const result = hex ? [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) : null;
     print(result);
     return result;
