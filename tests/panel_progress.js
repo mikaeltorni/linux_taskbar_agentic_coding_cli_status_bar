@@ -377,7 +377,9 @@ for (const [state, expected] of [
     [{phase: 'RUNNING', run_active: true, goal_active: true}, [168, 85, 247]],
     [{phase: 'RATE', goal_active: true}, [244, 114, 182]],
     [{phase: 'RATE'}, [244, 114, 182]],
-    [{phase: 'RUNNING', run_active: true, goal_active: false}, [137, 133, 81]],
+    [{phase: 'RUNNING', run_active: true, goal_active: false}, [230, 194, 0]],
+    [{phase: 'RUNNING', run_active: true}, [230, 194, 0]],
+    [{phase: 'RUNNING', run_active: false, goal_active: false}, [137, 133, 81]],
     [{phase: 'STOPPED', goal_active: true}, [137, 133, 81]],
     [{phase: 'DONE', goal_active: true, ready_completed_at: '2026-10-10T10:00:00Z'}, [34, 197, 94]],
 ]) {
@@ -405,3 +407,16 @@ print('PASS: goal and RATE fills match state colors without changing progress or
 check(/\.ams-panel-workspace\s*\{[^}]*spacing:\s*6px;/.test(css),
     'same-workspace bars have a slightly wider six-pixel actor gap');
 print('PASS: outward focus outline leaves the 50x8 fill clear and bars have wider spacing.');
+
+// Active ordinary progress uses timer yellow at every measured endpoint.
+for (const fraction of [0, .25, .5, .75, 1]) {
+    const bar = owners.buildPanelTaskProgress({phase: 'RUNNING', run_active: true,
+        goal_active: false, workflow: {available: true, fraction}});
+    bar.queue_repaint();
+    const painted = bar.draws.at(-1);
+    check(JSON.stringify(painted.color.slice(0, 3).map(channel => Math.round(channel * 255))) === '[230,194,0]',
+        'ordinary active progress matches RUNNING yellow at every fraction');
+    check(painted.color[3] === (fraction > 0 ? 1 : .22), 'ordinary yellow preserves alpha');
+    check(painted.rect[2] === (fraction > 0 ? fraction * 50 : 50), 'ordinary yellow preserves track/fill width');
+}
+print('PASS: ordinary active bars match timer yellow without changing measured widths or opacity.');

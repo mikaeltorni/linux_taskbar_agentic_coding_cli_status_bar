@@ -923,7 +923,7 @@ function panelProgressColor(fraction, ready = false, now = Date.now(), agent = n
 }
 
 /**
- * Match goal and rate-limited bars to the shared agent badge palette.
+ * Match active running, goal and rate-limited bars to the shared badge palette.
  * Parameters: agent - published agent state, or null for ordinary progress.
  * Returns: state RGB bytes, or null to retain the measured progress gradient.
  */
@@ -931,7 +931,8 @@ function panelProgressStateColor(agent) {
     print(`agent=${JSON.stringify(agent)}`);
     const phase = String(agent?.phase || '').trim().toUpperCase();
     const hex = phase === 'RATE' ? PHASE_COLORS.RATE :
-        phase === 'RUNNING' && agent?.run_active && agent?.goal_active ? PHASE_COLORS.GOAL : null;
+        phase === 'RUNNING' && agent?.run_active ?
+            (agent.goal_active ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING) : null;
     const result = hex ? [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) : null;
     print(result);
     return result;
