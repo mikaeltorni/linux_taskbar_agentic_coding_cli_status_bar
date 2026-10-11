@@ -273,12 +273,13 @@ panel prints a compact tok/s figure to the right of the icon for each active
 harness (`12/s` or `131k/s`, or the last-minute average when the 1-second
 window is 0). Each open agent also gets a **50px progress bar** beside those
 counts and rates. Its fill shows ACC's actual workflow completion percentage,
-using solid RUNNING yellow (`#e6c200`) for active ordinary turns, matching
-the elapsed timer at every progress percentage. Inactive ordinary bars retain
-the red-to-green progress gradient. Active goal bars also retain this gradient
-and add a **one-pixel purple bottom edge** (`#a855f7`, matching the goal timer)
+with a continuous red-to-green gradient for ordinary and goal runs: red at
+0%, green at 100%, and intermediate colors based on measured completion.
+Active goal bars retain this gradient
+and add a **two-pixel purple bottom edge** (`#a855f7`, matching the goal timer)
 instead of a solid purple fill. The marker occupies the existing outer drawing
-room and matches the teal focus outline thickness and alpha. A focused goal
+room, at twice the teal focus outline thickness with the same alpha.
+The drawing area reserves one extra bottom pixel so the progress fill stays 50×8. A focused goal
 keeps its teal top and side edges with purple along the bottom. A
 rate-limited agent uses the Notes RATE pink/purple (`#f472b6`), also used by
 its menu badge. These state colors preserve fill widths, track/fill alpha,
