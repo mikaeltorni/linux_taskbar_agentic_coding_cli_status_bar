@@ -108,7 +108,7 @@ const button = Object.assign({_box: new Actor()}, owners.updater);
 button._updatePanelProgress(payload, false);
 let bars = visibleBars(button._panelProgress);
 check(bars.length === 2, 'one bar for every open agent');
-check(bars.every(bar => bar.width === 52 && bar.height === 10), '52x10 drawing room preserves the 50x8 fill and outside outline');
+check(bars.every(bar => bar.width === 52 && bar.height === 11), '52x11 drawing room preserves the 50x8 fill and outside outline');
 check(bars[0].draws.at(-1).rect[2] === 12.5, 'actual 25% fill');
 check(bars[1].draws.at(-1).rect[2] === 30, 'actual 60% fill');
 const retained = bars[0];
@@ -359,7 +359,7 @@ for (const agent of [
     const bar = owners.buildPanelTaskProgress(agent);
     bar._amsPulseAt = 1500;
     bar.queue_repaint();
-    check(bar.strokes.length === 1 && bar.width === 52 && bar.height === 10,
+    check(bar.strokes.length === 1 && bar.width === 52 && bar.height === 11,
         'focused running, stopped, ready and unavailable bars all retain a compact outline');
     if (agent.unread_completion)
         check(bar.draws.at(-2).color.slice(0,3).every(channel => channel === 1),
@@ -421,7 +421,7 @@ for (const [fraction, expected] of [[0,[239,68,68]], [.25,[188,100,75]], [.5,[13
 }
 print('PASS: ordinary active bars transition red to green without changing measured widths or opacity.');
 
-// Goal identity is a one-pixel bottom edge, never a replacement for progress.
+// Goal identity is a two-pixel bottom edge, never a replacement for progress.
 for (const focused of [false, true]) {
     for (const [fraction, expected] of [[0, [239,68,68]], [.5, [137,133,81]], [1, [34,197,94]]]) {
         const agent = {phase: 'RUNNING', run_active: true, goal_active: true, focused,
@@ -431,13 +431,16 @@ for (const focused of [false, true]) {
         check(JSON.stringify(bar.draws[0].color.slice(0,3).map(value => Math.round(value*255))) === JSON.stringify(expected),
             'goal retains the measured progress gradient');
         const goalEdge = bar.strokes.at(-1);
-        check(bar.strokes.length === (focused ? 2 : 1) && goalEdge.width === 1,
-            'goal has one bottom stroke as thick as the teal focus stroke');
-        check(JSON.stringify(goalEdge.start) === '[1,9.5]' && JSON.stringify(goalEdge.end) === '[51,9.5]',
+        check(bar.strokes.length === (focused ? 2 : 1) && goalEdge.width === 2,
+            'goal has one bottom stroke twice as thick as the teal focus stroke');
+        check(JSON.stringify(goalEdge.start) === '[1,10]' && JSON.stringify(goalEdge.end) === '[51,10]',
             'goal stroke occupies bottom outer room only and never touches the fill');
+        check(goalEdge.start[1] - goalEdge.width / 2 === 9 &&
+            goalEdge.start[1] + goalEdge.width / 2 === bar.height,
+            'two-pixel goal marker stays entirely outside the 50x8 fill');
         check(JSON.stringify(goalEdge.color) === JSON.stringify([168/255,85/255,247/255,.8]),
             'goal bottom uses goal purple and existing outline alpha');
-        check(bar.draws[0].color[3] === .22 && bar.width === 52 && bar.height === 10,
+        check(bar.draws[0].color[3] === .22 && bar.width === 52 && bar.height === 11,
             'goal outline preserves alpha and actor dimensions');
         if (focused)
             check(JSON.stringify(bar.strokes[0].color) === JSON.stringify([0,1,230/255,.8]),
@@ -454,4 +457,4 @@ for (const state of [
     bar.queue_repaint();
     check(bar.strokes.length === 0, 'ordinary, inactive, ready and RATE bars have no active-goal edge');
 }
-print('PASS: goal bars keep the gradient and only a one-pixel purple bottom edge; focus and opacity remain intact.');
+print('PASS: goal bars keep the gradient and only a two-pixel purple bottom edge; focus and opacity remain intact.');

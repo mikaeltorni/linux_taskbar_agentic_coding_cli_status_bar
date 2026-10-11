@@ -996,7 +996,7 @@ function paintPanelTaskProgress(area) {
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
     const fillWidth = Math.max(0, width - 2);
-    const fillHeight = Math.max(0, height - 2);
+    const fillHeight = Math.max(0, height - 3);
     const fraction = panelTaskProgressValue(area._amsAgent);
     const ready = area._amsAgent.unread_completion === true && !area._amsStale;
     const color = panelProgressColor(fraction, ready, area._amsPulseAt ?? Date.now(), area._amsAgent)
@@ -1013,15 +1013,15 @@ function paintPanelTaskProgress(area) {
         // Reserve one pixel outside the fill for the CLI selection color.
         context.setSourceRGBA(0, 1, 230 / 255, 0.8);
         context.setLineWidth(1);
-        context.rectangle(0.5, 0.5, Math.max(0, width - 1), Math.max(0, height - 1));
+        context.rectangle(0.5, 0.5, Math.max(0, width - 1), Math.max(0, height - 2));
         context.stroke();
     }
     if (panelProgressGoalActive(area._amsAgent)) {
         const goalRgb = [1, 3, 5].map(offset => parseInt(PHASE_COLORS.GOAL.slice(offset, offset + 2), 16) / 255);
         context.setSourceRGBA(...goalRgb, 0.8);
-        context.setLineWidth(1);
-        context.moveTo(1, height - 0.5);
-        context.lineTo(width - 1, height - 0.5);
+        context.setLineWidth(2);
+        context.moveTo(1, height - 1);
+        context.lineTo(width - 1, height - 1);
         context.stroke();
     }
     context.$dispose();
@@ -1029,7 +1029,7 @@ function paintPanelTaskProgress(area) {
 }
 
 /**
- * Build a 50x8 progress fill with one pixel of outer drawing room.
+ * Build a 50x8 progress fill with two pixels of bottom drawing room.
  * Parameters: agent - scoped open-window agent.
  * Returns: a DrawingArea showing actual progress on its next repaint.
  */
@@ -1037,7 +1037,7 @@ function buildPanelTaskProgress(agent) {
     print(`agent=${JSON.stringify(agent)}`);
     const area = new St.DrawingArea({
         style_class: 'ams-panel-progress-bar',
-        width: 52, height: 10,
+        width: 52, height: 11,
         reactive: false,
         y_align: Clutter.ActorAlign.CENTER,
     });
