@@ -441,6 +441,14 @@ In the Agent Command Center menu, a Codex row queued for auto-continue shows
 ACC's negative reset countdown (such as `-1:22`) in yellow-green. The menu
 updates the clock locally from `queued_reset_at`, including for terminals with
 no Phrase Automation note.
+
+An ACC conversation currently marked `INTERRUPTED` uses red (`#ef4444`) for
+its taskbar progress track, fill and menu badge, including focused windows and
+windows without a workflow plan. Goal and retry metadata cannot recolor this
+state. ACC owns interruption detection: quota warnings and unsent text leave it
+interrupted until a newer task-start hook or resumed assistant output proves
+recovery. The installed model status extension reads this shared status locally.
+
 An actively pursued `/goal` colors a live agent's elapsed timer purple
 (`#a855f7`) in the ACC menu. ACC publishes the goal flag with the row;
 ordinary runs keep their yellow timer, and queued reset clocks keep their
