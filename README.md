@@ -275,8 +275,11 @@ window is 0). Each open agent also gets a **50px progress bar** beside those
 counts and rates. Its fill shows ACC's actual workflow completion percentage,
 using solid RUNNING yellow (`#e6c200`) for active ordinary turns, matching
 the elapsed timer at every progress percentage. Inactive ordinary bars retain
-the red-to-green progress gradient. An active goal uses the same purple
-(`#a855f7`) as its goal timer; a
+the red-to-green progress gradient. Active goal bars also retain this gradient
+and add a **one-pixel purple bottom edge** (`#a855f7`, matching the goal timer)
+instead of a solid purple fill. The marker occupies the existing outer drawing
+room and matches the teal focus outline thickness and alpha. A focused goal
+keeps its teal top and side edges with purple along the bottom. A
 rate-limited agent uses the Notes RATE pink/purple (`#f472b6`), also used by
 its menu badge. These state colors preserve fill widths, track/fill alpha,
 and the existing opacity animation. Confirmed
