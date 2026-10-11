@@ -172,10 +172,14 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 The Codex reset forecast is part of the default Codex monitoring experience:
 a clean install enables its public sources automatically, and disabling
 the Codex monitor also suppresses forecast fetching and display. The panel
-shows Codex usage counters without a reset consensus counter. The popup has a
-plain `Codex reset forecast` heading followed by one named row per source.
-Forecast rows show every published horizon; WhenReset links to reset history
-without adding a percentage to the forecast.
+shows available reset consensus percentages immediately before Codex usage
+counters (`28%-49% | CX1 …` when both horizons are available). If only one
+horizon has a value, the panel shows that value; stale consensus carries a
+trailing `?`. The forecast stays visible without opening the popup and is
+hidden when there is no valid consensus. The popup has a plain
+`Codex reset forecast` heading followed by one named row per source. Forecast
+rows show every published horizon; WhenReset links to reset history without
+adding a percentage to the consensus.
 The 24h/48h percentages come from Codex Reset Monitor (`codexreset.org`).
 Clicking or pressing Enter on a source row opens its public page in the
 desktop's default browser. Each source can be disabled with its
