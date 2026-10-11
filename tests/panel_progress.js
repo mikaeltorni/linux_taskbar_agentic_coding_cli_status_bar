@@ -64,13 +64,13 @@ class Actor {
         setDash: (dash, offset) => { this.dash = dash; },
         moveTo: (...point) => { this.start = point; },
         lineTo: (...point) => { this.end = point; },
-        stroke: () => { this.stroked = true; this.strokes.push({rect: this.draws.at(-1)?.rect, color: this.color, width: this.lineWidth}); },
+        stroke: () => { this.stroked = true; this.strokes.push({rect: this.draws.at(-1)?.rect, color: this.color, width: this.lineWidth, start: this.start, end: this.end}); },
     });
 }
 
 const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor};
 const Clutter = {ActorAlign: {CENTER: 0}};
-const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
+const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator']
     .map(name => declaration(name));
@@ -374,7 +374,7 @@ print('PASS: selected instance uses a one-pixel teal edge matching CLI focus and
 
 // State colors must preserve the measured fill and every existing alpha.
 for (const [state, expected] of [
-    [{phase: 'RUNNING', run_active: true, goal_active: true}, [168, 85, 247]],
+    [{phase: 'RUNNING', run_active: true, goal_active: true}, [137, 133, 81]],
     [{phase: 'RATE', goal_active: true}, [244, 114, 182]],
     [{phase: 'RATE'}, [244, 114, 182]],
     [{phase: 'RUNNING', run_active: true, goal_active: false}, [230, 194, 0]],
@@ -420,3 +420,38 @@ for (const fraction of [0, .25, .5, .75, 1]) {
     check(painted.rect[2] === (fraction > 0 ? fraction * 50 : 50), 'ordinary yellow preserves track/fill width');
 }
 print('PASS: ordinary active bars match timer yellow without changing measured widths or opacity.');
+
+// Goal identity is a one-pixel bottom edge, never a replacement for progress.
+for (const focused of [false, true]) {
+    for (const [fraction, expected] of [[0, [239,68,68]], [.5, [137,133,81]], [1, [34,197,94]]]) {
+        const agent = {phase: 'RUNNING', run_active: true, goal_active: true, focused,
+            workflow: {available: true, fraction}};
+        const bar = owners.buildPanelTaskProgress(agent);
+        bar.queue_repaint();
+        check(JSON.stringify(bar.draws[0].color.slice(0,3).map(value => Math.round(value*255))) === JSON.stringify(expected),
+            'goal retains the measured progress gradient');
+        const goalEdge = bar.strokes.at(-1);
+        check(bar.strokes.length === (focused ? 2 : 1) && goalEdge.width === 1,
+            'goal has one bottom stroke as thick as the teal focus stroke');
+        check(JSON.stringify(goalEdge.start) === '[1,9.5]' && JSON.stringify(goalEdge.end) === '[51,9.5]',
+            'goal stroke occupies bottom outer room only and never touches the fill');
+        check(JSON.stringify(goalEdge.color) === JSON.stringify([168/255,85/255,247/255,.8]),
+            'goal bottom uses goal purple and existing outline alpha');
+        check(bar.draws[0].color[3] === .22 && bar.width === 52 && bar.height === 10,
+            'goal outline preserves alpha and actor dimensions');
+        if (focused)
+            check(JSON.stringify(bar.strokes[0].color) === JSON.stringify([0,1,230/255,.8]),
+                'focused goal retains teal outline underneath purple bottom');
+    }
+}
+for (const state of [
+    {phase: 'RUNNING', run_active: true, goal_active: false},
+    {phase: 'RUNNING', run_active: false, goal_active: true},
+    {phase: 'DONE', goal_active: true, unread_completion: true},
+    {phase: 'RATE', goal_active: true},
+]) {
+    const bar = owners.buildPanelTaskProgress({...state, workflow: {fraction: .5}});
+    bar.queue_repaint();
+    check(bar.strokes.length === 0, 'ordinary, inactive, ready and RATE bars have no active-goal edge');
+}
+print('PASS: goal bars keep the gradient and only a one-pixel purple bottom edge; focus and opacity remain intact.');

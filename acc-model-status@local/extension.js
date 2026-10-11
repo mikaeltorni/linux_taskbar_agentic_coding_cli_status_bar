@@ -923,7 +923,7 @@ function panelProgressColor(fraction, ready = false, now = Date.now(), agent = n
 }
 
 /**
- * Match active running, goal and rate-limited bars to the shared badge palette.
+ * Match ordinary running and rate-limited fills to the shared badge palette.
  * Parameters: agent - published agent state, or null for ordinary progress.
  * Returns: state RGB bytes, or null to retain the measured progress gradient.
  */
@@ -931,8 +931,8 @@ function panelProgressStateColor(agent) {
     print(`agent=${JSON.stringify(agent)}`);
     const phase = String(agent?.phase || '').trim().toUpperCase();
     const hex = phase === 'RATE' ? PHASE_COLORS.RATE :
-        phase === 'RUNNING' && agent?.run_active ?
-            (agent.goal_active ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING) : null;
+        phase === 'RUNNING' && agent?.run_active && !panelProgressGoalActive(agent) ?
+            PHASE_COLORS.RUNNING : null;
     const result = hex ? [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) : null;
     print(result);
     return result;
@@ -963,6 +963,18 @@ function panelProgressUnderway(agent) {
 }
 
 /**
+ * Identify a goal being pursued by an active running turn.
+ * Parameters: agent - published agent state, or null.
+ * Returns: true when the bar needs a purple goal edge.
+ */
+function panelProgressGoalActive(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const result = Boolean(agent?.goal_active && panelProgressUnderway(agent));
+    print(result);
+    return result;
+}
+
+/**
  * Dim running bars while keeping ready bars fully opaque for color pulses.
  * Parameters: underway - whether the turn is active; now - epoch milliseconds;
  * stale - whether the snapshot is out of date; ready - unopened completion.
@@ -977,7 +989,7 @@ function panelProgressOpacity(underway, now, stale, ready = false) {
 }
 
 /**
- * Paint measured progress with the focused teal edge outside the fill.
+ * Paint progress with outer teal focus edges and a purple bottom goal edge.
  * Parameters: area - taskbar DrawingArea carrying its current agent.
  * Returns: undefined after releasing the Cairo drawing context.
  */
@@ -1004,6 +1016,14 @@ function paintPanelTaskProgress(area) {
         context.setSourceRGBA(0, 1, 230 / 255, 0.8);
         context.setLineWidth(1);
         context.rectangle(0.5, 0.5, Math.max(0, width - 1), Math.max(0, height - 1));
+        context.stroke();
+    }
+    if (panelProgressGoalActive(area._amsAgent)) {
+        const goalRgb = [1, 3, 5].map(offset => parseInt(PHASE_COLORS.GOAL.slice(offset, offset + 2), 16) / 255);
+        context.setSourceRGBA(...goalRgb, 0.8);
+        context.setLineWidth(1);
+        context.moveTo(1, height - 0.5);
+        context.lineTo(width - 1, height - 0.5);
         context.stroke();
     }
     context.$dispose();
