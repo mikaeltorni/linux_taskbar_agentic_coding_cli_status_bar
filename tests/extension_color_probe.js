@@ -251,7 +251,6 @@ const results = {
       enabled: true,
       horizon: '48h',
       consensus_percent: 48,
-      consensus_percent_48h: 48,
     },
     'CX',
     {selected: 1, windows: [{label: 'week', used_percent: 43}]},
