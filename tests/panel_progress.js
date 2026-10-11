@@ -421,7 +421,7 @@ for (const [fraction, expected] of [[0,[239,68,68]], [.25,[188,100,75]], [.5,[13
 }
 print('PASS: ordinary active bars transition red to green without changing measured widths or opacity.');
 
-// Goal identity is a two-pixel bottom edge, never a replacement for progress.
+// Goal identity is a four-pixel bottom edge, never a replacement for progress.
 for (const focused of [false, true]) {
     for (const [fraction, expected] of [[0, [239,68,68]], [.5, [137,133,81]], [1, [34,197,94]]]) {
         const agent = {phase: 'RUNNING', run_active: true, goal_active: true, focused,
@@ -431,13 +431,13 @@ for (const focused of [false, true]) {
         check(JSON.stringify(bar.draws[0].color.slice(0,3).map(value => Math.round(value*255))) === JSON.stringify(expected),
             'goal retains the measured progress gradient');
         const goalEdge = bar.strokes.at(-1);
-        check(bar.strokes.length === (focused ? 2 : 1) && goalEdge.width === 2,
-            'goal has one bottom stroke twice as thick as the teal focus stroke');
-        check(JSON.stringify(goalEdge.start) === '[1,10]' && JSON.stringify(goalEdge.end) === '[51,10]',
-            'goal stroke occupies bottom outer room only and never touches the fill');
-        check(goalEdge.start[1] - goalEdge.width / 2 === 9 &&
+        check(bar.strokes.length === (focused ? 2 : 1) && goalEdge.width === 4,
+            'goal has one bottom stroke four times as thick as the teal focus stroke');
+        check(JSON.stringify(goalEdge.start) === '[1,9]' && JSON.stringify(goalEdge.end) === '[51,9]',
+            'goal stroke extends upward inside the existing box');
+        check(goalEdge.start[1] - goalEdge.width / 2 === 7 &&
             goalEdge.start[1] + goalEdge.width / 2 === bar.height,
-            'two-pixel goal marker stays entirely outside the 50x8 fill');
+            'four-pixel goal marker grows inward without moving its bottom boundary');
         check(JSON.stringify(goalEdge.color) === JSON.stringify([168/255,85/255,247/255,.8]),
             'goal bottom uses goal purple and existing outline alpha');
         check(bar.draws[0].color[3] === .22 && bar.width === 52 && bar.height === 11,
@@ -457,4 +457,4 @@ for (const state of [
     bar.queue_repaint();
     check(bar.strokes.length === 0, 'ordinary, inactive, ready and RATE bars have no active-goal edge');
 }
-print('PASS: goal bars keep the gradient and only a two-pixel purple bottom edge; focus and opacity remain intact.');
+print('PASS: goal bars keep the gradient and only a four-pixel purple bottom edge; focus and opacity remain intact.');

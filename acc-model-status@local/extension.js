@@ -1019,9 +1019,9 @@ function paintPanelTaskProgress(area) {
     if (panelProgressGoalActive(area._amsAgent)) {
         const goalRgb = [1, 3, 5].map(offset => parseInt(PHASE_COLORS.GOAL.slice(offset, offset + 2), 16) / 255);
         context.setSourceRGBA(...goalRgb, 0.8);
-        context.setLineWidth(2);
-        context.moveTo(1, height - 1);
-        context.lineTo(width - 1, height - 1);
+        context.setLineWidth(4);
+        context.moveTo(1, height - 2);
+        context.lineTo(width - 1, height - 2);
         context.stroke();
     }
     context.$dispose();
