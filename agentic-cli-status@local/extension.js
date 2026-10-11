@@ -656,10 +656,10 @@ function forecastMenuMarkup(text) {
 }
 
 /**
- * Render Codex usage while accepting snapshots containing retired consensus data.
+ * Render compact reset forecasts immediately before Codex usage.
  * Parameters: forecast - reset source snapshot; tag - compact Codex tag;
  *   snapshot - Codex usage snapshot; nowEpoch - current epoch seconds.
- * Returns: Codex usage Pango markup.
+ * Returns: Forecast and Codex usage Pango markup.
  */
 function codexBarWithForecastMarkup(
   forecast,
@@ -669,8 +669,42 @@ function codexBarWithForecastMarkup(
 ) {
   print(`forecast=${JSON.stringify(forecast)}, tag=${tag}, snapshot=${JSON.stringify(snapshot)}, nowEpoch=${nowEpoch}`);
   const codex = codexBarMarkup(tag, snapshot, nowEpoch);
-  print(codex);
-  return codex;
+  let resetForecast = '';
+  if (forecast?.enabled === true) {
+    const roundedPercent = (value) => {
+      if (typeof value !== 'number' || !Number.isFinite(value))
+        return null;
+      return Math.round(Math.min(100, Math.max(0, value)));
+    };
+    let p24 = roundedPercent(forecast.consensus_percent_24h);
+    let p48 = roundedPercent(forecast.consensus_percent_48h);
+    const configured = roundedPercent(forecast.consensus_percent);
+    const horizon = String(forecast.horizon ?? '24h');
+    if (p24 === null && horizon !== '48h')
+      p24 = configured;
+    if (p48 === null && horizon === '48h')
+      p48 = configured;
+
+    if (p24 !== null || p48 !== null) {
+      let percentages = '';
+      if (p24 !== null)
+        percentages += forecastPercentMarkup(p24);
+      if (p24 !== null && p48 !== null)
+        percentages += `<span foreground="${NEUTRAL_COLOR}">-</span>`;
+      if (p48 !== null)
+        percentages += forecastPercentMarkup(p48);
+      const staleMark = forecast.stale
+        ? `<span foreground="${NEUTRAL_COLOR}">?</span>`
+        : '';
+      resetForecast = `${CLUTTER_MARKUP_PREFIX}` +
+        `<span>${percentages}${staleMark}</span>`;
+    }
+  }
+  const result = resetForecast
+    ? `${resetForecast}<span foreground="${NEUTRAL_COLOR}"> | </span>${codex}`
+    : codex;
+  print(result);
+  return result;
 }
 
 /** Format a forecast probability for the details menu. */

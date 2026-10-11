@@ -373,21 +373,39 @@ fn gradient_and_segments() {
     assert!(first.contains("CX1"));
     assert!(first.contains("CX2"));
     assert!(first.contains(" | "));
-    for name in [
-        "codex_with_forecast",
-        "codex_with_stale_forecast",
-        "codex_without_consensus",
-        "codex_with_24_48_forecast",
-        "codex_with_only_48h_forecast",
-    ] {
-        assert_eq!(
-            js[name], js["codex_without_forecast"],
-            "{name} must show Codex usage without the consensus counter"
-        );
-    }
+    let forecast = js["codex_with_forecast"].as_str().unwrap();
+    assert!(
+        forecast.contains(">64%</span>")
+            && forecast.find("64%").unwrap() < forecast.find("CX1").unwrap(),
+        "configured 24h forecast must precede Codex usage: {forecast}"
+    );
+    let stale_forecast = js["codex_with_stale_forecast"].as_str().unwrap();
+    assert!(
+        stale_forecast.contains(">64%</span>") && stale_forecast.contains(">?</span>"),
+        "stale forecast must retain its value and marker: {stale_forecast}"
+    );
+    assert_eq!(js["codex_without_forecast"], js["codex_without_consensus"]);
     let codex = js["codex_without_forecast"].as_str().unwrap();
     assert!(codex.contains("CX1") && codex.contains(">57<"));
     assert!(!codex.contains('%'));
+    let pango = regex::Regex::new(r"<[^>]+>").unwrap();
+    let forecast_24_48 = js["codex_with_24_48_forecast"].as_str().unwrap();
+    assert!(
+        pango.replace_all(forecast_24_48, "").contains("26%-48%"),
+        "both forecast horizons must remain visible: {forecast_24_48}"
+    );
+    assert!(
+        forecast_24_48.find("26%").unwrap() < forecast_24_48.find("48%").unwrap(),
+        "24h forecast must precede 48h: {forecast_24_48}"
+    );
+    let forecast_48h = js["codex_with_only_48h_forecast"].as_str().unwrap();
+    let forecast_48h_plain = pango.replace_all(forecast_48h, "");
+    assert!(
+        forecast_48h_plain.contains("48%")
+            && !forecast_48h_plain.contains("26%-")
+            && !forecast_48h_plain.contains("%-48"),
+        "48h-only forecast must not invent a missing 24h value: {forecast_48h}"
+    );
     for name in [
         "forecast_menu_24_48",
         "forecast_menu_only_48h",
