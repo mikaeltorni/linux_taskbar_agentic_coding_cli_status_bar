@@ -486,3 +486,19 @@ button._applyPanelProgressPulse(1500);
 check(steadyGoalBar.opacity === 77, 'ordinary run resumes compositor pulse on same actor');
 button._updatePanelProgress(null, false);
 print('PASS: purple goal stripe remains steady while progress opacity still pulses.');
+
+// Exercise the shipped menu palette, including focus/goal/reset metadata.
+const phaseOwners = new Function('print', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
+    ${declaration('phaseColor')}
+    ${declaration('agentPhaseBadgeColor')}
+    return {phaseColor, agentPhaseBadgeColor};`)(print);
+for (const phase of ['INTERRUPTED', 'interrupted', ' INTERRUPTED '])
+    check(phaseOwners.phaseColor(phase) === '#ef4444', 'Interrupted panel/menu status must be red');
+for (const focused of [false, true]) {
+    const interrupted = {phase: 'INTERRUPTED', focused, goal_active: true,
+        queued_reset_at: new Date(Date.now() + 60000).toISOString()};
+    check(phaseOwners.agentPhaseBadgeColor(interrupted) === '#ef4444',
+        'A reset countdown or goal must not recolor interrupted menu status');
+}
+check(phaseOwners.phaseColor('RUNNING') === '#e6c200', 'Running stays yellow');
+check(phaseOwners.phaseColor('unknown-phase') === '#7f8ea3', 'Unknown stays muted');
