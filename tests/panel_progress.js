@@ -61,16 +61,17 @@ class Actor {
         rectangle: (...rect) => this.draws.push({rect, color: this.color}),
         fill: () => {}, $dispose: () => {},
         setLineWidth: width => { this.lineWidth = width; },
+        setOperator: operator => { this.operator = operator; },
         setDash: (dash, offset) => { this.dash = dash; },
         moveTo: (...point) => { this.start = point; },
         lineTo: (...point) => { this.end = point; },
-        stroke: () => { this.stroked = true; this.strokes.push({rect: this.draws.at(-1)?.rect, color: this.color, width: this.lineWidth, start: this.start, end: this.end}); },
+        stroke: () => { this.stroked = true; this.strokes.push({rect: this.draws.at(-1)?.rect, color: this.color, width: this.lineWidth, operator: this.operator, start: this.start, end: this.end}); },
     });
 }
 
 const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor};
 const Clutter = {ActorAlign: {CENTER: 0}};
-const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
+const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator']
     .map(name => declaration(name));
@@ -87,7 +88,7 @@ const services = {readPayload: () => snapshot, scopePayloadToWindows: value => v
     ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
     saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [{workspace: 5, count: 1, current: false, label: 'W5:1'}], panelHarnessRateRows: () => [],
 };
-const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
+const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
 ${snippets.join('\n')}
     const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
         activeTaskEstimates, longestTaskEstimate, formatPanelTaskEstimate, ageSeconds, STALE_SECONDS,
@@ -97,7 +98,7 @@ ${snippets.join('\n')}
         Destroyer,
         updater: {${['_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
-const owners = makeOwners(St, Clutter, GLib, services, print);
+const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
     child.style_class === 'ams-panel-workspace' ? child.children : []);
@@ -396,6 +397,7 @@ for (const [state, expected] of [
 }
 for (const state of [{phase: 'RATE'}, {phase: 'RUNNING', run_active: true, goal_active: true}]) {
     const bar = owners.buildPanelTaskProgress({...state, workflow: {available: false}});
+    bar._amsPulseAt = 0;
     bar.queue_repaint();
     check(bar.draws.length === 1 && bar.draws[0].color[3] === 1,
         'unavailable state preserves neutral track and alpha');
@@ -427,6 +429,7 @@ for (const focused of [false, true]) {
         const agent = {phase: 'RUNNING', run_active: true, goal_active: true, focused,
             workflow: {available: true, fraction}};
         const bar = owners.buildPanelTaskProgress(agent);
+        bar._amsPulseAt = 0;
         bar.queue_repaint();
         check(JSON.stringify(bar.draws[0].color.slice(0,3).map(value => Math.round(value*255))) === JSON.stringify(expected),
             'goal retains the measured progress gradient');
@@ -458,3 +461,28 @@ for (const state of [
     check(bar.strokes.length === 0, 'ordinary, inactive, ready and RATE bars have no active-goal edge');
 }
 print('PASS: goal bars keep the gradient and only a three-pixel purple bottom edge; focus and opacity remain intact.');
+
+// Goal fill pulses independently of its steady purple marker.
+const steadyGoal = {session_id: 'steady-goal', phase: 'RUNNING', run_active: true,
+    goal_active: true, workflow: {available: true, fraction: .5}};
+button._updatePanelProgress({providers: [{agents: [steadyGoal]}]}, false);
+const steadyGoalBar = button._panelProgressBars.get('steady-goal');
+for (const [now, expectedAlpha] of [[0,1], [750,166/255], [1500,77/255], [3000,1]]) {
+    button._applyPanelProgressPulse(now);
+    check(steadyGoalBar.opacity === 255, 'goal host remains fully opaque throughout pulse');
+    check(steadyGoalBar.strokes.at(-1).color[3] === .8,
+        'purple goal stripe keeps constant effective alpha');
+    check(steadyGoalBar.strokes.at(-1).operator === imports.cairo.Operator.SOURCE,
+        'purple replaces pulsing pixels beneath it instead of blending with them');
+    check(steadyGoalBar.draws.at(-1).color[3] === expectedAlpha &&
+        steadyGoalBar.draws.at(-2).color[3] === .22*expectedAlpha,
+        'goal track and fill retain their previous effective opacity pulse');
+}
+button._updatePanelProgress({providers: [{agents: [steadyGoal]}]}, true);
+check(steadyGoalBar.opacity === 128 && timers.size === 0, 'stale goal stays steadily dim without animation');
+steadyGoal.goal_active = false;
+button._updatePanelProgress({providers: [{agents: [steadyGoal]}]}, false);
+button._applyPanelProgressPulse(1500);
+check(steadyGoalBar.opacity === 77, 'ordinary run resumes compositor pulse on same actor');
+button._updatePanelProgress(null, false);
+print('PASS: purple goal stripe remains steady while progress opacity still pulses.');
