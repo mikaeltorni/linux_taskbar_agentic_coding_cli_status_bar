@@ -292,7 +292,9 @@ Progress bars are grouped by ascending workspace number, with agents ordered
 by their terminal window numbers within each group. A vertical grey dotted
 line separates workspace groups. While a turn is actively running, its bar
 smoothly pulses from 100% opacity to 30% and back every three seconds, matching
-the terminal indicator. A finished, unopened instance keeps full opacity while
+the terminal indicator. For active goals, only the progress fill and track pulse;
+the purple bottom stripe stays steady at its existing opacity, as do the teal
+focus edges. Stale goal bars still use the usual dimmed appearance. A finished, unopened instance keeps full opacity while
 its green fill smoothly turns white and back over the same three-second cycle.
 Ready bars stay at least as bright as their original green rather than fading.
 Other idle bars stay steady; stale snapshots stay dimmed.
