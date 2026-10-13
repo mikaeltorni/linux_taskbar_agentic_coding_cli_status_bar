@@ -75,6 +75,7 @@ const Clutter = {ActorAlign: {CENTER: 0, FILL: 1, END: 2}, BinLayout: class {}};
 const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator',
+    ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
     ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
 const timers = new Map();
@@ -612,3 +613,25 @@ check(labelGroups[0].children[1].text === 'W3', 'workspace moves update the labe
 button._updatePanelProgress(null, false);
 check(button._panelProgress.children.length === 0, 'empty snapshot removes labels with its bars');
 print('PASS: centered workspace labels below bars, full-height boundaries and stable refreshes.');
+
+// Every rendered workspace label samples the same fixed blue-to-violet scale.
+const workspaceColors = ['#60a5fa', '#6ea0fa', '#7b9cfb', '#8997fb',
+    '#9792fb', '#a58dfb', '#b289fc', '#c084fc'];
+const gradientAgents = Array.from({length: 8}, (_value, index) =>
+    ({session_id: `gradient-${index + 1}`, workspace: index + 1, monitor: 0}));
+button._updatePanelProgress({providers: [{kind: 'codex', agents: gradientAgents}]}, false);
+const gradientGroups = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group');
+check(gradientGroups.length === 8, 'render all eight workspace labels');
+for (const [index, group] of gradientGroups.entries()) {
+    const label = group.children[1];
+    check(label.text === `W${index + 1}` && label.style === `color: ${workspaceColors[index]};`,
+        'exact endpoint and intermediate gradient colors are applied to actual workspace labels');
+}
+button._updatePanelProgress({providers: [{agents: [
+    {session_id: 'gradient-unknown', workspace: 0}, {session_id: 'gradient-high', workspace: 9},
+]}]}, false);
+const edgeLabels = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group').map(group => group.children[1]);
+check(edgeLabels[0].text === 'W9' && edgeLabels[0].style === 'color: #c084fc;', 'workspace above scale keeps violet endpoint');
+check(edgeLabels[1].text === 'W?' && edgeLabels[1].style === 'color: #9a9996;', 'unknown workspace has neutral color');
+button._updatePanelProgress(null, false);
+print('PASS: W1 blue → W8 violet gradient applies to every label, with stable endpoints.');
