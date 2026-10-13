@@ -296,7 +296,9 @@ It overlays the bottom of the 50×8 progress fill; the remaining fill retains
 the measured red-to-green gradient. A focused goal
 keeps its teal top and side edges with purple along the bottom. A
 rate-limited agent uses the Notes RATE pink/purple (`#f472b6`), also used by
-its menu badge. These state colors preserve fill widths, track/fill alpha,
+its menu badge. A DRAFT agent uses lime green (`#84c32f`), matching its menu
+badge, for both its track and measured fill. At 0% it shows only the faint
+lime track. These state colors preserve fill widths, track/fill alpha,
 and the existing opacity animation. Confirmed
 finished agents show a full bar; unavailable workflow progress shows an empty
 neutral track. The bars contain no added labels or percentage text.
