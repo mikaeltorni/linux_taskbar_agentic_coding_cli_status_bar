@@ -958,3 +958,19 @@ check(retainedSelectionCell.reactive === false, 'retained cell stops accepting c
 button._updatePanelProgress(null, false);
 check(retainedSelectionCell.destroyed && button._panelProgressBars.size === 0, 'closing instances destroys their click targets');
 print('PASS: individual instance left-click selection, current identity, all phases, other-button rejection and cleanup.');
+
+// Hover belongs to each retained instance cell, never to its progress/clock children.
+button._updatePanelProgress(selectionPayload, false);
+const hoverCells = ['select-a', 'select-b', 'select-c'].map(selectionCell);
+check(hoverCells.every(cell => cell.track_hover === true), 'each selectable instance tracks its own hover');
+check(hoverCells.every(cell => cell.children.every(child => !child.reactive && !child.track_hover)),
+    'status bar, runtime and forecast route hover to their exact instance');
+const hoverNeighbor = hoverCells[1];
+hoverCells[0].hover = true;
+check(!hoverNeighbor.hover && hoverCells[0].width === 52 && hoverNeighbor.width === 52,
+    'hover does not spread to the adjacent instance or change its geometry');
+button._updatePanelProgress(selectionPayload, false);
+check(selectionCell('select-a') === hoverCells[0] && hoverCells[0].hover === true,
+    'status refresh retains hovered instance and its local highlight');
+button._updatePanelProgress(null, false);
+print('PASS: independent hover targets, inert text/paint children, retained hover and unchanged widths.');
