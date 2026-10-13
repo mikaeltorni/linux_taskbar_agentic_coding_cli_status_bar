@@ -1001,7 +1001,7 @@ function panelProgressHostOpacity(agent, now, stale, ready) {
 }
 
 /**
- * Paint progress with outer teal focus edges and a purple bottom goal edge.
+ * Paint measured progress with its existing outer teal focus outline.
  * Parameters: area - taskbar DrawingArea carrying its current agent.
  * Returns: undefined after releasing the Cairo drawing context.
  */
@@ -1030,15 +1030,6 @@ function paintPanelTaskProgress(area) {
         context.setSourceRGBA(0, 1, 230 / 255, 0.8);
         context.setLineWidth(1);
         context.rectangle(0.5, 0.5, Math.max(0, width - 1), Math.max(0, height - 2));
-        context.stroke();
-    }
-    if (panelProgressGoalActive(area._amsAgent)) {
-        const goalRgb = [1, 3, 5].map(offset => parseInt(PHASE_COLORS.GOAL.slice(offset, offset + 2), 16) / 255);
-        context.setOperator(Cairo.Operator.SOURCE);
-        context.setSourceRGBA(...goalRgb, 0.8);
-        context.setLineWidth(3);
-        context.moveTo(1, height - 1.5);
-        context.lineTo(width - 1, height - 1.5);
         context.stroke();
     }
     context.$dispose();
@@ -1112,6 +1103,18 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
     const text = formatPanelRunDuration(seconds);
     print(text);
     return text;
+}
+
+/**
+ * Select the steady runtime color from the shared regular/goal palette.
+ * Parameters: agent - scoped agent whose active goal state determines the timer color.
+ * Returns: purple for an active goal, otherwise the regular running yellow.
+ */
+function panelAgentRuntimeColor(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const color = panelProgressGoalActive(agent) ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING;
+    print(color);
+    return color;
 }
 
 /**
@@ -1741,6 +1744,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             bar._amsRuntimeAt = runtimeAt;
             const runtime = bar._amsRuntimeLabel;
             runtime.text = panelAgentRuntimeText(entry.agent, runtimeAt);
+            runtime.style = `color: ${panelAgentRuntimeColor(entry.agent)};`;
             runtime.visible = Boolean(runtime.text);
             runtime.opacity = stale ? 128 : 255;
             bar._amsUnderway = panelProgressUnderway(entry.agent);
