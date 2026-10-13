@@ -61,10 +61,10 @@
 }
 
 .ams-panel-agent-runtime {
-  font-size: 9px;
+  font-size: 13.5px;
   font-family: monospace;
   color: #c4c7cf;
-  margin-top: 3px;
+  margin-top: 1px;
 }
 
 .ams-panel-agent-estimate {

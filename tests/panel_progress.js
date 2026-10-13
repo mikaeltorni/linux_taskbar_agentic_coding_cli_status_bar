@@ -979,3 +979,9 @@ check(selectionCell('select-a') === hoverCells[0] && hoverCells[0].hover === tru
     'status refresh retains hovered instance and its local highlight');
 button._updatePanelProgress(null, false);
 print('PASS: independent hover targets, inert text/paint children, retained hover and unchanged widths.');
+
+// Runtime text grows exactly 1.5x while leaving room above the centered fill.
+const runtimeStyle = stylesheet.match(/\.ams-panel-agent-runtime\s*\{([^}]+)\}/)?.[1] || '';
+check(/font-size:\s*13\.5px;/.test(runtimeStyle), 'runtime timer grows from 9px to 13.5px');
+check(/margin-top:\s*1px;/.test(runtimeStyle), 'larger runtime text retains clearance above the centered progress bar');
+print('PASS: runtime timer is 1.5x larger with clearance above the bar.');
