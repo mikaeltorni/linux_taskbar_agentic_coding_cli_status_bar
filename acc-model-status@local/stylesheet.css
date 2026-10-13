@@ -60,6 +60,13 @@
   spacing: 6px;
 }
 
+.ams-panel-agent-runtime {
+  font-size: 9px;
+  font-family: monospace;
+  color: #c4c7cf;
+  margin-top: 3px;
+}
+
 .ams-panel-agent-estimate {
   font-size: 9px;
   color: #c4c7cf;
