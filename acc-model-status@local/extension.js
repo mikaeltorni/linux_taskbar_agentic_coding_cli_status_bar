@@ -1076,7 +1076,8 @@ function paintPanelWorkspaceSeparator(area) {
     context.setSourceRGBA(0.63, 0.63, 0.63, 0.55);
     context.setLineWidth(2);
     context.setLineCap(Cairo.LineCap.ROUND);
-    context.setDash([0, 6], 0);
+    // GJS requires positive dash lengths; round caps turn this tiny dash into a dot.
+    context.setDash([0.01, 5.99], 0);
     context.moveTo(width / 2, 0);
     context.lineTo(width / 2, height);
     context.stroke();
