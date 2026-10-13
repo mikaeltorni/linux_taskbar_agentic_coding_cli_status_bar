@@ -1597,7 +1597,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Refresh per-agent panel cells and repaint closed menus from the local snapshot.
+     * Refresh attached panel cells and repaint closed menus without interrupting hover.
      * Parameters: this - model-status button whose panel and menu are refreshed.
      * Returns: undefined.
      */
@@ -1628,9 +1628,15 @@ class AccModelStatusButton extends PanelMenu.Button {
             return;
         }
         this._taskRows.clear();
-        if (this._panelProgress)
-            this._box.remove_child(this._panelProgress);
-        this._box.destroy_all_children();
+        if (this._panelProgress) {
+            // Detaching a hovered subtree clears its highlight, even if reattached.
+            for (const child of this._box.get_children()) {
+                if (child !== this._panelProgress)
+                    child.destroy();
+            }
+        } else {
+            this._box.destroy_all_children();
+        }
         this._muteIcon = null;
         this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
         this.menu.removeAll();
@@ -1684,6 +1690,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         if (this._panelProgress.get_parent() !== this._box)
             this._box.add_child(this._panelProgress);
+        else if (this._box.get_children().at(-1) !== this._panelProgress)
+            this._box.set_child_above_sibling(this._panelProgress, null);
         const entries = (payload?.providers || []).flatMap(provider =>
             (provider.agents || []).map((agent, index) => ({provider, agent,
                 key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)})));
