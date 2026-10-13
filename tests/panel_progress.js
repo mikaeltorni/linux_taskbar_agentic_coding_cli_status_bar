@@ -71,7 +71,7 @@ class Actor {
 }
 
 const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Widget: Actor};
-const Clutter = {ActorAlign: {CENTER: 0, FILL: 1, END: 2}, BinLayout: class {}};
+const Clutter = {ActorAlign: {CENTER: 0, FILL: 1, END: 2, START: 3}, BinLayout: class {}};
 const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator',
@@ -104,7 +104,7 @@ ${snippets.join('\n')}
 const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
-    child.style_class === 'ams-panel-workspace-group' ? child.children[0].children.filter(bar => bar.style_class === 'ams-panel-progress-bar') : []);
+    child.style_class === 'ams-panel-workspace-group' ? child.children[1].children.filter(bar => bar.style_class === 'ams-panel-progress-bar') : []);
 const a = {session_id: 'a', phase: 'RUNNING', run_active: true, workflow: {available: true, fraction: 0.25}};
 const b = {session_id: 'b', phase: 'STOPPED', workflow: {available: true, fraction: 0.6}};
 const payload = {providers: [{kind: 'codex', agents: [a]}, {kind: 'claude', agents: [b]}]};
@@ -232,7 +232,7 @@ button._updatePanelProgress(grouped, false);
 check(button._panelProgress.children[0] === before, 'stable updates retain workspace groups');
 tasks[1].workspace = 2;
 button._updatePanelProgress(grouped, false);
-check(button._panelProgress.children[0].children[0].children.length === 1, 'moved agent leaves its old workspace group');
+check(button._panelProgress.children[0].children[1].children.length === 1, 'moved agent leaves its old workspace group');
 button._updatePanelProgress({providers: [{kind: 'codex', agents: [tasks[2], {...tasks[3], workspace: 1}]}]}, false);
 check(button._panelProgress.children.length === 1 && visibleBars(button._panelProgress).length === 2,
     'one workspace has no divider even across monitors');
@@ -541,7 +541,7 @@ const monitors = [
 ];
 const monitorPayload = {providers: [{kind: 'codex', agents: monitors}]};
 button._updatePanelProgress(monitorPayload, false);
-let monitorGroup = button._panelProgress.children[0].children[0];
+let monitorGroup = button._panelProgress.children[0].children[1];
 check(JSON.stringify(monitorGroup.children.map(child => child.style_class)) === JSON.stringify([
     'ams-panel-progress-bar', 'ams-panel-progress-bar', 'ams-panel-monitor-divider',
     'ams-panel-progress-bar', 'ams-panel-progress-bar']), 'teal divider only at monitor boundary');
@@ -564,27 +564,27 @@ for (const height of [12, 50, 72]) {
         'teal monitor line always remains centered at half the panel height');
 }
 button._updatePanelProgress(monitorPayload, false);
-check(button._panelProgress.children[0].children[0] === monitorGroup, 'unchanged monitor groups reuse actors');
+check(button._panelProgress.children[0].children[1] === monitorGroup, 'unchanged monitor groups reuse actors');
 monitors[2].monitor = 0;
 monitors[3].monitor = 0;
 button._updatePanelProgress(monitorPayload, false);
-monitorGroup = button._panelProgress.children[0].children[0];
+monitorGroup = button._panelProgress.children[0].children[1];
 check(monitorGroup.children.length === 4 && monitorGroup.children.every(child => child.style_class === 'ams-panel-progress-bar'),
     'moving monitors rebuilds the boundaries even when terminal IDs and workspace are unchanged');
 monitors[1].monitor = null;
 monitors[2].monitor = undefined;
 monitors[3].monitor = null;
 button._updatePanelProgress(monitorPayload, false);
-check(button._panelProgress.children[0].children[0].children.filter(child => child.style_class === 'ams-panel-monitor-divider').length === 1,
+check(button._panelProgress.children[0].children[1].children.filter(child => child.style_class === 'ams-panel-monitor-divider').length === 1,
     'unknown monitor values share one fallback group');
-check(button._panelProgress.children[2].children[0].children.length === 1, 'no boundary at a single-monitor workspace edge');
+check(button._panelProgress.children[2].children[1].children.length === 1, 'no boundary at a single-monitor workspace edge');
 check(JSON.stringify(visibleBars(button._panelProgress).map(bar => bar._amsAgent.session_id)) ===
     '["m1-a","m1-b","m3-a","m3-b","ws5"]', 'monitor boundaries keep the public terminal ID order');
 button._updatePanelProgress(null, false);
 check(button._panelProgress.children.length === 0 && button._panelProgressBars.size === 0, 'empty payload clears bars and monitor lines');
 print('PASS: half-height centered teal monitor boundaries, doubled gaps, stable refresh and monitor moves.');
 
-// Labels sit below the centered bar row, without shortening full-height boundaries.
+// Labels precede the bar row inline, without changing the boundary drawing allocation.
 const labelAgents = [
     {session_id: 'label-w8', workspace: 8, window_display_id: 1, monitor: 0},
     {session_id: 'label-w2-a', workspace: 2, window_display_id: 1, monitor: 0},
@@ -594,31 +594,31 @@ const labelAgents = [
 const labelPayload = {providers: [{kind: 'codex', agents: labelAgents}]};
 button._updatePanelProgress(labelPayload, false);
 let labelGroups = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group');
-check(JSON.stringify(labelGroups.map(group => group.children[1].text)) === '["W2","W8","W?"]',
+check(JSON.stringify(labelGroups.map(group => group.children[0].text)) === '["W2","W8","W?"]',
     'one label for each workspace, numeric order, honest unknown fallback');
 for (const group of labelGroups) {
-    check(group.layout_manager instanceof Clutter.BinLayout && !group.reactive && group.children.length === 2,
-        'workspace label overlays its bar row without changing row allocation or adding a click target');
-    const [row, label] = group.children;
+    check(group.vertical !== true && !group.reactive && group.children.length === 2,
+        'workspace label precedes its bars in a horizontal group without a click target');
+    const [label, row] = group.children;
     check(row.style_class === 'ams-panel-workspace' && row.y_expand === true && row.y_align === Clutter.ActorAlign.FILL,
         'bar row and monitor lines retain full panel height');
-    check(label.style_class === 'ams-panel-workspace-label' && label.x_align === Clutter.ActorAlign.CENTER &&
-        label.y_align === Clutter.ActorAlign.END && label.x_expand === true && label.y_expand === true && !label.reactive,
-        'small workspace label is centered below its bars');
+    check(label.style_class === 'ams-panel-workspace-label' && label.x_align === Clutter.ActorAlign.START &&
+        label.y_align === Clutter.ActorAlign.CENTER && !label.reactive,
+        'small workspace label sits inline at the left of its bars');
 }
 const retainedLabelGroup = labelGroups[0];
-const retainedLabel = retainedLabelGroup.children[1];
+const retainedLabel = retainedLabelGroup.children[0];
 button._updatePanelProgress(labelPayload, true);
-check(button._panelProgress.children[0] === retainedLabelGroup && retainedLabelGroup.children[1] === retainedLabel,
+check(button._panelProgress.children[0] === retainedLabelGroup && retainedLabelGroup.children[0] === retainedLabel,
     'progress-only and staleness refreshes retain labels and bars');
 labelAgents[1].workspace = 3;
 labelAgents[2].workspace = 3;
 button._updatePanelProgress(labelPayload, false);
 labelGroups = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group');
-check(labelGroups[0].children[1].text === 'W3', 'workspace moves update the label');
+check(labelGroups[0].children[0].text === 'W3', 'workspace moves update the label');
 button._updatePanelProgress(null, false);
 check(button._panelProgress.children.length === 0, 'empty snapshot removes labels with its bars');
-print('PASS: centered workspace labels below bars, full-height boundaries and stable refreshes.');
+print('PASS: inline workspace labels before bars, preserved boundaries and stable refreshes.');
 
 // Every rendered workspace label samples the same fixed blue-to-violet scale.
 const workspaceColors = ['#60a5fa', '#6ea0fa', '#7b9cfb', '#8997fb',
@@ -629,15 +629,33 @@ button._updatePanelProgress({providers: [{kind: 'codex', agents: gradientAgents}
 const gradientGroups = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group');
 check(gradientGroups.length === 8, 'render all eight workspace labels');
 for (const [index, group] of gradientGroups.entries()) {
-    const label = group.children[1];
+    const label = group.children[0];
     check(label.text === `W${index + 1}` && label.style === `color: ${workspaceColors[index]};`,
         'exact endpoint and intermediate gradient colors are applied to actual workspace labels');
 }
 button._updatePanelProgress({providers: [{agents: [
     {session_id: 'gradient-unknown', workspace: 0}, {session_id: 'gradient-high', workspace: 9},
 ]}]}, false);
-const edgeLabels = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group').map(group => group.children[1]);
+const edgeLabels = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group').map(group => group.children[0]);
 check(edgeLabels[0].text === 'W9' && edgeLabels[0].style === 'color: #c084fc;', 'workspace above scale keeps violet endpoint');
 check(edgeLabels[1].text === 'W?' && edgeLabels[1].style === 'color: #9a9996;', 'unknown workspace has neutral color');
 button._updatePanelProgress(null, false);
 print('PASS: W1 blue → W8 violet gradient applies to every label, with stable endpoints.');
+
+// The leading workspace label follows the existing provider/token summary.
+const tokenCounter = new Actor({text: '64/s', style_class: 'ams-rate'});
+const inlineButton = Object.assign({_box: new Actor()}, owners.updater);
+inlineButton._box.add_child(tokenCounter);
+inlineButton._updatePanelProgress({providers: [{kind: 'codex', agents: [
+    {session_id: 'inline-w2', workspace: 2, monitor: 0},
+    {session_id: 'inline-w5', workspace: 5, monitor: 0},
+]}]}, false);
+check(inlineButton._box.children[0] === tokenCounter && inlineButton._box.children[1] === inlineButton._panelProgress,
+    'workspace strip follows token counter in the real panel update path');
+const inlineGroup = inlineButton._panelProgress.children[0];
+check(inlineGroup.children[0].text === 'W2' && inlineGroup.children[1].children[0]._amsAgent.session_id === 'inline-w2',
+    'W2 is between the token counter and first bar');
+check(inlineButton._panelProgress.children[2].children[0].text === 'W5', 'later workspace labels also precede their groups');
+inlineButton._updatePanelProgress(null, false);
+check(inlineButton._box.children[0] === tokenCounter, 'removing workspaces preserves the token counter');
+print('PASS: token counter → W2 → first bar, followed by labeled workspace groups.');
