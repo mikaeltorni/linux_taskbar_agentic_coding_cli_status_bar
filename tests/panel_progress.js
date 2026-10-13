@@ -72,7 +72,7 @@ class Actor {
 
 const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Widget: Actor};
 const Clutter = {ActorAlign: {CENTER: 0, FILL: 1, END: 2, START: 3}, BinLayout: class {}};
-const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
+const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator',
     ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
@@ -97,7 +97,7 @@ ${snippets.join('\n')}
         activeTaskEstimates, longestTaskEstimate, formatPanelTaskEstimate, ageSeconds, STALE_SECONDS,
         unreadCompletionCount, saveUnreadStates, log, workspaceAttentionCounts, panelHarnessRateRows} = services;
     class Destroyer extends St.BoxLayout { ${declaration('destroy', true)} }
-    return {panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
+    return {agentPhaseBadgeColor, panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer, paintPanelWorkspaceSeparator,
         updater: {${['_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
@@ -666,3 +666,55 @@ const stylesheet = new TextDecoder().decode(stylesheetBytes);
 const workspaceLabelStyle = stylesheet.match(/\.ams-panel-workspace-label\s*\{([^}]+)\}/)?.[1] || '';
 check(/font-size:\s*13\.5px;/.test(workspaceLabelStyle), 'workspace labels grow from 9px to 13.5px');
 print('PASS: shipped workspace labels are 1.5x larger.');
+
+// Draft tracks and measured fills use the same lime as the visible DRAFT badge.
+for (const phase of ['DRAFT', ' draft ']) {
+    for (const fraction of [0, 0.25, 0.5, 1]) {
+        const draft = {session_id: 'draft-color', phase, run_active: false,
+            workflow: {available: true, fraction}};
+        check(owners.agentPhaseBadgeColor(draft, 0) === '#84c32f', 'draft menu badge retains lime');
+        for (let refresh = 0; refresh < 2; refresh++) {
+            button._updatePanelProgress({providers: [{agents: [draft]}]}, false);
+            button._applyPanelProgressPulse(1500);
+            const bar = button._panelProgressBars.get('draft-color');
+            const track = bar.draws.at(fraction > 0 ? -2 : -1);
+            const fill = bar.draws.at(-1);
+            for (const paint of [track, fill]) {
+                const rgb = paint.color.slice(0, 3).map(channel => Math.round(channel * 255));
+                check(JSON.stringify(rgb) === '[132,195,47]',
+                    `DRAFT bar matches lime menu color at fraction ${fraction}, got ${rgb}`);
+            }
+            check(track.color[3] === .22 && track.rect[2] === 50, 'draft retains faint full-width track');
+            check(fill.rect[2] === (fraction > 0 ? 50 * fraction : 50), 'draft preserves measured fill width');
+            check(fill.color[3] === (fraction > 0 ? 1 : .22), 'zero-progress draft invents no opaque fill');
+            check(bar.opacity === 255 && timers.size === 0, 'draft stays steady without running or ready pulses');
+        }
+        button._updatePanelProgress({providers: [{agents: [draft]}]}, true);
+        const staleDraft = button._panelProgressBars.get('draft-color');
+        check(staleDraft.opacity === 128 && timers.size === 0, 'stale draft keeps normal dimming');
+        check(JSON.stringify(staleDraft.draws.at(-1).color.slice(0, 3).map(channel => Math.round(channel * 255))) === '[132,195,47]',
+            'staleness retains the draft hue');
+        button._updatePanelProgress(null, false);
+        check(button._panelProgressBars.size === 0, 'draft case cleanup removes the bar');
+    }
+}
+const draftTransition = {session_id: 'draft-transition', phase: 'DRAFT', workflow: {available: true, fraction: .5}};
+button._updatePanelProgress({providers: [{agents: [draftTransition]}]}, false);
+const draftTransitionBar = button._panelProgressBars.get('draft-transition');
+for (const [phase, run_active, expected] of [
+    ['RUNNING', true, [137,133,81]], ['DRAFT', false, [132,195,47]],
+    ['DONE', false, [137,133,81]], ['DRAFT', false, [132,195,47]],
+]) {
+    Object.assign(draftTransition, {phase, run_active});
+    button._updatePanelProgress({providers: [{agents: [draftTransition]}]}, false);
+    check(button._panelProgressBars.get('draft-transition') === draftTransitionBar, 'phase changes reuse draft actor');
+    check(JSON.stringify(draftTransitionBar.draws.at(-1).color.slice(0, 3).map(channel => Math.round(channel * 255))) === JSON.stringify(expected),
+        'leaving draft restores the ordinary progress gradient');
+}
+draftTransition.workflow.available = false;
+button._updatePanelProgress({providers: [{agents: [draftTransition]}]}, false);
+check(JSON.stringify(draftTransitionBar.draws.at(-1).color.slice(0, 3).map(channel => Math.round(channel * 255))) === '[48,52,64]',
+    'unavailable draft progress retains neutral track');
+button._updatePanelProgress(null, false);
+check(timers.size === 0, 'draft transitions clean up animation');
+print('PASS: DRAFT bars match lime menu badges, retaining measured widths, alpha, stale dimming and phase transitions.');

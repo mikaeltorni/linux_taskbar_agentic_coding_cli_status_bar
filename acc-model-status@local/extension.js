@@ -923,14 +923,14 @@ function panelProgressColor(fraction, ready = false, now = Date.now(), agent = n
 }
 
 /**
- * Match provider waits and interrupted fills to the shared badge palette.
+ * Match provider waits, drafts and interrupted fills to the shared badge palette.
  * Parameters: agent - published agent state, or null for ordinary progress.
  * Returns: state RGB bytes, or null to retain the measured progress gradient.
  */
 function panelProgressStateColor(agent) {
     print(`agent=${JSON.stringify(agent)}`);
     const phase = String(agent?.phase || '').trim().toUpperCase();
-    const hex = ['RATE', 'INTERRUPTED'].includes(phase) ? PHASE_COLORS[phase] : null;
+    const hex = ['RATE', 'DRAFT', 'INTERRUPTED'].includes(phase) ? PHASE_COLORS[phase] : null;
     const result = hex ? [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) : null;
     print(result);
     return result;
