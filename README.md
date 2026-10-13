@@ -331,8 +331,11 @@ line). Windows on the same monitor keep their normal gap. Monitor moves update
 these boundaries automatically without changing terminal-number order. The outline follows window
 focus; other terminals on the same workspace stay unoutlined.
 The public render probe runs with
-`cargo test --test panel_progress` (or `gjs tests/panel_progress.js .`) using
-isolated actors without changing the desktop or user metadata.
+`cargo test --test panel_progress --test panel_interaction` (or
+`gjs tests/panel_progress.js .` and `gjs tests/panel_interaction.js .`) using
+isolated actors without changing the desktop or user metadata. These checks
+cover per-instance clicks and hover, right-click details, retained clocks,
+and the existing menu shortcut.
 
 The drop-down
 starts with per-harness tok/s, tok/min, and tok/hour for those same active
@@ -426,15 +429,19 @@ maximum.
 The extension is opt-in and unrelated to the rate-limit indicator or the CLI
 status line:
 
-Click the panel indicator or press **Alt+§** (`Alt+Above_Tab`) to open the agent
-status menu. While this extension is enabled, it temporarily takes that
+Left-click an individual agent segment, including its runtime or remaining-time
+label, to jump to that agent's terminal. Hover highlights only that instance's
+portion of the bar. Provider icons, workspace labels and gaps stay neutral.
+Right-click anywhere on the panel indicator, or press **Alt+§**
+(`Alt+Above_Tab`), to open the detailed agent status menu. While this extension is enabled, it temporarily takes that
 accelerator from GNOME's window-group switcher and restores the existing
 shortcut list when disabled or uninstalled. Every displayed live agent with a
 window identity is clickable, including running and already-opened agents;
 selecting one focuses its matching terminal and
 moves the pointer to that window through ACC's shared selector,
-`acc-window-select --note-id`.
-Green highlighting marks finished-but-unopened work, not click eligibility.
+`acc-window-select --note-id NOTE_ID`. Segments without a linked note identity
+remain inactive.
+Green highlighting marks finished-but-unopened work.
 Super+§ still cycles only through unopened completions.
 Configured GNOME Shell shortcuts, including workspace switching, continue
 to work while the menu is open. Its rows and panel layout remain a stable
