@@ -1065,7 +1065,7 @@ function buildPanelTaskProgress(agent) {
 }
 
 /**
- * Draw a dotted grey workspace boundary vertically through the panel row.
+ * Draw larger round grey workspace dots through the full allocated panel height.
  * Parameters: area - divider DrawingArea with its current allocated size.
  * Returns: undefined after releasing the Cairo drawing context.
  */
@@ -1074,8 +1074,9 @@ function paintPanelWorkspaceSeparator(area) {
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
     context.setSourceRGBA(0.63, 0.63, 0.63, 0.55);
-    context.setLineWidth(1);
-    context.setDash([1, 3], 0);
+    context.setLineWidth(2);
+    context.setLineCap(Cairo.LineCap.ROUND);
+    context.setDash([0, 6], 0);
     context.moveTo(width / 2, 0);
     context.lineTo(width / 2, height);
     context.stroke();
@@ -1084,17 +1085,18 @@ function paintPanelWorkspaceSeparator(area) {
 }
 
 /**
- * Build an inert vertical dotted separator between workspace progress groups.
+ * Build an inert full-height dotted separator between workspace progress groups.
  * Parameters: none.
- * Returns: a compact DrawingArea with no label or added interaction.
+ * Returns: a full-height DrawingArea with no label or added interaction.
  */
 function buildPanelWorkspaceSeparator() {
     print('parameters=none');
     const area = new St.DrawingArea({
         style_class: 'ams-panel-workspace-divider',
-        width: 6, height: 16,
+        width: 6,
         reactive: false,
-        y_align: Clutter.ActorAlign.CENTER,
+        y_expand: true,
+        y_align: Clutter.ActorAlign.FILL,
     });
     area.connect('repaint', paintPanelWorkspaceSeparator);
     print(area);

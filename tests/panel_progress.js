@@ -61,6 +61,7 @@ class Actor {
         rectangle: (...rect) => this.draws.push({rect, color: this.color}),
         fill: () => {}, $dispose: () => {},
         setLineWidth: width => { this.lineWidth = width; },
+        setLineCap: cap => { this.lineCap = cap; },
         setOperator: operator => { this.operator = operator; },
         setDash: (dash, offset) => { this.dash = dash; },
         moveTo: (...point) => { this.start = point; },
@@ -211,9 +212,13 @@ check(visibleBars(button._panelProgress).every(bar => bar.width === 52 && !bar.t
     'bars add no labels, percentages as text, or extra click targets');
 const dividers = children.filter(child => child.style_class === 'ams-panel-workspace-divider');
 for (const divider of dividers) {
+    check(divider.height === undefined && divider.y_expand === true && divider.y_align === Clutter.ActorAlign.FILL,
+        'workspace divider stretches through the full panel instead of stopping at sixteen pixels');
+    divider.height = 48;
     divider.queue_repaint();
-    check(JSON.stringify(divider.dash) === '[1,3]', 'dotted divider');
-    check(divider.start[0] === divider.end[0] && divider.end[1] === divider.height && divider.height === 16,
+    check(JSON.stringify(divider.dash) === '[0,6]' && divider.lineWidth === 2 && divider.lineCap === imports.cairo.LineCap.ROUND,
+        'larger round workspace dots stay visually distinct from solid monitor lines');
+    check(divider.start[0] === divider.end[0] && divider.end[1] === divider.height && divider.height === 48,
         'divider follows the vertical axis across its height');
 }
 const before = groups[0];
