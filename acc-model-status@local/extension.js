@@ -1642,9 +1642,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             for (const [index, group] of groups.entries()) {
                 if (index > 0)
                     this._panelProgress.add_child(buildPanelWorkspaceSeparator());
-                const groupActor = new St.Widget({
+                const groupActor = new St.BoxLayout({
                     style_class: 'ams-panel-workspace-group',
-                    layout_manager: new Clutter.BinLayout(),
                     reactive: false,
                 });
                 groupActor._amsWorkspace = group.workspace;
@@ -1660,18 +1659,16 @@ class AccModelStatusButton extends PanelMenu.Button {
                     this._panelProgressBars.set(entry.key, bar);
                     box.add_child(bar);
                 }
-                groupActor.add_child(box);
                 const label = new St.Label({
                     style_class: 'ams-panel-workspace-label',
                     style: `color: ${panelWorkspaceColor(group.workspace)};`,
                     text: group.workspace > 0 ? `W${group.workspace}` : 'W?',
-                    x_expand: true,
-                    y_expand: true,
-                    x_align: Clutter.ActorAlign.CENTER,
-                    y_align: Clutter.ActorAlign.END,
+                    x_align: Clutter.ActorAlign.START,
+                    y_align: Clutter.ActorAlign.CENTER,
                     reactive: false,
                 });
                 groupActor.add_child(label);
+                groupActor.add_child(box);
                 this._panelProgress.add_child(groupActor);
             }
             this._panelProgressKey = key;
