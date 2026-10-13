@@ -5,7 +5,7 @@ const [, bytes] = Gio.File.new_for_path(`${root}/acc-model-status@local/extensio
 const source = new TextDecoder().decode(bytes).replace(/^import .*;\n/gm, '')
     .replace('export default class', 'class');
 const Clutter = {EVENT_STOP: 1, EVENT_PROPAGATE: 0,
-    EventType: {BUTTON_PRESS: 1, BUTTON_RELEASE: 2, TOUCH_BEGIN: 3, KEY_PRESS: 4, SCROLL: 5}};
+    EventType: {BUTTON_PRESS: 1, BUTTON_RELEASE: 2, TOUCH_BEGIN: 3, KEY_PRESS: 4, SCROLL: 5, LEAVE: 6}};
 class NativePanelButton {
     /** Initialize native parent defaults without desktop effects.
      * Parameters: this - isolated panel button; alignment - native menu alignment; name - accessible menu name.
@@ -80,3 +80,10 @@ check(localHoverRule && /background-color:\s*rgba\(/.test(localHoverRule[1]), 'h
 check(!/\.ams-panel-progress:hover|\.ams-panel-workspace:hover|\.ams-box:hover/.test(css),
     'hover styling does not cover neighboring instances or workspace labels');
 print('PASS: actual panel initialization disables aggregate hover/active paint and CSS highlights only task cells.');
+
+let leaveRefreshes = 0;
+button._queueRefresh = () => { leaveRefreshes++; };
+check(button.vfunc_event(event(Clutter.EventType.LEAVE)) === Clutter.EVENT_PROPAGATE && leaveRefreshes === 1,
+    'pointer leave queues deferred summary updates without consuming the hover transition');
+check(!menuOpen && toggles === 2, 'pointer leave cannot open or close detailed menu');
+print('PASS: pointer leave refreshes deferred summaries while preserving menu and native propagation.');
