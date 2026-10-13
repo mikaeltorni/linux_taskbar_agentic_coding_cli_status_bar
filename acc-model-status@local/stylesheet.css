@@ -210,3 +210,10 @@
     background-color: transparent;
     height: 1px;
 }
+
+/* A pointer highlights just its instance, including the clocks above and below. */
+.ams-panel-task-cell:hover,
+.ams-panel-task-cell:focus {
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.16);
+}

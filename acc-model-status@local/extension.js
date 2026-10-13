@@ -1128,7 +1128,7 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
  * Stack runtime, a retained progress bar and a forecast in the allocated panel height.
  * Parameters: agent - scoped open-window agent whose bar and timing are displayed;
  * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering.
- * Returns: a fixed-width instance click target with its bar, lower estimate and upper runtime label.
+ * Returns: a fixed-width instance click and hover target with its bar, lower estimate and upper runtime label.
  */
 function buildPanelTaskCell(agent, focusAgent = null) {
     print(`agent=${JSON.stringify(agent)} focusAgent=${focusAgent}`);
@@ -1141,6 +1141,7 @@ function buildPanelTaskCell(agent, focusAgent = null) {
         clip_to_allocation: true,
         reactive: Boolean(focusAgent && String(agent.note_id || '').trim()),
         can_focus: Boolean(focusAgent && String(agent.note_id || '').trim()),
+        track_hover: Boolean(focusAgent && String(agent.note_id || '').trim()),
     });
     const bar = buildPanelTaskProgress(agent);
     const estimate = new St.Label({
@@ -1406,6 +1407,9 @@ class AccModelStatusButton extends PanelMenu.Button {
     _init(extension) {
         print(`this=${this} extension=${extension}`);
         super._init(0.5, 'ACC Model Status');
+        this.track_hover = false;
+        // Native panel hover and open-menu styles must not paint every instance.
+        this.style = 'background-color: transparent; box-shadow: none;';
         this._iconsDir = extension.dir.get_child('icons');
         this._file = payloadFile();
         this._unreadFile = this._file.get_parent().get_child(UNREAD_FILENAME);
@@ -1736,6 +1740,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             const cell = bar.get_parent();
             cell.reactive = Boolean(String(entry.agent.note_id || '').trim());
             cell.can_focus = cell.reactive;
+            cell.track_hover = cell.reactive;
             const estimate = bar._amsEstimateLabel;
             estimate.text = panelAgentEstimateText(entry.agent);
             estimate.visible = Boolean(estimate.text);

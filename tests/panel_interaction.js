@@ -7,6 +7,19 @@ const source = new TextDecoder().decode(bytes).replace(/^import .*;\n/gm, '')
 const Clutter = {EVENT_STOP: 1, EVENT_PROPAGATE: 0,
     EventType: {BUTTON_PRESS: 1, BUTTON_RELEASE: 2, TOUCH_BEGIN: 3, KEY_PRESS: 4, SCROLL: 5}};
 class NativePanelButton {
+    /** Initialize native parent defaults without desktop effects.
+     * Parameters: this - isolated panel button; alignment - native menu alignment; name - accessible menu name.
+     * Returns: undefined after installing the simulated native hover/menu properties.
+     */
+    _init(alignment, name) {
+        print(`this=${this} alignment=${alignment} name=${name}`);
+        this.track_hover = true;
+        this.style = '';
+        this.menu = {connect: () => 1};
+        print(undefined);
+    }
+    add_child = child => { this.child = child; };
+
     /** Match GNOME PanelMenu.Button's existing pointer dispatch for the baseline.
      * Parameters: this - isolated panel button; event - incoming Clutter event.
      * Returns: the native event propagation value.
@@ -20,10 +33,12 @@ class NativePanelButton {
         return Clutter.EVENT_PROPAGATE;
     }
 }
-const makeButton = new Function('Clutter', 'GObject', 'PanelMenu', 'Extension', 'print',
-    `${source}\nreturn AccModelStatusButton;`);
+const makeButton = new Function('Clutter', 'GObject', 'PanelMenu', 'Extension', 'print', 'Main', 'St', 'file',
+    `${source}\npayloadFile = () => file; readUnreadStates = () => new Map(); return AccModelStatusButton;`);
 const Button = makeButton(Clutter, {registerClass: value => value},
-    {Button: NativePanelButton}, class {}, print);
+    {Button: NativePanelButton}, class {}, print,
+    {panel: {menuManager: {_grabParams: {actionMode: 1}}}},
+    {BoxLayout: class {}}, {get_parent: () => ({get_child: () => ({})})});
 const button = new Button();
 let menuOpen = false;
 let toggles = 0;
@@ -48,3 +63,20 @@ check(!menuOpen && toggles === 2, 'second right-click closes the same details me
 button.vfunc_event(event(Clutter.EventType.TOUCH_BEGIN));
 check(!menuOpen && toggles === 2, 'touch on the enclosing panel does not open details');
 print('PASS: right-click details, left/middle/extra-button rejection, toggle and unrelated-event propagation.');
+
+// Run the real initialization owner so whole-panel hover cannot be hidden by a CSS-only assertion.
+const hoverButton = new Button();
+hoverButton._startWatching = () => {};
+hoverButton._startWindowWatching = () => {};
+hoverButton._refresh = () => {};
+hoverButton._init({dir: {get_child: () => ({})}});
+check(hoverButton.track_hover === false, 'enclosing panel never tracks whole-bar hover');
+check(hoverButton.style.includes('background-color: transparent') && hoverButton.style.includes('box-shadow: none'),
+    'native active/focus/menu theme cannot highlight the entire indicator');
+const [, cssBytes] = Gio.File.new_for_path(`${root}/acc-model-status@local/stylesheet.css`).load_contents(null);
+const css = new TextDecoder().decode(cssBytes);
+const localHoverRule = css.match(/\.ams-panel-task-cell:hover[^{]*\{([^}]+)\}/);
+check(localHoverRule && /background-color:\s*rgba\(/.test(localHoverRule[1]), 'hover background is scoped to the individual instance cell');
+check(!/\.ams-panel-progress:hover|\.ams-panel-workspace:hover|\.ams-box:hover/.test(css),
+    'hover styling does not cover neighboring instances or workspace labels');
+print('PASS: actual panel initialization disables aggregate hover/active paint and CSS highlights only task cells.');
