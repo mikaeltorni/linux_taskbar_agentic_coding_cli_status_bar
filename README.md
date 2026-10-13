@@ -288,13 +288,8 @@ window is 0). Each open agent also gets a **50px progress bar** beside those
 counts and rates. Its fill shows ACC's actual workflow completion percentage,
 with a continuous red-to-green gradient for ordinary and goal runs: red at
 0%, green at 100%, and intermediate colors based on measured completion.
-Active goal bars retain this gradient
-and add a **three-pixel purple bottom stripe** (`#a855f7`, matching the goal timer)
-instead of a solid purple fill. The stripe extends upward inside the existing
-box, reduced from the previous 4px marker without changing the box size or alpha.
-It overlays the bottom of the 50×8 progress fill; the remaining fill retains
-the measured red-to-green gradient. A focused goal
-keeps its teal top and side edges with purple along the bottom. A
+Active goal bars retain this gradient. Goal identity appears in the purple
+runtime above the bar. Focused bars keep their existing teal outline. A
 rate-limited agent uses the Notes RATE pink/purple (`#f472b6`), also used by
 its menu badge. A DRAFT agent uses lime green (`#84c32f`), matching its menu
 badge, for both its track and measured fill. At 0% it shows only the faint
@@ -313,8 +308,7 @@ intermediate workspace interpolated on the same scale. Higher workspace
 numbers keep the W8 color; unknown workspaces show neutral `W?`. While a turn is actively running, its bar
 smoothly pulses from 100% opacity to 30% and back every three seconds, matching
 the terminal indicator. For active goals, only the progress fill and track pulse;
-the purple bottom stripe stays steady at its existing opacity, as do the teal
-focus edges. Stale goal bars still use the usual dimmed appearance. A finished, unopened instance keeps full opacity while
+the runtime text and teal focus edges stay steady. Stale goal bars still use the usual dimmed appearance. A finished, unopened instance keeps full opacity while
 its green fill smoothly turns white and back over the same three-second cycle.
 Ready bars stay at least as bright as their original green rather than fading.
 Other idle bars stay steady; stale snapshots stay dimmed.
@@ -386,11 +380,13 @@ payloads lacking the confirmed field still use phase transitions.
 
 Each agent's bar has small timing labels centered above and below its fill.
 The upper label shows runtime as `HH:MM` (hours and whole minutes, without
-seconds). It ticks from the current run's start while the agent is running.
-After completion it shows ACC's recorded active task duration, so the final
-runtime remains fixed and survives a Shell reload. Older payloads with both
-run-start and completion timestamps can also provide the final duration;
-unknown runtime is omitted.
+seconds) in 13.5px text, 1.5 times its original size. It appears only while the
+agent is actively running, using the current run's start or ACC's published
+active-duration measurement when the start is unavailable. It clears as soon
+as the run stops or finishes, including after a reload. Unknown timing is
+omitted. Regular runtime text is yellow (`#e6c200`); active goal runtime text
+is purple (`#a855f7`). Timer colors update when goal state changes and stay
+steady while the progress fill pulses.
 
 The lower label shows that running agent's own remaining estimate, such as
 `~3m` or `~1h 1m`. It disappears when the agent stops running or no estimate is
