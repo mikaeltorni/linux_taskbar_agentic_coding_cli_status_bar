@@ -659,3 +659,10 @@ check(inlineButton._panelProgress.children[2].children[0].text === 'W5', 'later 
 inlineButton._updatePanelProgress(null, false);
 check(inlineButton._box.children[0] === tokenCounter, 'removing workspaces preserves the token counter');
 print('PASS: token counter → W2 → first bar, followed by labeled workspace groups.');
+
+// The shipped workspace typography is exactly 1.5 times its previous nine pixels.
+const [, stylesheetBytes] = Gio.File.new_for_path(`${root}/acc-model-status@local/stylesheet.css`).load_contents(null);
+const stylesheet = new TextDecoder().decode(stylesheetBytes);
+const workspaceLabelStyle = stylesheet.match(/\.ams-panel-workspace-label\s*\{([^}]+)\}/)?.[1] || '';
+check(/font-size:\s*13\.5px;/.test(workspaceLabelStyle), 'workspace labels grow from 9px to 13.5px');
+print('PASS: shipped workspace labels are 1.5x larger.');
