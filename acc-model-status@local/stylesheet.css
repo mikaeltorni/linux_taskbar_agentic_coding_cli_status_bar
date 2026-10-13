@@ -189,13 +189,6 @@
 /* Remaining agent work, aligned at the end of the task row. */
 .ams-agent-estimate { color: #c4c7cf; margin-left: 12px; }
 
-/* Longest available remaining work, after all instance and attention chips. */
-.ams-panel-estimate {
-  color: #c4c7cf;
-  margin-left: 8px;
-  margin-right: 3px;
-}
-
 /* Native separator side margins, with a compact five-pixel total height. */
 .ams-monitor-separator {
     padding-top: 2px;

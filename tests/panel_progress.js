@@ -44,6 +44,8 @@ class Actor {
     remove_child = child => { child._parent = null; this.children = this.children.filter(item => item !== child); };
     get_parent = () => this._parent || null;
     get_children = () => this.children;
+    add_style_class_name = name => { this.styles = [...(this.styles || []), name]; };
+    remove_style_class_name = name => { this.styles = (this.styles || []).filter(style => style !== name); };
     destroy_all_children = () => { this.children.forEach(child => child.destroy()); this.children = []; };
     /** Destroy the isolated mock actor.
      * Parameters: this - mock actor receiver.
@@ -89,19 +91,19 @@ const GLib = {PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true,
 let snapshot = null;
 const services = {readPayload: () => snapshot, scopePayloadToWindows: value => value,
     withWindowDisplayIds: value => value, readWindowDisplayIds: () => new Map(),
-    activeTaskEstimates: () => [], longestTaskEstimate: () => ({}), formatPanelTaskEstimate: () => '',
     ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
     saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [{workspace: 5, count: 1, current: false, label: 'W5:1'}], panelHarnessRateRows: () => [],
 };
 const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
 ${snippets.join('\n')}
     const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
-        activeTaskEstimates, longestTaskEstimate, formatPanelTaskEstimate, ageSeconds, STALE_SECONDS,
+        ageSeconds, STALE_SECONDS,
         unreadCompletionCount, saveUnreadStates, log, workspaceAttentionCounts, panelHarnessRateRows} = services;
     class Destroyer extends St.BoxLayout { ${declaration('destroy', true)} }
     return {agentPhaseBadgeColor, panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer, paintPanelWorkspaceSeparator,
         updater: {${['_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
+            ...(source.includes('\n    _updatePanelTaskEstimate(') ? ['_updatePanelTaskEstimate'] : []),
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
 const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo);
 const check = (condition, message) => { if (!condition) throw Error(message); };
@@ -245,7 +247,7 @@ Object.assign(button, {_file: {get_parent: () => ({get_child: () => ({})})},
     menu: {isOpen: false, removeAll: () => {}},
     _openWindowDescriptors: () => [], _syncMuteIndicator: () => {}, _renderHarnessRates: () => {},
     _renderProvider: () => {}, _renderPanelHarnessRates: () => {},
-    _renderMenu: () => {}, _updatePanelTaskEstimate: () => {}, _syncGlowTimer: () => {}, _syncRunClockTimer: () => {},
+    _renderMenu: () => {}, _renderEmpty: () => {}, _syncGlowTimer: () => {}, _syncRunClockTimer: () => {},
 });
 snapshot = payload;
 button._refresh();
@@ -799,3 +801,21 @@ check(JSON.stringify(draftTransitionBar.draws.at(-1).color.slice(0, 3).map(chann
 button._updatePanelProgress(null, false);
 check(timers.size === 0, 'draft transitions clean up animation');
 print('PASS: DRAFT bars match lime menu badges, retaining measured widths, alpha, stale dimming and phase transitions.');
+// No aggregate estimate actor remains at the right, including hidden or empty states.
+snapshot = estimatePayload;
+button.menu.isOpen = false;
+button._refresh();
+check(button._box.children.every(child => child.style_class !== 'ams-panel-estimate'), 'far-right aggregate estimate actor is completely removed');
+const localEstimateCell = button._panelProgress.children[0].children[1].children[0];
+check(localEstimateCell.children[1].text === '~3m', 'removing aggregate keeps the running agent estimate');
+for (const isOpen of [true, false]) {
+    button.menu.isOpen = isOpen;
+    for (const value of [estimatePayload, null, {providers: []}, estimatePayload]) {
+        snapshot = value;
+        button._refresh();
+        check(button._box.children.every(child => child.style_class !== 'ams-panel-estimate'),
+            'open/closed menu and missing/empty/recovered payload never recreate trailing estimate');
+    }
+}
+check(visibleBars(button._panelProgress).some(bar => bar._amsEstimateLabel.text === '~3m'), 'own-agent forecasts survive refresh and recovery');
+print('PASS: trailing estimate removed in every refresh state; per-bar forecast remains.');
