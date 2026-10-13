@@ -1051,6 +1051,7 @@ button._renderProvider = provider => button._box.add_child(new Actor({
     style_class: 'ams-segment', text: String(provider.running || 0), reactive: false}));
 button._renderPanelHarnessRates = () => button._box.add_child(new Actor({
     style_class: 'ams-rate', text: '64/s', reactive: false}));
+button._renderMenu = payload => { button.lastMenuPayload = payload; };
 snapshot = selectionPayload;
 button.menu.isOpen = false;
 button._refresh();
@@ -1058,12 +1059,16 @@ const steadyStrip = button._panelProgress;
 const steadyCell = selectionCell('select-a');
 const initialDetachments = steadyCell.stageDetachments || 0;
 const initialRestackings = steadyStrip.restackings || 0;
+const steadySummaries = button._box.get_children().filter(child => child !== steadyStrip);
 for (let motion = 0; motion < 20; motion++) {
     steadyCell.hover = true;
     snapshot = {...selectionPayload, providers: [{kind: 'codex', running: motion % 3,
         agents: selectionAgents.map(agent => ({...agent, workflow: {fraction: motion / 20}}))}]};
     button._refresh();
     check(steadyCell.hover === true, 'public status refresh must not interrupt pointer hover');
+    check(steadySummaries.every(child => !child.destroyed && child.get_parent() === button._box),
+        'hover refresh must preserve surrounding summary actors and their allocations');
+    check(button.lastMenuPayload === snapshot, 'hover keeps detailed-menu data current');
     check((steadyStrip.restackings || 0) === initialRestackings,
         'hovered instance strip must not be restacked during summary refresh');
     check((steadyCell.stageDetachments || 0) === initialDetachments && steadyStrip.get_parent() === button._box,
@@ -1076,6 +1081,11 @@ for (let motion = 0; motion < 20; motion++) {
         'retained hover never freezes live task updates');
     check(!selectionCell('select-b').hover, 'neighbor remains unhighlighted during pointer movement');
 }
+steadyCell.hover = false;
+button._refresh();
+check(steadySummaries.every(child => child.destroyed) && button._box.children[0].text === '1',
+    'leaving the instance applies the latest deferred provider counts');
+steadyCell.hover = true;
 const steadySelections = selectedNotes.length;
 steadyCell['button-press-event'](steadyCell, {get_button: () => 1});
 check(selectedNotes.length === steadySelections + 1 && selectedNotes.at(-1) === 'note-a',

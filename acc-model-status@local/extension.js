@@ -1451,6 +1451,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             result = Clutter.EVENT_STOP;
         } else if (type === Clutter.EventType.TOUCH_BEGIN) {
             result = Clutter.EVENT_STOP;
+        } else if (type === Clutter.EventType.LEAVE) {
+            this._queueRefresh();
         }
         print(result);
         return result;
@@ -1597,7 +1599,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Refresh attached panel cells and repaint closed menus without interrupting hover.
+     * Update tasks and menus while preserving the hovered panel allocation.
      * Parameters: this - model-status button whose panel and menu are refreshed.
      * Returns: undefined.
      */
@@ -1627,18 +1629,22 @@ class AccModelStatusButton extends PanelMenu.Button {
             print(undefined);
             return;
         }
+        const hovering = Boolean(payload?.providers.length) && [...(this._panelProgressBars?.values() || [])]
+            .some(bar => bar.get_parent().hover);
         this._taskRows.clear();
-        if (this._panelProgress) {
-            // Detaching a hovered subtree clears its highlight, even if reattached.
-            for (const child of this._box.get_children()) {
-                if (child !== this._panelProgress)
-                    child.destroy();
+        if (!hovering) {
+            if (this._panelProgress) {
+                // Detaching a hovered subtree clears its highlight, even if reattached.
+                for (const child of this._box.get_children()) {
+                    if (child !== this._panelProgress)
+                        child.destroy();
+                }
+            } else {
+                this._box.destroy_all_children();
             }
-        } else {
-            this._box.destroy_all_children();
+            this._muteIcon = null;
+            this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
         }
-        this._muteIcon = null;
-        this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
         this.menu.removeAll();
         // Run clocks are re-collected on every repaint; never keep stale ones.
         this._runClockActors = [];
@@ -1666,9 +1672,11 @@ class AccModelStatusButton extends PanelMenu.Button {
         const shownKinds = new Set();
         for (const provider of payload.providers) {
             shownKinds.add(provider.kind);
-            this._renderProvider(provider, stale, payload);
+            if (!hovering)
+                this._renderProvider(provider, stale, payload);
         }
-        this._renderPanelHarnessRates(payload, stale, shownKinds);
+        if (!hovering)
+            this._renderPanelHarnessRates(payload, stale, shownKinds);
         this._updatePanelProgress(payload, stale);
         this._renderMenu(payload, stale, attention);
         this._syncRunClockTimer();
