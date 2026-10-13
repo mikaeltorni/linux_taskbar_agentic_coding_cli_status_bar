@@ -739,23 +739,101 @@ fn rate_limit_line() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?i)\blimit\b[^\n]*\d+\s*%").unwrap())
 }
 
+/// Text the Codex TUI shows while its ChatGPT login is missing or underway.
+///
+/// On these screens Enter starts a browser login and Escape cancels the
+/// pending one, so the console must not be typed into.
+const CODEX_SIGN_IN_MARKERS: &[&str] = &[
+    "Sign in with ChatGPT",
+    "Sign in with Device Code",
+    "Finish signing in via your browser",
+    "open the following link to authenticate",
+];
+
+/// Return whether a Codex pane shows the ChatGPT sign-in flow.
+///
+/// Parameters: text - captured pane text.
+/// Returns: true when the pane is on a sign-in or login-in-progress screen.
+pub fn codex_pane_needs_login(text: &str) -> bool {
+    println!("text={text:?}");
+    let needs_login = CODEX_SIGN_IN_MARKERS
+        .iter()
+        .any(|marker| text.contains(marker));
+    println!("{needs_login}");
+    needs_login
+}
+
+/// Return whether a captured Codex pane can safely receive slash commands.
+///
+/// A blank pane has not drawn yet; keys sent then reach whichever screen
+/// appears first, which for a signed-out account is the sign-in screen.
+///
+/// Parameters: window - console window name; text - captured pane text.
+/// Returns: true when the pane shows a drawn, signed-in Codex TUI.
+fn codex_pane_accepts_keys(window: &str, text: &str) -> bool {
+    println!("window={window} text={text:?}");
+    let accepts = if text.trim().is_empty() {
+        logging::debug(format!("Codex debug console {window} has not drawn yet; not typing"));
+        false
+    } else if codex_pane_needs_login(text) {
+        note_codex_sign_in_screen(window, true);
+        false
+    } else {
+        note_codex_sign_in_screen(window, false);
+        true
+    };
+    println!("{accepts}");
+    accepts
+}
+
+/// Log once per sign-in episode that a Codex console is left untouched.
+///
+/// Parameters: window - console window name; on_sign_in - whether the pane
+///     currently shows the sign-in flow.
+/// Returns: None.
+fn note_codex_sign_in_screen(window: &str, on_sign_in: bool) {
+    println!("window={window} on_sign_in={on_sign_in}");
+    static SIGNED_OUT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let mut seen = SIGNED_OUT
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if !on_sign_in {
+        seen.remove(window);
+    } else if seen.insert(window.to_string()) {
+        logging::info(format!(
+            "Codex debug console {window} shows the ChatGPT sign-in screen; not typing into it"
+        ));
+    }
+    println!("None");
+}
+
+/// Run `/status` until its rate-limit lines render.
+///
+/// Parameters: tmux - runner; target - `session:window`; sleeper - delay hook.
+/// Returns: the last capture, or None when nothing was captured. A capture
+///     showing the sign-in flow ends the retries so no further Enter is sent.
 fn capture_codex_status(
     tmux: &dyn TmuxRunner,
     target: &str,
     sleeper: &dyn Fn(f64),
 ) -> Option<String> {
+    println!("tmux=TmuxRunner target={target} sleeper=Fn");
     let mut captured = None;
     for _ in 0..CODEX_STATUS_ATTEMPTS {
         if !send_slash(tmux, target, "/status", sleeper) {
-            return captured;
+            break;
         }
         sleeper(CAPTURE_DELAY_SECONDS);
         captured = capture_pane(tmux, target);
-        let text = captured.as_deref()?;
-        if rate_limit_line().is_match(text) {
+        let Some(text) = captured.as_deref() else {
+            break;
+        };
+        if rate_limit_line().is_match(text) || codex_pane_needs_login(text) {
             break;
         }
     }
+    println!("{captured:?}");
     captured
 }
 
@@ -763,7 +841,12 @@ fn capture_codex_status(
 ///
 /// `window` names the console to drive; it differs from `cli_id` for the extra
 /// Codex accounts, which each own a `codex-<id>` window running their own
-/// `CODEX_HOME`.
+/// `CODEX_HOME`. A Codex console is captured before any key is sent and left
+/// untouched while blank or on the ChatGPT sign-in flow.
+///
+/// Parameters: session - console session; cli_id - CLI being polled;
+///     window - console window; sleeper - delay hook; tmux - runner.
+/// Returns: the captured pane text, or None when nothing could be read.
 pub fn refresh_and_capture(
     session: &str,
     cli_id: &str,
@@ -771,24 +854,66 @@ pub fn refresh_and_capture(
     sleeper: &dyn Fn(f64),
     tmux: &dyn TmuxRunner,
 ) -> Option<String> {
+    println!("session={session} cli_id={cli_id} window={window} sleeper=Fn tmux=TmuxRunner");
     let target = format!("{session}:{window}");
-    let command = slash_command(cli_id)?;
-    let sent = if cli_id == "codex" {
-        send_codex_usage_menu(tmux, &target, sleeper)
+    let captured = capture_cli_rate_limits(&target, cli_id, window, sleeper, tmux);
+    println!("{captured:?}");
+    captured
+}
+
+/// Drive one console's rate-limit commands; see [`refresh_and_capture`].
+///
+/// Parameters: target - `session:window`; cli_id - CLI being polled;
+///     window - console window; sleeper - delay hook; tmux - runner.
+/// Returns: the captured pane text, or None when nothing could be read.
+fn capture_cli_rate_limits(
+    target: &str,
+    cli_id: &str,
+    window: &str,
+    sleeper: &dyn Fn(f64),
+    tmux: &dyn TmuxRunner,
+) -> Option<String> {
+    println!("target={target} cli_id={cli_id} window={window} sleeper=Fn tmux=TmuxRunner");
+    let Some(command) = slash_command(cli_id) else {
+        println!("None");
+        return None;
+    };
+    let is_codex = cli_id == "codex";
+    if is_codex
+        && !capture_pane(tmux, target).is_some_and(|before| codex_pane_accepts_keys(window, &before))
+    {
+        println!("None");
+        return None;
+    }
+    let sent = if is_codex {
+        send_codex_usage_menu(tmux, target, sleeper)
     } else {
-        send_slash(tmux, &target, command, sleeper)
+        send_slash(tmux, target, command, sleeper)
     };
     if !sent {
+        println!("None");
         return None;
     }
     sleeper(CAPTURE_DELAY_SECONDS);
-    let mut text = capture_pane(tmux, &target)?;
-    if cli_id == "codex" {
-        if let Some(status_text) = capture_codex_status(tmux, &target, sleeper) {
+    let Some(mut text) = capture_pane(tmux, target) else {
+        println!("None");
+        return None;
+    };
+    if is_codex {
+        if !codex_pane_accepts_keys(window, &text) {
+            println!("None");
+            return None;
+        }
+        if let Some(status_text) = capture_codex_status(tmux, target, sleeper) {
+            if !codex_pane_accepts_keys(window, &status_text) {
+                println!("None");
+                return None;
+            }
             text = format!("{}\n{status_text}", text.trim_end());
         }
     }
-    let _ = tmux.run(&["send-keys".into(), "-t".into(), target, "Escape".into()]);
+    let _ = tmux.run(&["send-keys".into(), "-t".into(), target.into(), "Escape".into()]);
+    println!("{text:?}");
     Some(text)
 }
 
@@ -1056,12 +1181,148 @@ mod tests {
             .collect()
     }
 
+    const CODEX_READY_PANE: &str = "› Ask Codex to do anything\n  ? for shortcuts\n";
+
+    const CODEX_SIGN_IN_PANE: &str = "  Welcome to Codex, OpenAI's command-line coding agent\n\
+        \n  Sign in with ChatGPT to use Codex as part of your paid plan\n\
+        > 1. Sign in with ChatGPT\n  2. Sign in with Device Code\n\
+        \n  3. Provide your own API key\n  Press enter to continue\n";
+
+    const CODEX_LOGIN_IN_PROGRESS_PANE: &str = "  Finish signing in via your browser\n\
+        \n  If the link doesn't open automatically, open the following link to authenticate:\n\
+        \n  https://auth.openai.com/oauth/authorize?client_id=app\n";
+
+    /// Build a fake tmux whose capture-pane calls return `captures` in order.
+    ///
+    /// Parameters: captures - pane texts returned by successive captures.
+    /// Returns: the fake runner.
+    fn fake_with_captures(captures: &[&str]) -> FakeTmux {
+        println!("captures={captures:?}");
+        let fake = FakeTmux {
+            calls: Mutex::new(Vec::new()),
+            has_session: true,
+            captures: Mutex::new(captures.iter().map(|text| (*text).to_string()).collect()),
+            codex_home_env: None,
+        };
+        println!("FakeTmux(captures={})", captures.len());
+        fake
+    }
+
+    /// Return every send-keys call the fake runner recorded.
+    ///
+    /// Parameters: tmux - fake runner after the capture under test.
+    /// Returns: the recorded send-keys argument lists.
+    fn send_keys_calls(tmux: &FakeTmux) -> Vec<Vec<String>> {
+        println!("tmux=FakeTmux");
+        let calls: Vec<Vec<String>> = tmux
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.first().map(String::as_str) == Some("send-keys"))
+            .cloned()
+            .collect();
+        println!("{calls:?}");
+        calls
+    }
+
+    /// A Codex console on the ChatGPT sign-in screen receives no keys.
+    ///
+    /// Enter would choose "Sign in with ChatGPT" and open a browser tab, and the
+    /// next Escape would cancel that login's localhost callback.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn codex_sign_in_screen_receives_no_keys() {
+        println!("parameters=none");
+        let tmux = fake_with_captures(&[CODEX_SIGN_IN_PANE]);
+        let text = refresh_and_capture("acs", "codex", "codex-3", &noop_sleep, &tmux);
+        assert!(text.is_none(), "a sign-in screen has no rate limits to report");
+        assert_eq!(send_keys_calls(&tmux), Vec::<Vec<String>>::new());
+        println!("None");
+    }
+
+    /// A Codex console waiting on a browser login receives no keys.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn codex_login_in_progress_receives_no_keys() {
+        println!("parameters=none");
+        let tmux = fake_with_captures(&[CODEX_LOGIN_IN_PROGRESS_PANE]);
+        let text = refresh_and_capture("acs", "codex", "codex-3", &noop_sleep, &tmux);
+        assert!(text.is_none());
+        assert_eq!(send_keys_calls(&tmux), Vec::<Vec<String>>::new());
+        println!("None");
+    }
+
+    /// A Codex console that has not rendered anything yet receives no keys.
+    ///
+    /// Keys typed before the TUI draws are read by whichever screen appears
+    /// first, which is the sign-in screen for a signed-out account.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn blank_codex_console_receives_no_keys() {
+        println!("parameters=none");
+        for blank in ["", "\n\n   \n"] {
+            let tmux = fake_with_captures(&[blank]);
+            let text = refresh_and_capture("acs", "codex", "codex-2", &noop_sleep, &tmux);
+            assert!(text.is_none(), "blank pane {blank:?} must not be driven");
+            assert_eq!(send_keys_calls(&tmux), Vec::<Vec<String>>::new());
+        }
+        println!("None");
+    }
+
+    /// A sign-in screen that appears after `/usage` stops all further keys.
+    ///
+    /// Neither `/status` nor the closing Escape may reach it, so a login that
+    /// the user started stays alive.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn codex_sign_in_after_usage_stops_further_keys() {
+        println!("parameters=none");
+        let tmux = fake_with_captures(&[CODEX_READY_PANE, CODEX_SIGN_IN_PANE]);
+        let text = refresh_and_capture("acs", "codex", "codex-3", &noop_sleep, &tmux);
+        assert!(text.is_none());
+        let payloads: Vec<String> = send_keys_calls(&tmux)
+            .iter()
+            .filter_map(|c| c.get(3).cloned())
+            .collect();
+        assert_eq!(payloads, ["Escape", "Escape", "C-u", "-l", "Enter"]);
+        assert!(!send_keys_calls(&tmux)
+            .iter()
+            .any(|c| c.last().map(String::as_str) == Some("/status")));
+        println!("None");
+    }
+
+    /// Non-Codex consoles keep their existing slash-command path.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn grok_console_is_driven_without_a_sign_in_probe() {
+        println!("parameters=none");
+        let tmux = fake_with_captures(&["Grok usage: 10% used\n"]);
+        let text = refresh_and_capture("acs", "grok", "grok", &noop_sleep, &tmux).unwrap();
+        assert!(text.contains("10% used"));
+        assert!(send_keys_calls(&tmux)
+            .iter()
+            .any(|c| c.last().map(String::as_str) == Some("Enter")));
+        println!("None");
+    }
+
     #[test]
     fn codex_combines_usage_allowance_with_status_breakdown() {
         let tmux = FakeTmux {
             calls: Mutex::new(Vec::new()),
             has_session: true,
             captures: Mutex::new(vec![
+                CODEX_READY_PANE.into(),
                 "Usage\n› 1. Show usage\n  2. Redeem usage limit reset\nYou have 1 usage limit reset available.\n".into(),
                 "5h limit: 99% left\nWeekly limit: 9% left\n".into(),
             ]),
@@ -1112,6 +1373,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
             has_session: true,
             captures: Mutex::new(vec![
+                CODEX_READY_PANE.into(),
                 "Usage\n› 1. Show usage\nYou have 2 usage limit resets available.\n".into(),
                 "Refresh requested; run /status again shortly.\n".into(),
                 "5h limit: 99% left (resets 20:12)\nWeekly limit: 9% left\n".into(),
