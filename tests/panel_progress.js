@@ -41,7 +41,23 @@ class Actor {
         print(undefined);
     }
     add_child = child => { child._parent = this; this.children.push(child); };
-    remove_child = child => { child._parent = null; this.children = this.children.filter(item => item !== child); };
+    remove_child = child => {
+        // An actor leaving the stage loses hover throughout its subtree.
+        const pending = [child];
+        while (pending.length) {
+            const actor = pending.pop();
+            actor.hover = false;
+            actor.stageDetachments = (actor.stageDetachments || 0) + 1;
+            pending.push(...actor.children);
+        }
+        child._parent = null;
+        this.children = this.children.filter(item => item !== child);
+    };
+    set_child_above_sibling = (child, sibling) => {
+        this.children = this.children.filter(item => item !== child);
+        const position = sibling ? this.children.indexOf(sibling) + 1 : this.children.length;
+        this.children.splice(position, 0, child);
+    };
     get_parent = () => this._parent || null;
     get_children = () => this.children;
     add_style_class_name = name => { this.styles = [...(this.styles || []), name]; };
@@ -54,6 +70,7 @@ class Actor {
     destroy() {
         print(`this=${this}`);
         this.destroy_all_children();
+        this._parent?.remove_child(this);
         this.destroyed = true;
         print(undefined);
     }
@@ -979,3 +996,55 @@ check(selectionCell('select-a') === hoverCells[0] && hoverCells[0].hover === tru
     'status refresh retains hovered instance and its local highlight');
 button._updatePanelProgress(null, false);
 print('PASS: independent hover targets, inert text/paint children, retained hover and unchanged widths.');
+
+// GNOME clears hover if an attached instance subtree is removed, even when reused.
+button._renderProvider = provider => button._box.add_child(new Actor({
+    style_class: 'ams-segment', text: String(provider.running || 0), reactive: false}));
+button._renderPanelHarnessRates = () => button._box.add_child(new Actor({
+    style_class: 'ams-rate', text: '64/s', reactive: false}));
+snapshot = selectionPayload;
+button.menu.isOpen = false;
+button._refresh();
+const steadyStrip = button._panelProgress;
+const steadyCell = selectionCell('select-a');
+const initialDetachments = steadyCell.stageDetachments || 0;
+for (let motion = 0; motion < 20; motion++) {
+    steadyCell.hover = true;
+    snapshot = {...selectionPayload, providers: [{kind: 'codex', running: motion % 3,
+        agents: selectionAgents.map(agent => ({...agent, workflow: {fraction: motion / 20}}))}]};
+    button._refresh();
+    check(steadyCell.hover === true, 'public status refresh must not interrupt pointer hover');
+    check((steadyCell.stageDetachments || 0) === initialDetachments && steadyStrip.get_parent() === button._box,
+        'hovered instance strip stays continuously attached through refresh');
+    check(selectionCell('select-a') === steadyCell && steadyCell.width === 52 && steadyCell.y_expand,
+        'preserve the exact existing full-height highlight area and actor');
+    check(button._box.children.at(-1) === steadyStrip && button._box.children.length === 3,
+        'fresh provider/rate summaries precede the retained strip without accumulating old chips');
+    check(button._panelProgressBars.get('select-a')._amsAgent.workflow.fraction === motion / 20,
+        'retained hover never freezes live task updates');
+    check(!selectionCell('select-b').hover, 'neighbor remains unhighlighted during pointer movement');
+}
+const steadySelections = selectedNotes.length;
+steadyCell['button-press-event'](steadyCell, {get_button: () => 1});
+check(selectedNotes.length === steadySelections + 1 && selectedNotes.at(-1) === 'note-a',
+    'steady hover preserves exact instance click action');
+for (const open of [true, false, true, false]) {
+    button.menu.isOpen = open;
+    button._refresh();
+    check(steadyCell.hover && (steadyCell.stageDetachments || 0) === initialDetachments,
+        'opening or dismissing details never detaches the hovered instance');
+}
+snapshot = {providers: []};
+button.menu.isOpen = false;
+button._refresh();
+check(steadyCell.destroyed && button._panelProgressBars.size === 0 && !button._panelProgress.visible,
+    'closing all terminals still destroys their click targets and hides the strip');
+snapshot = selectionPayload;
+button._refresh();
+check(selectionCell('select-a') !== steadyCell && selectionCell('select-a').reactive,
+    'freshly reopened terminals recover their selection and hover targets');
+snapshot = null;
+button._refresh();
+check(button._panelProgressBars.size === 0 && !button._panelProgress.visible,
+    'missing publication still clears obsolete instances');
+print('PASS: continuous stage attachment during pointer/closed-menu refresh, unchanged highlight area, current updates, clicks and recovery.');
