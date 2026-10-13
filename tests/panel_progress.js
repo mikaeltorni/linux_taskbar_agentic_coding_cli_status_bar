@@ -555,8 +555,14 @@ monitorDivider.height = 36;
 monitorDivider.queue_repaint();
 check(JSON.stringify(monitorDivider.color) === JSON.stringify([0, 1, 230 / 255, .8]) &&
     monitorDivider.lineWidth === 1 && monitorDivider.dash === undefined &&
-    JSON.stringify(monitorDivider.start) === '[0.5,0]' && JSON.stringify(monitorDivider.end) === '[0.5,36]',
-    'solid one-pixel teal line covers the full allocated height');
+    JSON.stringify(monitorDivider.start) === '[0.5,9]' && JSON.stringify(monitorDivider.end) === '[0.5,27]',
+    'solid one-pixel teal line spans the centered half of allocated height');
+for (const height of [12, 50, 72]) {
+    monitorDivider.height = height;
+    monitorDivider.queue_repaint();
+    check(monitorDivider.start[1] === height / 4 && monitorDivider.end[1] === height * 3 / 4,
+        'teal monitor line always remains centered at half the panel height');
+}
 button._updatePanelProgress(monitorPayload, false);
 check(button._panelProgress.children[0].children[0] === monitorGroup, 'unchanged monitor groups reuse actors');
 monitors[2].monitor = 0;
@@ -576,7 +582,7 @@ check(JSON.stringify(visibleBars(button._panelProgress).map(bar => bar._amsAgent
     '["m1-a","m1-b","m3-a","m3-b","ws5"]', 'monitor boundaries keep the public terminal ID order');
 button._updatePanelProgress(null, false);
 check(button._panelProgress.children.length === 0 && button._panelProgressBars.size === 0, 'empty payload clears bars and monitor lines');
-print('PASS: full-height teal monitor boundaries, doubled gaps, stable refresh and monitor moves.');
+print('PASS: half-height centered teal monitor boundaries, doubled gaps, stable refresh and monitor moves.');
 
 // Labels sit below the centered bar row, without shortening full-height boundaries.
 const labelAgents = [

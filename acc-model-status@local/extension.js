@@ -1126,7 +1126,7 @@ function buildPanelWorkspaceSeparator() {
 }
 
 /**
- * Paint a solid one-pixel teal line through the monitor boundary's full height.
+ * Paint a solid one-pixel teal line through the centered half of the monitor boundary.
  * Parameters: area - monitor divider with its current allocated panel size.
  * Returns: undefined after releasing the Cairo context.
  */
@@ -1136,15 +1136,15 @@ function paintPanelMonitorSeparator(area) {
     const context = area.get_context();
     context.setSourceRGBA(0, 1, 230 / 255, 0.8);
     context.setLineWidth(1);
-    context.moveTo(width / 2, 0);
-    context.lineTo(width / 2, height);
+    context.moveTo(width / 2, height / 4);
+    context.lineTo(width / 2, height * 3 / 4);
     context.stroke();
     context.$dispose();
     print(undefined);
 }
 
 /**
- * Build a full-height teal monitor boundary with twice the normal bar gap.
+ * Build a centered half-height teal monitor boundary with twice the normal bar gap.
  * Parameters: none.
  * Returns: an inert DrawingArea stretching through the allocated panel height.
  */
