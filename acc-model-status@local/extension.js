@@ -1078,9 +1078,56 @@ function panelAgentEstimateText(agent) {
 }
 
 /**
- * Stack one retained progress bar and a forecast in the allocated panel height.
+ * Format a known nonnegative runtime in hours and whole minutes.
+ * Parameters: seconds - elapsed or recorded active seconds, or an unavailable value.
+ * Returns: HH:MM text without seconds, or empty text when the duration is unknown.
+ */
+function formatPanelRunDuration(seconds) {
+    print(`seconds=${seconds}`);
+    let text = '';
+    if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0) {
+        const totalMinutes = Math.floor(seconds / 60);
+        const hours = Math.floor(totalMinutes / 60);
+        text = `${String(hours).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+    }
+    print(text);
+    return text;
+}
+
+/**
+ * Read live turn time or a completed task's recorded active duration.
+ * Parameters: agent - scoped agent with run timestamps and optional measured duration;
+ * now - reference epoch milliseconds, defaulting to the current clock.
+ * Returns: live or final HH:MM runtime, or empty text without trustworthy timing.
+ */
+function panelAgentRuntimeText(agent, now = Date.now()) {
+    print(`agent=${JSON.stringify(agent)} now=${now}`);
+    const phase = String(agent.phase || '').trim().toUpperCase();
+    let seconds = null;
+    if (panelProgressUnderway(agent)) {
+        const started = Date.parse(agent.run_started_at || '');
+        seconds = Number.isFinite(started)
+            ? Math.max(0, (now - started) / 1000)
+            : agent.task_time_estimate?.observed_active_seconds;
+    } else if (phase === 'DONE' && agent.run_active !== true) {
+        if (agent.task_time_estimate?.status === 'complete')
+            seconds = agent.task_time_estimate.observed_active_seconds;
+        if (seconds === null || seconds === undefined) {
+            const started = Date.parse(agent.run_started_at || '');
+            const completed = Date.parse(agent.ready_completed_at || '');
+            if (Number.isFinite(started) && Number.isFinite(completed) && completed >= started)
+                seconds = (completed - started) / 1000;
+        }
+    }
+    const text = formatPanelRunDuration(seconds);
+    print(text);
+    return text;
+}
+
+/**
+ * Stack runtime, a retained progress bar and a forecast in the allocated panel height.
  * Parameters: agent - scoped open-window agent whose bar and estimate are displayed.
- * Returns: an inert fixed-width cell with its existing bar and a lower estimate label.
+ * Returns: an inert fixed-width cell with a bar, lower estimate and upper runtime label.
  */
 function buildPanelTaskCell(agent) {
     print(`agent=${JSON.stringify(agent)}`);
@@ -1104,9 +1151,21 @@ function buildPanelTaskCell(agent) {
         y_align: Clutter.ActorAlign.END,
         reactive: false,
     });
+    const runtime = new St.Label({
+        style_class: 'ams-panel-agent-runtime',
+        text: '',
+        visible: false,
+        x_expand: true,
+        y_expand: true,
+        x_align: Clutter.ActorAlign.CENTER,
+        y_align: Clutter.ActorAlign.START,
+        reactive: false,
+    });
     bar._amsEstimateLabel = estimate;
+    bar._amsRuntimeLabel = runtime;
     cell.add_child(bar);
     cell.add_child(estimate);
+    cell.add_child(runtime);
     print(cell);
     return cell;
 }
@@ -1584,7 +1643,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Refresh progress bars and running forecasts per agent while retaining stable actors.
+     * Refresh progress bars, runtime clocks and running forecasts while retaining stable actors.
      * Parameters: this - status button; payload - scoped snapshot or null;
      * stale - whether the snapshot is older than the publication threshold.
      * Returns: undefined.
@@ -1648,10 +1707,18 @@ class AccModelStatusButton extends PanelMenu.Button {
             estimate.text = panelAgentEstimateText(entry.agent);
             estimate.visible = Boolean(estimate.text);
             estimate.opacity = stale ? 128 : 255;
+            const now = Date.now();
+            const publishedAt = Date.parse(payload?.updatedAt || '');
+            const runtimeAt = stale ? (Number.isFinite(publishedAt) ? publishedAt : bar._amsRuntimeAt ?? now) : now;
+            bar._amsRuntimeAt = runtimeAt;
+            const runtime = bar._amsRuntimeLabel;
+            runtime.text = panelAgentRuntimeText(entry.agent, runtimeAt);
+            runtime.visible = Boolean(runtime.text);
+            runtime.opacity = stale ? 128 : 255;
             bar._amsUnderway = panelProgressUnderway(entry.agent);
             bar._amsReady = entry.agent.unread_completion === true;
             bar._amsStale = stale;
-            bar._amsPulseAt = Date.now();
+            bar._amsPulseAt = now;
             bar.opacity = panelProgressHostOpacity(entry.agent, bar._amsPulseAt, stale, bar._amsReady);
             bar.queue_repaint();
         }
@@ -1683,13 +1750,17 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Pulse running opacity and ready fill colors without replacing actors.
+     * Update live runtime and pulse bar opacity and ready fills without replacing actors.
      * Parameters: this - status button; now - optional epoch milliseconds.
      * Returns: undefined.
      */
     _applyPanelProgressPulse(now = Date.now()) {
         print(`this=${this} now=${now}`);
         for (const bar of this._panelProgressBars.values()) {
+            if (bar._amsRuntimeLabel && bar._amsUnderway && !bar._amsStale) {
+                bar._amsRuntimeLabel.text = panelAgentRuntimeText(bar._amsAgent, now);
+                bar._amsRuntimeLabel.visible = Boolean(bar._amsRuntimeLabel.text);
+            }
             if ((bar._amsUnderway || bar._amsReady) && !bar._amsStale) {
                 bar.opacity = panelProgressHostOpacity(bar._amsAgent, now, false, bar._amsReady);
                 if (bar._amsReady || panelProgressGoalActive(bar._amsAgent)) {

@@ -79,6 +79,7 @@ const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'pa
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator', 'taskEstimateText',
     ...(source.includes('function buildPanelTaskCell(') ? ['panelAgentEstimateText', 'buildPanelTaskCell'] : []),
+    ...(source.includes('function panelAgentRuntimeText(') ? ['formatPanelRunDuration', 'panelAgentRuntimeText'] : []),
     ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
     ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
@@ -819,3 +820,99 @@ for (const isOpen of [true, false]) {
 }
 check(visibleBars(button._panelProgress).some(bar => bar._amsEstimateLabel.text === '~3m'), 'own-agent forecasts survive refresh and recovery');
 print('PASS: trailing estimate removed in every refresh state; per-bar forecast remains.');
+
+// Runtime is a small HH:MM clock above the bar, including the recorded final run.
+const savedDateNow = Date.now;
+const runtimeReference = Date.parse('2026-10-13T10:00:00Z');
+Date.now = () => runtimeReference;
+const runtimeAgents = [
+    {session_id: 'runtime-live', workspace: 2, monitor: 0, window_display_id: 1, phase: 'RUNNING', run_active: true,
+        run_started_at: new Date(runtimeReference - 3660 * 1000).toISOString(), workflow: {fraction: .5},
+        task_time_estimate: {status: 'estimated', label: '~3m left', observed_active_seconds: 20}},
+    {session_id: 'runtime-done', workspace: 2, monitor: 0, window_display_id: 2, phase: 'DONE', run_active: false,
+        run_started_at: '', ready_completed_at: '2026-10-13T09:00:00Z', workflow: {fraction: 1},
+        task_time_estimate: {status: 'complete', observed_active_seconds: 7865}},
+];
+const runtimePayload = {providers: [{kind: 'codex', agents: runtimeAgents}]};
+button._updatePanelProgress(runtimePayload, false);
+const runtimeRow = button._panelProgress.children[0].children[1];
+const runtimeCells = runtimeRow.children;
+check(runtimeCells.every(cell => cell.children.length === 3), 'each cell contains bar, lower forecast and upper runtime');
+const liveRuntime = runtimeCells[0].children[2];
+const doneRuntime = runtimeCells[1].children[2];
+check(liveRuntime.text === '01:01' && doneRuntime.text === '02:11', 'live run start and measured completed duration both format hours:minutes');
+for (const cell of runtimeCells) {
+    const runtime = cell.children[2];
+    check(runtime.style_class === 'ams-panel-agent-runtime' && runtime.x_align === Clutter.ActorAlign.CENTER &&
+        runtime.y_align === Clutter.ActorAlign.START && runtime.x_expand === true && runtime.y_expand === true && !runtime.reactive,
+        'runtime sits at the top centered above the retained bar');
+}
+check(runtimeCells[0].children[1].text === '~3m' && !runtimeCells[1].children[1].visible,
+    'running forecast remains below while completed runtime has no remaining estimate');
+button._applyPanelProgressPulse(runtimeReference + 60 * 1000);
+check(liveRuntime.text === '01:02' && doneRuntime.text === '02:11', 'live minute ticks without replacing actors or advancing final duration');
+check(liveRuntime.opacity === 255 && doneRuntime.opacity === 255, 'runtime labels do not pulse with progress fill');
+for (const [seconds, expected] of [[0, '00:00'], [59, '00:00'], [60, '00:01'], [3599, '00:59'],
+    [3600, '01:00'], [3660, '01:01'], [90000, '25:00'], [360000, '100:00']]) {
+    runtimeAgents[0].run_started_at = new Date(runtimeReference - seconds * 1000).toISOString();
+    runtimeAgents[1].task_time_estimate.observed_active_seconds = seconds;
+    button._updatePanelProgress(runtimePayload, false);
+    check(liveRuntime.text === expected && doneRuntime.text === expected, 'HH:MM truncates partial minutes and keeps hours beyond a day');
+}
+runtimeAgents[0].run_started_at = new Date(runtimeReference + 60000).toISOString();
+button._updatePanelProgress(runtimePayload, false);
+check(liveRuntime.text === '00:00', 'future live timestamp never produces negative runtime');
+for (const value of [null, -1, NaN, Infinity, '120']) {
+    runtimeAgents[1].task_time_estimate.observed_active_seconds = value;
+    button._updatePanelProgress(runtimePayload, false);
+    check(doneRuntime.text === '' && !doneRuntime.visible, 'unavailable or invalid completed duration is omitted honestly');
+}
+for (const phase of ['DRAFT', 'STOPPED', 'ATTN', 'RATE', 'INTERRUPTED']) {
+    runtimeAgents[1].phase = phase;
+    runtimeAgents[1].task_time_estimate.observed_active_seconds = 300;
+    button._updatePanelProgress(runtimePayload, false);
+    check(doneRuntime.text === '' && !doneRuntime.visible, 'nonrunning unfinished states do not invent a completed runtime');
+}
+Object.assign(runtimeAgents[1], {phase: 'DONE', run_started_at: '2026-10-13T07:45:00Z',
+    ready_completed_at: '2026-10-13T09:00:00Z', task_time_estimate: null});
+button._updatePanelProgress(runtimePayload, false);
+check(doneRuntime.text === '01:15', 'timestamp-backed completed records without measured duration retain their final clock');
+runtimeAgents[1].ready_completed_at = 'invalid';
+button._updatePanelProgress(runtimePayload, false);
+check(doneRuntime.text === '' && !doneRuntime.visible, 'malformed completion timestamp is omitted');
+Object.assign(runtimeAgents[0], {run_started_at: 'invalid', task_time_estimate: {status: 'estimated', observed_active_seconds: 300, label: '~2m left'}});
+button._updatePanelProgress(runtimePayload, false);
+check(liveRuntime.text === '00:05', 'published active duration backs a missing live start');
+runtimeAgents[0].task_time_estimate.observed_active_seconds = null;
+button._updatePanelProgress(runtimePayload, false);
+check(liveRuntime.text === '' && !liveRuntime.visible, 'unknown live duration stays blank');
+Object.assign(runtimeAgents[0], {run_started_at: new Date(runtimeReference - 3660 * 1000).toISOString(),
+    task_time_estimate: {status: 'estimated', label: '~3m left'}});
+button._updatePanelProgress(runtimePayload, true);
+check(liveRuntime.text === '01:01' && liveRuntime.opacity === 128, 'stale clock keeps last value and dims');
+button._applyPanelProgressPulse(runtimeReference + 120 * 1000);
+check(liveRuntime.text === '01:01', 'stale runtime does not accrue time from a stale snapshot');
+Date.now = () => runtimeReference + 120 * 1000;
+button._updatePanelProgress({...runtimePayload, updatedAt: new Date(runtimeReference).toISOString()}, true);
+check(liveRuntime.text === '01:01', 'repeated stale payload refresh uses publication time instead of continuing clock');
+Date.now = () => runtimeReference;
+Object.assign(runtimeAgents[0], {phase: 'DONE', run_active: false, run_started_at: '',
+    task_time_estimate: {status: 'complete', observed_active_seconds: 3720}});
+button._updatePanelProgress(runtimePayload, false);
+check(runtimeRow.children[0] === runtimeCells[0] && liveRuntime.text === '01:02' && liveRuntime.visible && liveRuntime.opacity === 255 &&
+    !runtimeCells[0].children[1].visible, 'finishing run freezes measured runtime on same actor and clears remaining estimate');
+button._applyPanelProgressPulse(runtimeReference + 3600000);
+check(liveRuntime.text === '01:02', 'completed runtime remains fixed on later animation ticks');
+// Rebuild with the same completed payload, as after an extension reload.
+button._updatePanelProgress(null, false);
+button._updatePanelProgress(runtimePayload, false);
+check(button._panelProgress.children[0].children[1].children[0].children[2].text === '01:02',
+    'completed runtime restores from published measurement without an in-memory clock cache');
+snapshot = runtimePayload;
+button.menu.isOpen = true;
+button._refresh();
+check(button._panelProgress.children[0].children[1].children[0].children[2].text === '01:02', 'open-menu refresh preserves completed HH:MM runtime');
+button.menu.isOpen = false;
+button._updatePanelProgress(null, false);
+Date.now = savedDateNow;
+print('PASS: HH:MM runtime above every known live/completed bar, minute ticks, final freeze and reload recovery.');
