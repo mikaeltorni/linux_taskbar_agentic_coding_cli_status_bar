@@ -1095,29 +1095,19 @@ function formatPanelRunDuration(seconds) {
 }
 
 /**
- * Read live turn time or a completed task's recorded active duration.
+ * Read runtime only for an actively running task.
  * Parameters: agent - scoped agent with run timestamps and optional measured duration;
  * now - reference epoch milliseconds, defaulting to the current clock.
- * Returns: live or final HH:MM runtime, or empty text without trustworthy timing.
+ * Returns: live HH:MM runtime, or empty text for inactive tasks or unknown timing.
  */
 function panelAgentRuntimeText(agent, now = Date.now()) {
     print(`agent=${JSON.stringify(agent)} now=${now}`);
-    const phase = String(agent.phase || '').trim().toUpperCase();
     let seconds = null;
     if (panelProgressUnderway(agent)) {
         const started = Date.parse(agent.run_started_at || '');
         seconds = Number.isFinite(started)
             ? Math.max(0, (now - started) / 1000)
             : agent.task_time_estimate?.observed_active_seconds;
-    } else if (phase === 'DONE' && agent.run_active !== true) {
-        if (agent.task_time_estimate?.status === 'complete')
-            seconds = agent.task_time_estimate.observed_active_seconds;
-        if (seconds === null || seconds === undefined) {
-            const started = Date.parse(agent.run_started_at || '');
-            const completed = Date.parse(agent.ready_completed_at || '');
-            if (Number.isFinite(started) && Number.isFinite(completed) && completed >= started)
-                seconds = (completed - started) / 1000;
-        }
     }
     const text = formatPanelRunDuration(seconds);
     print(text);
