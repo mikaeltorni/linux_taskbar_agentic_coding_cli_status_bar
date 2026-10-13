@@ -388,9 +388,11 @@ omitted. Regular runtime text is yellow (`#e6c200`); active goal runtime text
 is purple (`#a855f7`). Timer colors update when goal state changes and stay
 steady while the progress fill pulses.
 
-The lower label shows that running agent's own remaining estimate, such as
-`~3m` or `~1h 1m`. It disappears when the agent stops running or no estimate is
-available. The far-right aggregate time estimate is removed. Timing labels
+The lower label shows that running agent's own remaining estimate in 13.5px
+monospace text, 1.5 times its original size. It keeps only the duration, such
+as `~3m` or `~1h30m`; hour/minute components are compact and any text after the
+duration unit is omitted. It disappears when the agent stops running or no
+estimate is available. The far-right aggregate time estimate is removed. Timing labels
 stay readable while the progress fill pulses, update in place with the menu
 open, and dim when the snapshot is stale; stale runtimes stop ticking.
 All timings come from ACC's local `model_status_bar.json` data, with no AI
