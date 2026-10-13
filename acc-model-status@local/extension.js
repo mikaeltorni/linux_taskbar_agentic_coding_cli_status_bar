@@ -1690,8 +1690,13 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         if (this._panelProgress.get_parent() !== this._box)
             this._box.add_child(this._panelProgress);
-        else if (this._box.get_children().at(-1) !== this._panelProgress)
-            this._box.set_child_above_sibling(this._panelProgress, null);
+        else if (this._box.get_children().at(-1) !== this._panelProgress) {
+            // Move inert summaries around the pointer target, never restack it.
+            for (const child of this._box.get_children()) {
+                if (child !== this._panelProgress)
+                    this._box.set_child_below_sibling(child, this._panelProgress);
+            }
+        }
         const entries = (payload?.providers || []).flatMap(provider =>
             (provider.agents || []).map((agent, index) => ({provider, agent,
                 key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)})));

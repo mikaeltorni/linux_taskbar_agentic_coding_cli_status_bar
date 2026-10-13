@@ -54,8 +54,15 @@ class Actor {
         this.children = this.children.filter(item => item !== child);
     };
     set_child_above_sibling = (child, sibling) => {
+        child.restackings = (child.restackings || 0) + 1;
         this.children = this.children.filter(item => item !== child);
         const position = sibling ? this.children.indexOf(sibling) + 1 : this.children.length;
+        this.children.splice(position, 0, child);
+    };
+    set_child_below_sibling = (child, sibling) => {
+        child.restackings = (child.restackings || 0) + 1;
+        this.children = this.children.filter(item => item !== child);
+        const position = sibling ? this.children.indexOf(sibling) : 0;
         this.children.splice(position, 0, child);
     };
     get_parent = () => this._parent || null;
@@ -1050,12 +1057,15 @@ button._refresh();
 const steadyStrip = button._panelProgress;
 const steadyCell = selectionCell('select-a');
 const initialDetachments = steadyCell.stageDetachments || 0;
+const initialRestackings = steadyStrip.restackings || 0;
 for (let motion = 0; motion < 20; motion++) {
     steadyCell.hover = true;
     snapshot = {...selectionPayload, providers: [{kind: 'codex', running: motion % 3,
         agents: selectionAgents.map(agent => ({...agent, workflow: {fraction: motion / 20}}))}]};
     button._refresh();
     check(steadyCell.hover === true, 'public status refresh must not interrupt pointer hover');
+    check((steadyStrip.restackings || 0) === initialRestackings,
+        'hovered instance strip must not be restacked during summary refresh');
     check((steadyCell.stageDetachments || 0) === initialDetachments && steadyStrip.get_parent() === button._box,
         'hovered instance strip stays continuously attached through refresh');
     check(selectionCell('select-a') === steadyCell && steadyCell.width === 52 && steadyCell.y_expand,
