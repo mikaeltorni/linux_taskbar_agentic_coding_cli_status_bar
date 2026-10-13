@@ -1065,6 +1065,27 @@ function buildPanelTaskProgress(agent) {
 }
 
 /**
+ * Sample the blue-to-violet workspace-label gradient from W1 through W8.
+ * Parameters: workspace - normalized numeric workspace identity, or zero if unknown.
+ * Returns: a CSS hex color, neutral for unknown and capped at W8 for higher workspaces.
+ */
+function panelWorkspaceColor(workspace) {
+    print(`workspace=${workspace}`);
+    if (!Number.isInteger(workspace) || workspace < 1) {
+        const result = '#9a9996';
+        print(result);
+        return result;
+    }
+    const fraction = Math.min(1, (workspace - 1) / 7);
+    const start = [96, 165, 250];
+    const end = [192, 132, 252];
+    const channels = start.map((value, index) => Math.round(value + (end[index] - value) * fraction));
+    const result = '#' + channels.map(value => value.toString(16).padStart(2, '0')).join('');
+    print(result);
+    return result;
+}
+
+/**
  * Draw larger round grey workspace dots through the full allocated panel height.
  * Parameters: area - divider DrawingArea with its current allocated size.
  * Returns: undefined after releasing the Cairo drawing context.
@@ -1642,6 +1663,7 @@ class AccModelStatusButton extends PanelMenu.Button {
                 groupActor.add_child(box);
                 const label = new St.Label({
                     style_class: 'ams-panel-workspace-label',
+                    style: `color: ${panelWorkspaceColor(group.workspace)};`,
                     text: group.workspace > 0 ? `W${group.workspace}` : 'W?',
                     x_expand: true,
                     y_expand: true,
