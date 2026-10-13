@@ -301,11 +301,11 @@ badge, for both its track and measured fill. At 0% it shows only the faint
 lime track. These state colors preserve fill widths, track/fill alpha,
 and the existing opacity animation. Confirmed
 finished agents show a full bar; unavailable workflow progress shows an empty
-neutral track. The bars contain no added labels or percentage text.
+neutral track. The progress fills contain no percentage text.
 
 Progress bars are grouped by ascending workspace number, with agents ordered
 by their terminal window numbers within each group. Larger round grey dots
-separate workspace groups across the full taskbar height. A small workspace
+separate workspace groups across the full taskbar height. A 13.5px workspace
 label (`W2`, for example) sits inline immediately before that group's first
 bar, after the provider/token summary for the first group. Label colors follow
 a fixed blue-to-violet gradient from W1 (`#60a5fa`) to W8 (`#c084fc`), with each
@@ -381,15 +381,21 @@ only a confirmed finish within 30 seconds can create an initial unread mark.
 Saved unread turns remain unread across reloads until selected. Legacy ACC
 payloads lacking the confirmed field still use phase transitions.
 
-The far-right panel label shows the **largest available remaining-work estimate**
-across all actively working agents, including agents on other workspaces and
-those without an open terminal window. For example, parallel tasks with 2, 9
-and 4 minutes left show `~9m left`. Durations round up to minutes; waiting and
-finished agents are excluded. When none has a usable estimate, the label shows
-`learning` or `past estimate`; with no active agents it disappears. The label
-updates in place while the menu stays open and dims when the snapshot is stale.
-It reads ACC's local historical estimates from `model_status_bar.json`; it
-makes no AI requests and writes neither history nor notes. Install/update with
+Each agent's bar has small timing labels centered above and below its fill.
+The upper label shows runtime as `HH:MM` (hours and whole minutes, without
+seconds). It ticks from the current run's start while the agent is running.
+After completion it shows ACC's recorded active task duration, so the final
+runtime remains fixed and survives a Shell reload. Older payloads with both
+run-start and completion timestamps can also provide the final duration;
+unknown runtime is omitted.
+
+The lower label shows that running agent's own remaining estimate, such as
+`~3m` or `~1h 1m`. It disappears when the agent stops running or no estimate is
+available. The far-right aggregate time estimate is removed. Timing labels
+stay readable while the progress fill pulses, update in place with the menu
+open, and dim when the snapshot is stale; stale runtimes stop ticking.
+All timings come from ACC's local `model_status_bar.json` data, with no AI
+requests or writes to history or notes. Install/update with
 `bash install.sh --select model_status_bar`. On Wayland, newly installed
 extension code takes effect after logout/login.
 
