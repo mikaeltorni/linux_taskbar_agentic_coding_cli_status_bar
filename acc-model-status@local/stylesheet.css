@@ -60,6 +60,13 @@
   spacing: 6px;
 }
 
+.ams-panel-workspace-label {
+  font-size: 9px;
+  font-weight: bold;
+  color: #9a9996;
+  margin-bottom: 3px;
+}
+
 .ams-active {
   color: #8ff0a4;
 }
