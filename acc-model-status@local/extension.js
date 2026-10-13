@@ -1058,12 +1058,14 @@ function buildPanelTaskProgress(agent) {
 /**
  * Format the published forecast only for an actively running agent.
  * Parameters: agent - scoped open-window agent with an optional ACC estimate.
- * Returns: compact remaining-time text without the redundant left suffix, or empty text.
+ * Returns: compact duration through its minute/hour unit, with no trailing text, or empty text.
  */
 function panelAgentEstimateText(agent) {
     print(`agent=${JSON.stringify(agent)}`);
-    const text = panelProgressUnderway(agent) && agent.task_time_estimate?.status === 'estimated'
-        ? taskEstimateText(agent).replace(/\s+left$/, '') : '';
+    const label = panelProgressUnderway(agent) && agent.task_time_estimate?.status === 'estimated'
+        ? taskEstimateText(agent) : '';
+    const duration = label.match(/^[~<>≤≥]?\s*(?:\d+h(?:\s*\d+m)?|\d+m)/)?.[0] || '';
+    const text = duration.replace(/\s+/g, '');
     print(text);
     return text;
 }
