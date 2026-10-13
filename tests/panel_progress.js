@@ -70,10 +70,11 @@ class Actor {
 }
 
 const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor};
-const Clutter = {ActorAlign: {CENTER: 0}};
+const Clutter = {ActorAlign: {CENTER: 0, FILL: 1}};
 const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
-    'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator']
+    'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator',
+    ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
 const timers = new Map();
 let nextTimer = 1;
@@ -101,7 +102,7 @@ ${snippets.join('\n')}
 const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
-    child.style_class === 'ams-panel-workspace' ? child.children : []);
+    child.style_class === 'ams-panel-workspace' ? child.children.filter(bar => bar.style_class === 'ams-panel-progress-bar') : []);
 const a = {session_id: 'a', phase: 'RUNNING', run_active: true, workflow: {available: true, fraction: 0.25}};
 const b = {session_id: 'b', phase: 'STOPPED', workflow: {available: true, fraction: 0.6}};
 const payload = {providers: [{kind: 'codex', agents: [a]}, {kind: 'claude', agents: [b]}]};
@@ -518,3 +519,50 @@ for (const fraction of [null, 0, .5, 1]) {
     }
 }
 print('PASS: interrupted taskbar progress fills stay red at every fraction.');
+
+// Monitor boundaries preserve terminal ordering and double the ordinary six-pixel gap.
+const monitors = [
+    {session_id: 'm1-a', workspace: 2, window_display_id: 1, monitor: 0},
+    {session_id: 'm1-b', workspace: 2, window_display_id: 2, monitor: 0},
+    {session_id: 'm3-a', workspace: 2, window_display_id: 3, monitor: 2},
+    {session_id: 'm3-b', workspace: 2, window_display_id: 4, monitor: 2},
+    {session_id: 'ws5', workspace: 5, window_display_id: 1, monitor: 2},
+];
+const monitorPayload = {providers: [{kind: 'codex', agents: monitors}]};
+button._updatePanelProgress(monitorPayload, false);
+let monitorGroup = button._panelProgress.children[0];
+check(JSON.stringify(monitorGroup.children.map(child => child.style_class)) === JSON.stringify([
+    'ams-panel-progress-bar', 'ams-panel-progress-bar', 'ams-panel-monitor-divider',
+    'ams-panel-progress-bar', 'ams-panel-progress-bar']), 'teal divider only at monitor boundary');
+let monitorDivider = monitorGroup.children[2];
+check(monitorDivider.width === 1,
+    'two six-pixel layout gaps double the spacing around a one-pixel monitor line');
+check(monitorDivider.y_align === Clutter.ActorAlign.FILL && monitorDivider.y_expand === true &&
+    monitorDivider.height === undefined && !monitorDivider.reactive,
+    'monitor line fills available panel height without a fixed-height constraint or click target');
+monitorDivider.height = 36;
+monitorDivider.queue_repaint();
+check(JSON.stringify(monitorDivider.color) === JSON.stringify([0, 1, 230 / 255, .8]) &&
+    monitorDivider.lineWidth === 1 && monitorDivider.dash === undefined &&
+    JSON.stringify(monitorDivider.start) === '[0.5,0]' && JSON.stringify(monitorDivider.end) === '[0.5,36]',
+    'solid one-pixel teal line covers the full allocated height');
+button._updatePanelProgress(monitorPayload, false);
+check(button._panelProgress.children[0] === monitorGroup, 'unchanged monitor groups reuse actors');
+monitors[2].monitor = 0;
+monitors[3].monitor = 0;
+button._updatePanelProgress(monitorPayload, false);
+monitorGroup = button._panelProgress.children[0];
+check(monitorGroup.children.length === 4 && monitorGroup.children.every(child => child.style_class === 'ams-panel-progress-bar'),
+    'moving monitors rebuilds the boundaries even when terminal IDs and workspace are unchanged');
+monitors[1].monitor = null;
+monitors[2].monitor = undefined;
+monitors[3].monitor = null;
+button._updatePanelProgress(monitorPayload, false);
+check(button._panelProgress.children[0].children.filter(child => child.style_class === 'ams-panel-monitor-divider').length === 1,
+    'unknown monitor values share one fallback group');
+check(button._panelProgress.children[2].children.length === 1, 'no boundary at a single-monitor workspace edge');
+check(JSON.stringify(visibleBars(button._panelProgress).map(bar => bar._amsAgent.session_id)) ===
+    '["m1-a","m1-b","m3-a","m3-b","ws5"]', 'monitor boundaries keep the public terminal ID order');
+button._updatePanelProgress(null, false);
+check(button._panelProgress.children.length === 0 && button._panelProgressBars.size === 0, 'empty payload clears bars and monitor lines');
+print('PASS: full-height teal monitor boundaries, doubled gaps, stable refresh and monitor moves.');

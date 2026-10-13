@@ -1101,6 +1101,44 @@ function buildPanelWorkspaceSeparator() {
     return area;
 }
 
+/**
+ * Paint a solid one-pixel teal line through the monitor boundary's full height.
+ * Parameters: area - monitor divider with its current allocated panel size.
+ * Returns: undefined after releasing the Cairo context.
+ */
+function paintPanelMonitorSeparator(area) {
+    print(`area=${area}`);
+    const [width, height] = area.get_surface_size();
+    const context = area.get_context();
+    context.setSourceRGBA(0, 1, 230 / 255, 0.8);
+    context.setLineWidth(1);
+    context.moveTo(width / 2, 0);
+    context.lineTo(width / 2, height);
+    context.stroke();
+    context.$dispose();
+    print(undefined);
+}
+
+/**
+ * Build a full-height teal monitor boundary with twice the normal bar gap.
+ * Parameters: none.
+ * Returns: an inert DrawingArea stretching through the allocated panel height.
+ */
+function buildPanelMonitorSeparator() {
+    print('parameters=none');
+    const area = new St.DrawingArea({
+        style_class: 'ams-panel-monitor-divider',
+        // The two adjacent six-pixel gaps double the spacing around this line.
+        width: 1,
+        reactive: false,
+        y_expand: true,
+        y_align: Clutter.ActorAlign.FILL,
+    });
+    area.connect('repaint', paintPanelMonitorSeparator);
+    print(area);
+    return area;
+}
+
 /** Lay out measured phase/action blocks with the terminal overlay's palette. */
 function taskProgressRectangles(agent, width) {
     const phases = ['Plan', 'Establish worktree', 'Write code', 'Write documentation'];
@@ -1573,7 +1611,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             (provider.agents || []).map((agent, index) => ({provider, agent,
                 key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)})));
         const groups = groupWorkspaceEntries(entries);
-        const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry => entry.key)]));
+        const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry => [entry.key, monitorSortValue(entry.agent.monitor)])]));
         if (key !== this._panelProgressKey) {
             this._panelProgress.destroy_all_children();
             this._panelProgressBars.clear();
@@ -1582,7 +1620,12 @@ class AccModelStatusButton extends PanelMenu.Button {
                     this._panelProgress.add_child(buildPanelWorkspaceSeparator());
                 const box = new St.BoxLayout({style_class: 'ams-panel-workspace'});
                 box._amsWorkspace = group.workspace;
+                let previousMonitor = null;
                 for (const entry of group.entries) {
+                    const monitor = monitorSortValue(entry.agent.monitor);
+                    if (previousMonitor !== null && monitor !== previousMonitor)
+                        box.add_child(buildPanelMonitorSeparator());
+                    previousMonitor = monitor;
                     const bar = buildPanelTaskProgress(entry.agent);
                     this._panelProgressBars.set(entry.key, bar);
                     box.add_child(bar);
