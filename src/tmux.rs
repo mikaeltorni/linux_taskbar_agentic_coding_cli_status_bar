@@ -146,6 +146,19 @@ pub trait TmuxRunner: Send + Sync {
     fn process_cmdline(&self, pid: &str) -> Option<String> {
         read_proc_cmdline(pid)
     }
+
+    /// Ask ACC to open the press-Enter login console for one Codex account.
+    ///
+    /// The default does nothing, so test runners can never open a terminal;
+    /// only [`RealTmux`] launches ACC.
+    ///
+    /// Parameters: self - runner; instance_id - ACC Codex instance id.
+    /// Returns: true when a request was sent.
+    fn request_codex_login_console(&self, instance_id: i64) -> bool {
+        println!("self=TmuxRunner instance_id={instance_id}");
+        println!("false");
+        false
+    }
 }
 
 /// Production tmux runner.
@@ -167,6 +180,94 @@ impl TmuxRunner for RealTmux {
             Err(exc) => (1, String::new(), exc.to_string()),
         }
     }
+
+    fn request_codex_login_console(&self, instance_id: i64) -> bool {
+        println!("self=RealTmux instance_id={instance_id}");
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+        let requested = spawn_acc_login_console(&home, instance_id);
+        println!("{requested}");
+        requested
+    }
+}
+
+/// Return the ACC command that opens one account's login console.
+///
+/// Parameters: home - user home holding `.local/bin/acc`; instance_id - ACC
+///     Codex instance id.
+/// Returns: the argv of `acc ca instance login N`.
+pub fn acc_login_console_command(home: &Path, instance_id: i64) -> Vec<String> {
+    println!("home={} instance_id={instance_id}", home.display());
+    let argv = vec![
+        home.join(".local/bin/acc").to_string_lossy().into_owned(),
+        "ca".into(),
+        "instance".into(),
+        "login".into(),
+        instance_id.to_string(),
+    ];
+    println!("{argv:?}");
+    argv
+}
+
+/// Launch `acc ca instance login N` without waiting for its terminal.
+///
+/// ACC keeps one console per account, so a repeated request reuses it.
+///
+/// Parameters: home - user home; instance_id - ACC Codex instance id.
+/// Returns: true when the ACC command started.
+fn spawn_acc_login_console(home: &Path, instance_id: i64) -> bool {
+    println!("home={} instance_id={instance_id}", home.display());
+    let argv = acc_login_console_command(home, instance_id);
+    if !Path::new(&argv[0]).is_file() {
+        logging::warn(format!(
+            "cannot open a Codex login console for instance {instance_id}: {} is missing",
+            argv[0]
+        ));
+        println!("false");
+        return false;
+    }
+    let started = match Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            logging::info(format!(
+                "asked ACC to open the Codex login console for instance {instance_id}"
+            ));
+            true
+        }
+        Err(error) => {
+            logging::warn(format!(
+                "cannot open a Codex login console for instance {instance_id}: {error}"
+            ));
+            false
+        }
+    };
+    println!("{started}");
+    started
+}
+
+/// Return the ACC instance id a Codex console window reports for.
+///
+/// Parameters: window - console window name (`codex` or `codex-<id>`).
+/// Returns: the instance id, or None for a non-Codex window name.
+pub fn codex_console_instance_id(window: &str) -> Option<i64> {
+    println!("window={window}");
+    let instance_id = if window == "codex" {
+        Some(1)
+    } else {
+        window
+            .strip_prefix("codex-")
+            .filter(|id| !id.is_empty() && id.chars().all(|ch| ch.is_ascii_digit()))
+            .and_then(|id| id.parse().ok())
+    };
+    println!("{instance_id:?}");
+    instance_id
 }
 
 fn which(binary: &str) -> Option<PathBuf> {
@@ -768,15 +869,23 @@ pub fn codex_pane_needs_login(text: &str) -> bool {
 /// A blank pane has not drawn yet; keys sent then reach whichever screen
 /// appears first, which for a signed-out account is the sign-in screen.
 ///
-/// Parameters: window - console window name; text - captured pane text.
+/// When a console first shows the sign-in flow, ACC is asked once to open
+/// that account's press-Enter login console; the user signs in from there.
+///
+/// Parameters: tmux - runner; window - console window name; text - captured
+///     pane text.
 /// Returns: true when the pane shows a drawn, signed-in Codex TUI.
-fn codex_pane_accepts_keys(window: &str, text: &str) -> bool {
-    println!("window={window} text={text:?}");
+fn codex_pane_accepts_keys(tmux: &dyn TmuxRunner, window: &str, text: &str) -> bool {
+    println!("tmux=TmuxRunner window={window} text={text:?}");
     let accepts = if text.trim().is_empty() {
         logging::debug(format!("Codex debug console {window} has not drawn yet; not typing"));
         false
     } else if codex_pane_needs_login(text) {
-        note_codex_sign_in_screen(window, true);
+        if note_codex_sign_in_screen(window, true) {
+            if let Some(instance_id) = codex_console_instance_id(window) {
+                tmux.request_codex_login_console(instance_id);
+            }
+        }
         false
     } else {
         note_codex_sign_in_screen(window, false);
@@ -786,26 +895,31 @@ fn codex_pane_accepts_keys(window: &str, text: &str) -> bool {
     accepts
 }
 
-/// Log once per sign-in episode that a Codex console is left untouched.
+/// Track sign-in episodes so each is logged and handled once per window.
 ///
 /// Parameters: window - console window name; on_sign_in - whether the pane
 ///     currently shows the sign-in flow.
-/// Returns: None.
-fn note_codex_sign_in_screen(window: &str, on_sign_in: bool) {
+/// Returns: true when this call starts a new sign-in episode.
+fn note_codex_sign_in_screen(window: &str, on_sign_in: bool) -> bool {
     println!("window={window} on_sign_in={on_sign_in}");
     static SIGNED_OUT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     let mut seen = SIGNED_OUT
         .get_or_init(|| Mutex::new(HashSet::new()))
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    if !on_sign_in {
+    let started = if !on_sign_in {
         seen.remove(window);
+        false
     } else if seen.insert(window.to_string()) {
         logging::info(format!(
             "Codex debug console {window} shows the ChatGPT sign-in screen; not typing into it"
         ));
-    }
-    println!("None");
+        true
+    } else {
+        false
+    };
+    println!("{started}");
+    started
 }
 
 /// Run `/status` until its rate-limit lines render.
@@ -880,7 +994,7 @@ fn capture_cli_rate_limits(
     };
     let is_codex = cli_id == "codex";
     if is_codex
-        && !capture_pane(tmux, target).is_some_and(|before| codex_pane_accepts_keys(window, &before))
+        && !capture_pane(tmux, target).is_some_and(|before| codex_pane_accepts_keys(tmux, window, &before))
     {
         println!("None");
         return None;
@@ -900,12 +1014,12 @@ fn capture_cli_rate_limits(
         return None;
     };
     if is_codex {
-        if !codex_pane_accepts_keys(window, &text) {
+        if !codex_pane_accepts_keys(tmux, window, &text) {
             println!("None");
             return None;
         }
         if let Some(status_text) = capture_codex_status(tmux, target, sleeper) {
-            if !codex_pane_accepts_keys(window, &status_text) {
+            if !codex_pane_accepts_keys(tmux, window, &status_text) {
                 println!("None");
                 return None;
             }
@@ -1297,6 +1411,133 @@ mod tests {
         assert!(!send_keys_calls(&tmux)
             .iter()
             .any(|c| c.last().map(String::as_str) == Some("/status")));
+        println!("None");
+    }
+
+    /// Fake runner that records ACC login-console requests.
+    struct LoginFake {
+        inner: FakeTmux,
+        requests: Mutex<Vec<i64>>,
+    }
+
+    impl TmuxRunner for LoginFake {
+        fn run(&self, args: &[String]) -> (i32, String, String) {
+            self.inner.run(args)
+        }
+
+        fn request_codex_login_console(&self, instance_id: i64) -> bool {
+            self.requests.lock().unwrap().push(instance_id);
+            true
+        }
+    }
+
+    /// Build a login-recording fake whose captures return `captures` in order.
+    ///
+    /// Parameters: captures - pane texts returned by successive captures.
+    /// Returns: the fake runner.
+    fn login_fake(captures: &[&str]) -> LoginFake {
+        println!("captures={captures:?}");
+        let fake = LoginFake {
+            inner: fake_with_captures(captures),
+            requests: Mutex::new(Vec::new()),
+        };
+        println!("LoginFake");
+        fake
+    }
+
+    /// A signed-out console asks ACC for that account's login console once.
+    ///
+    /// Repeated polls of the same sign-in screen must not open more consoles;
+    /// a later sign-out after the account recovered asks again.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn signed_out_console_requests_one_acc_login_console() {
+        println!("parameters=none");
+        let tmux = login_fake(&[
+            CODEX_SIGN_IN_PANE,
+            CODEX_SIGN_IN_PANE,
+            CODEX_LOGIN_IN_PROGRESS_PANE,
+        ]);
+        for _ in 0..3 {
+            assert!(refresh_and_capture("acs", "codex", "codex-31", &noop_sleep, &tmux).is_none());
+        }
+        assert_eq!(*tmux.requests.lock().unwrap(), vec![31]);
+        assert_eq!(send_keys_calls(&tmux.inner), Vec::<Vec<String>>::new());
+
+        let tmux_again = login_fake(&[CODEX_READY_PANE, "", CODEX_SIGN_IN_PANE]);
+        let _ = refresh_and_capture("acs", "codex", "codex-31", &noop_sleep, &tmux_again);
+        assert!(tmux_again.requests.lock().unwrap().is_empty());
+        let tmux_signed_out = login_fake(&[CODEX_SIGN_IN_PANE]);
+        let _ = refresh_and_capture("acs", "codex", "codex-31", &noop_sleep, &tmux_signed_out);
+        assert_eq!(*tmux_signed_out.requests.lock().unwrap(), vec![31]);
+        println!("None");
+    }
+
+    /// The historical `codex` window belongs to ACC instance 1.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn primary_codex_window_requests_instance_one() {
+        println!("parameters=none");
+        assert_eq!(codex_console_instance_id("codex"), Some(1));
+        assert_eq!(codex_console_instance_id("codex-2"), Some(2));
+        assert_eq!(codex_console_instance_id("codex-x"), None);
+        assert_eq!(codex_console_instance_id("grok"), None);
+        println!("None");
+    }
+
+    /// Blank, signed-in and unrecognised windows never ask for a login console.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn only_signed_out_codex_consoles_request_login() {
+        println!("parameters=none");
+        for (window, pane) in [
+            ("codex-32", ""),
+            ("codex-33", CODEX_READY_PANE),
+            ("codex-x", CODEX_SIGN_IN_PANE),
+        ] {
+            let tmux = login_fake(&[pane]);
+            let _ = refresh_and_capture("acs", "codex", window, &noop_sleep, &tmux);
+            assert!(tmux.requests.lock().unwrap().is_empty(), "{window} {pane:?}");
+        }
+        println!("None");
+    }
+
+    /// The test fakes never launch a real ACC login console.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn default_runner_hook_does_not_open_a_console() {
+        println!("parameters=none");
+        let tmux = fake_with_captures(&[CODEX_SIGN_IN_PANE]);
+        assert!(!tmux.request_codex_login_console(34));
+        println!("None");
+    }
+
+    /// The production request runs `acc ca instance login N` from the home's bin.
+    ///
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn acc_login_console_command_targets_the_instance() {
+        println!("parameters=none");
+        let home = Path::new("/home/test");
+        assert_eq!(
+            acc_login_console_command(home, 3),
+            vec![
+                "/home/test/.local/bin/acc".to_string(),
+                "ca".into(),
+                "instance".into(),
+                "login".into(),
+                "3".into(),
+            ]
+        );
         println!("None");
     }
 
