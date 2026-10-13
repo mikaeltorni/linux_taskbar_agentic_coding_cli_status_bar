@@ -106,7 +106,16 @@ The poller maintains a detached tmux session (default `agentic-cli-status`)
 with one window per monitored CLI running that CLI's TUI. Codex windows
 wait until that account's `auth.json` exists, and a pane that started
 before login is rebuilt afterwards, so the TUI cannot keep opening a
-ChatGPT browser loop. Attach any time to inspect what the CLIs report:
+ChatGPT browser loop. Each Codex pane is captured before any key is sent.
+A pane that is still blank, or that shows the ChatGPT sign-in or "finish
+signing in via your browser" screen, gets no keys at all. An Enter there
+would open a browser tab, and the next Escape would cancel that login's
+localhost callback. That happens when an expired token still leaves an
+`auth.json` behind. The first time an account's pane shows that screen, the
+poller runs `~/.local/bin/acc ca instance login N` once. Agent Command Center
+then opens that account's sign-in console, and pressing Enter there starts
+the browser login. After sign-in rewrites `auth.json`, the pane is rebuilt
+and polling resumes. Attach any time to inspect what the CLIs report:
 
 ```bash
 tmux attach -t agentic-cli-status    # detach again with Ctrl+B D
