@@ -316,7 +316,11 @@ Updates continue while the drop-down is open. The focused terminal's bar gets
 a subtle **one-pixel teal outline** (`#00ffe6`, matching the CLI selection cue).
 The outline sits one pixel outside the unchanged 50×8 fill, using a 52×10
 drawing area so it never covers progress pixels. Bars within each workspace
-have a six-pixel gap between their drawing areas. The outline follows window
+have a six-pixel gap between their drawing areas. At each monitor change
+within a workspace, a thin teal vertical line fills the taskbar height, with
+six pixels of space on each side (twice the normal spacing, plus the one-pixel
+line). Windows on the same monitor keep their normal gap. Monitor moves update
+these boundaries automatically without changing terminal-number order. The outline follows window
 focus; other terminals on the same workspace stay unoutlined.
 The public render probe runs with
 `cargo test --test panel_progress` (or `gjs tests/panel_progress.js .`) using
