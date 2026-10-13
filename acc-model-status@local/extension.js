@@ -1643,6 +1643,8 @@ class AccModelStatusButton extends PanelMenu.Button {
                 const label = new St.Label({
                     style_class: 'ams-panel-workspace-label',
                     text: group.workspace > 0 ? `W${group.workspace}` : 'W?',
+                    x_expand: true,
+                    y_expand: true,
                     x_align: Clutter.ActorAlign.CENTER,
                     y_align: Clutter.ActorAlign.END,
                     reactive: false,

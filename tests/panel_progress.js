@@ -596,7 +596,7 @@ for (const group of labelGroups) {
     check(row.style_class === 'ams-panel-workspace' && row.y_expand === true && row.y_align === Clutter.ActorAlign.FILL,
         'bar row and monitor lines retain full panel height');
     check(label.style_class === 'ams-panel-workspace-label' && label.x_align === Clutter.ActorAlign.CENTER &&
-        label.y_align === Clutter.ActorAlign.END && !label.reactive,
+        label.y_align === Clutter.ActorAlign.END && label.x_expand === true && label.y_expand === true && !label.reactive,
         'small workspace label is centered below its bars');
 }
 const retainedLabelGroup = labelGroups[0];
