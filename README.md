@@ -302,8 +302,13 @@ finished agents show a full bar; unavailable workflow progress shows an empty
 neutral track. The bars contain no added labels or percentage text.
 
 Progress bars are grouped by ascending workspace number, with agents ordered
-by their terminal window numbers within each group. A vertical grey dotted
-line separates workspace groups. While a turn is actively running, its bar
+by their terminal window numbers within each group. Larger round grey dots
+separate workspace groups across the full taskbar height. A small workspace
+label (`W2`, for example) sits inline immediately before that group's first
+bar, after the provider/token summary for the first group. Label colors follow
+a fixed blue-to-violet gradient from W1 (`#60a5fa`) to W8 (`#c084fc`), with each
+intermediate workspace interpolated on the same scale. Higher workspace
+numbers keep the W8 color; unknown workspaces show neutral `W?`. While a turn is actively running, its bar
 smoothly pulses from 100% opacity to 30% and back every three seconds, matching
 the terminal indicator. For active goals, only the progress fill and track pulse;
 the purple bottom stripe stays steady at its existing opacity, as do the teal
@@ -317,7 +322,8 @@ a subtle **one-pixel teal outline** (`#00ffe6`, matching the CLI selection cue).
 The outline sits one pixel outside the unchanged 50×8 fill, using a 52×10
 drawing area so it never covers progress pixels. Bars within each workspace
 have a six-pixel gap between their drawing areas. At each monitor change
-within a workspace, a thin teal vertical line fills the taskbar height, with
+within a workspace, a thin teal vertical line spans the centered half of the
+taskbar height, with
 six pixels of space on each side (twice the normal spacing, plus the one-pixel
 line). Windows on the same monitor keep their normal gap. Monitor moves update
 these boundaries automatically without changing terminal-number order. The outline follows window
