@@ -1065,6 +1065,53 @@ function buildPanelTaskProgress(agent) {
 }
 
 /**
+ * Format the published forecast only for an actively running agent.
+ * Parameters: agent - scoped open-window agent with an optional ACC estimate.
+ * Returns: compact remaining-time text without the redundant left suffix, or empty text.
+ */
+function panelAgentEstimateText(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const text = panelProgressUnderway(agent) && agent.task_time_estimate?.status === 'estimated'
+        ? taskEstimateText(agent).replace(/\s+left$/, '') : '';
+    print(text);
+    return text;
+}
+
+/**
+ * Stack one retained progress bar and a forecast in the allocated panel height.
+ * Parameters: agent - scoped open-window agent whose bar and estimate are displayed.
+ * Returns: an inert fixed-width cell with its existing bar and a lower estimate label.
+ */
+function buildPanelTaskCell(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const cell = new St.Widget({
+        style_class: 'ams-panel-task-cell',
+        layout_manager: new Clutter.BinLayout(),
+        width: 52,
+        y_expand: true,
+        y_align: Clutter.ActorAlign.FILL,
+        clip_to_allocation: true,
+        reactive: false,
+    });
+    const bar = buildPanelTaskProgress(agent);
+    const estimate = new St.Label({
+        style_class: 'ams-panel-agent-estimate',
+        text: '',
+        visible: false,
+        x_expand: true,
+        y_expand: true,
+        x_align: Clutter.ActorAlign.CENTER,
+        y_align: Clutter.ActorAlign.END,
+        reactive: false,
+    });
+    bar._amsEstimateLabel = estimate;
+    cell.add_child(bar);
+    cell.add_child(estimate);
+    print(cell);
+    return cell;
+}
+
+/**
  * Sample the blue-to-violet workspace-label gradient from W1 through W8.
  * Parameters: workspace - normalized numeric workspace identity, or zero if unknown.
  * Returns: a CSS hex color, neutral for unknown and capped at W8 for higher workspaces.
@@ -1617,7 +1664,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Refresh one compact progress bar per open agent while retaining stable actors.
+     * Refresh progress bars and running forecasts per agent while retaining stable actors.
      * Parameters: this - status button; payload - scoped snapshot or null;
      * stale - whether the snapshot is older than the publication threshold.
      * Returns: undefined.
@@ -1655,9 +1702,10 @@ class AccModelStatusButton extends PanelMenu.Button {
                     if (previousMonitor !== null && monitor !== previousMonitor)
                         box.add_child(buildPanelMonitorSeparator());
                     previousMonitor = monitor;
-                    const bar = buildPanelTaskProgress(entry.agent);
+                    const cell = buildPanelTaskCell(entry.agent);
+                    const bar = cell.get_children()[0];
                     this._panelProgressBars.set(entry.key, bar);
-                    box.add_child(bar);
+                    box.add_child(cell);
                 }
                 const label = new St.Label({
                     style_class: 'ams-panel-workspace-label',
@@ -1676,6 +1724,10 @@ class AccModelStatusButton extends PanelMenu.Button {
         for (const entry of entries) {
             const bar = this._panelProgressBars.get(entry.key);
             bar._amsAgent = entry.agent;
+            const estimate = bar._amsEstimateLabel;
+            estimate.text = panelAgentEstimateText(entry.agent);
+            estimate.visible = Boolean(estimate.text);
+            estimate.opacity = stale ? 128 : 255;
             bar._amsUnderway = panelProgressUnderway(entry.agent);
             bar._amsReady = entry.agent.unread_completion === true;
             bar._amsStale = stale;

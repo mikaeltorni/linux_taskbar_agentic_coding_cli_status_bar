@@ -43,6 +43,7 @@ class Actor {
     add_child = child => { child._parent = this; this.children.push(child); };
     remove_child = child => { child._parent = null; this.children = this.children.filter(item => item !== child); };
     get_parent = () => this._parent || null;
+    get_children = () => this.children;
     destroy_all_children = () => { this.children.forEach(child => child.destroy()); this.children = []; };
     /** Destroy the isolated mock actor.
      * Parameters: this - mock actor receiver.
@@ -74,7 +75,8 @@ const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Widget: Actor};
 const Clutter = {ActorAlign: {CENTER: 0, FILL: 1, END: 2, START: 3}, BinLayout: class {}};
 const snippets = ['taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
-    'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator',
+    'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator', 'taskEstimateText',
+    ...(source.includes('function buildPanelTaskCell(') ? ['panelAgentEstimateText', 'buildPanelTaskCell'] : []),
     ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
     ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
@@ -104,7 +106,7 @@ ${snippets.join('\n')}
 const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
-    child.style_class === 'ams-panel-workspace-group' ? child.children[1].children.filter(bar => bar.style_class === 'ams-panel-progress-bar') : []);
+    child.style_class === 'ams-panel-workspace-group' ? child.children[1].children.filter(cell => cell.style_class === 'ams-panel-task-cell').map(cell => cell.children[0]) : []);
 const a = {session_id: 'a', phase: 'RUNNING', run_active: true, workflow: {available: true, fraction: 0.25}};
 const b = {session_id: 'b', phase: 'STOPPED', workflow: {available: true, fraction: 0.6}};
 const payload = {providers: [{kind: 'codex', agents: [a]}, {kind: 'claude', agents: [b]}]};
@@ -543,8 +545,8 @@ const monitorPayload = {providers: [{kind: 'codex', agents: monitors}]};
 button._updatePanelProgress(monitorPayload, false);
 let monitorGroup = button._panelProgress.children[0].children[1];
 check(JSON.stringify(monitorGroup.children.map(child => child.style_class)) === JSON.stringify([
-    'ams-panel-progress-bar', 'ams-panel-progress-bar', 'ams-panel-monitor-divider',
-    'ams-panel-progress-bar', 'ams-panel-progress-bar']), 'teal divider only at monitor boundary');
+    'ams-panel-task-cell', 'ams-panel-task-cell', 'ams-panel-monitor-divider',
+    'ams-panel-task-cell', 'ams-panel-task-cell']), 'teal divider only at monitor boundary');
 let monitorDivider = monitorGroup.children[2];
 check(monitorDivider.width === 1,
     'two six-pixel layout gaps double the spacing around a one-pixel monitor line');
@@ -569,7 +571,7 @@ monitors[2].monitor = 0;
 monitors[3].monitor = 0;
 button._updatePanelProgress(monitorPayload, false);
 monitorGroup = button._panelProgress.children[0].children[1];
-check(monitorGroup.children.length === 4 && monitorGroup.children.every(child => child.style_class === 'ams-panel-progress-bar'),
+check(monitorGroup.children.length === 4 && monitorGroup.children.every(child => child.style_class === 'ams-panel-task-cell'),
     'moving monitors rebuilds the boundaries even when terminal IDs and workspace are unchanged');
 monitors[1].monitor = null;
 monitors[2].monitor = undefined;
@@ -653,7 +655,7 @@ inlineButton._updatePanelProgress({providers: [{kind: 'codex', agents: [
 check(inlineButton._box.children[0] === tokenCounter && inlineButton._box.children[1] === inlineButton._panelProgress,
     'workspace strip follows token counter in the real panel update path');
 const inlineGroup = inlineButton._panelProgress.children[0];
-check(inlineGroup.children[0].text === 'W2' && inlineGroup.children[1].children[0]._amsAgent.session_id === 'inline-w2',
+check(inlineGroup.children[0].text === 'W2' && inlineGroup.children[1].children[0].children[0]._amsAgent.session_id === 'inline-w2',
     'W2 is between the token counter and first bar');
 check(inlineButton._panelProgress.children[2].children[0].text === 'W5', 'later workspace labels also precede their groups');
 inlineButton._updatePanelProgress(null, false);
@@ -666,3 +668,82 @@ const stylesheet = new TextDecoder().decode(stylesheetBytes);
 const workspaceLabelStyle = stylesheet.match(/\.ams-panel-workspace-label\s*\{([^}]+)\}/)?.[1] || '';
 check(/font-size:\s*13\.5px;/.test(workspaceLabelStyle), 'workspace labels grow from 9px to 13.5px');
 print('PASS: shipped workspace labels are 1.5x larger.');
+
+// Running time belongs to its own agent, below that agent's unchanged drawing area.
+const estimateAgents = [
+    {session_id: 'estimate-a', workspace: 2, monitor: 0, window_display_id: 1, phase: 'RUNNING', run_active: true,
+        task_time_estimate: {status: 'estimated', label: '~2m left'}, workflow: {fraction: .3}},
+    {session_id: 'estimate-b', workspace: 2, monitor: 0, window_display_id: 2, phase: 'RUNNING', run_active: true,
+        task_time_estimate: {status: 'estimated', label: '~1h 1m left'}, workflow: {fraction: .4}},
+    {session_id: 'estimate-idle', workspace: 2, monitor: 0, window_display_id: 3, phase: 'DONE', run_active: false,
+        task_time_estimate: {status: 'estimated', label: '~9m left'}, workflow: {fraction: 1}},
+];
+const estimatePayload = {providers: [{kind: 'codex', agents: estimateAgents}]};
+button._updatePanelProgress(estimatePayload, false);
+const estimateRow = button._panelProgress.children[0].children[1];
+const estimateCells = estimateRow.children;
+check(estimateCells.every(cell => cell.style_class === 'ams-panel-task-cell' && cell.width === 52 &&
+    cell.layout_manager instanceof Clutter.BinLayout && cell.y_expand === true && cell.y_align === Clutter.ActorAlign.FILL && !cell.reactive),
+    'each bar/time cell retains the drawing width and full-height panel allocation');
+check(JSON.stringify(estimateCells.map(cell => cell.children[1].text)) === '["~2m","~1h 1m",""]',
+    'each running bar gets its own compact forecast, completed bar gets none');
+for (const cell of estimateCells) {
+    const [bar, estimate] = cell.children;
+    check(bar.style_class === 'ams-panel-progress-bar' && bar.width === 52 && bar.height === 11,
+        'per-agent estimates preserve existing bar dimensions and pulse owner');
+    check(estimate.style_class === 'ams-panel-agent-estimate' && estimate.x_align === Clutter.ActorAlign.CENTER &&
+        estimate.y_align === Clutter.ActorAlign.END && estimate.x_expand === true && estimate.y_expand === true && !estimate.reactive,
+        'forecast is centered below its own bar, independent of bar opacity');
+}
+const retainedEstimateCell = estimateCells[0];
+const retainedEstimateBar = retainedEstimateCell.children[0];
+const retainedEstimateLabel = retainedEstimateCell.children[1];
+estimateAgents[0].task_time_estimate.label = '~1m left';
+button._updatePanelProgress(estimatePayload, false);
+check(estimateRow.children[0] === retainedEstimateCell && retainedEstimateCell.children[0] === retainedEstimateBar &&
+    retainedEstimateCell.children[1] === retainedEstimateLabel && retainedEstimateLabel.text === '~1m',
+    'estimate refresh retains cell, bar and label actors');
+button._applyPanelProgressPulse(1500);
+check(retainedEstimateBar.opacity === 77 && retainedEstimateLabel.opacity === 255, 'forecast stays readable while running bar pulses');
+button._updatePanelProgress(estimatePayload, true);
+check(retainedEstimateLabel.opacity === 128 && retainedEstimateLabel.visible, 'stale estimate dims without removing it');
+for (const state of [
+    {phase: 'RUNNING', run_active: false, task_time_estimate: {status: 'estimated', label: '~9m left'}},
+    {phase: 'STOPPED', run_active: true, task_time_estimate: {status: 'estimated', label: '~9m left'}},
+    {phase: 'RATE', run_active: false, queued_reset_at: '2099-01-01T00:00:00Z', task_time_estimate: {status: 'estimated', label: '~9m left'}},
+    {phase: 'RUNNING', run_active: true, task_time_estimate: null},
+    {phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'learning', label: 'learning time estimates'}},
+    {phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'overrun', label: 'past estimate'}},
+    {phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'estimated', label: ''}},
+    {phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'estimated', label: 3}},
+    {phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'estimated'}},
+]) {
+    Object.assign(estimateAgents[0], state);
+    button._updatePanelProgress(estimatePayload, false);
+    check(retainedEstimateLabel.text === '' && !retainedEstimateLabel.visible, 'no estimate for inactive or unavailable forecast state');
+    check(estimateCells[1].children[1].text === '~1h 1m' && estimateCells[1].children[1].visible,
+        'one missing forecast never changes another running agent estimate');
+}
+Object.assign(estimateAgents[0], {phase: 'RUNNING', run_active: true,
+    task_time_estimate: {status: 'estimated', label: '  ~4m left  '}});
+button._updatePanelProgress(estimatePayload, false);
+check(retainedEstimateLabel.text === '~4m' && retainedEstimateLabel.visible && retainedEstimateLabel.opacity === 255,
+    'fresh estimate recovers on existing actor');
+snapshot = estimatePayload;
+button.menu.isOpen = true;
+button._updateTaskRows = () => {};
+button._refresh();
+check(estimateRow.children[0] === retainedEstimateCell && retainedEstimateLabel.text === '~4m', 'open menu refresh preserves per-bar time actors');
+estimateAgents[0].task_time_estimate.label = '~3m left';
+button._refresh();
+check(retainedEstimateLabel.text === '~3m', 'open menu refresh updates per-bar time');
+button.menu.isOpen = false;
+button._refresh();
+check(button._panelProgress.children[0].children[1].children[0] === retainedEstimateCell,
+    'closing menu does not recreate the estimate cell');
+button._updatePanelProgress({providers: [{agents: [estimateAgents[1]]}]}, false);
+check(visibleBars(button._panelProgress).length === 1 && button._panelProgressBars.has('estimate-b') &&
+    !button._panelProgressBars.has('estimate-a'), 'closed agent removes its forecast and leaves the remaining bar');
+button._updatePanelProgress(null, false);
+check(button._panelProgress.children.length === 0 && button._panelProgressBars.size === 0, 'missing snapshot removes bars and forecast labels');
+print('PASS: independent running estimates below bars, retained actors, state transitions and menu refreshes.');
