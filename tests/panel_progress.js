@@ -97,7 +97,7 @@ ${snippets.join('\n')}
         unreadCompletionCount, saveUnreadStates, log, workspaceAttentionCounts, panelHarnessRateRows} = services;
     class Destroyer extends St.BoxLayout { ${declaration('destroy', true)} }
     return {panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
-        Destroyer,
+        Destroyer, paintPanelWorkspaceSeparator,
         updater: {${['_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
 const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo);
@@ -216,11 +216,16 @@ for (const divider of dividers) {
         'workspace divider stretches through the full panel instead of stopping at sixteen pixels');
     divider.height = 48;
     divider.queue_repaint();
-    check(JSON.stringify(divider.dash) === '[0,6]' && divider.lineWidth === 2 && divider.lineCap === imports.cairo.LineCap.ROUND,
+    check(JSON.stringify(divider.dash) === '[0.01,5.99]' && divider.lineWidth === 2 && divider.lineCap === imports.cairo.LineCap.ROUND,
         'larger round workspace dots stay visually distinct from solid monitor lines');
     check(divider.start[0] === divider.end[0] && divider.end[1] === divider.height && divider.height === 48,
         'divider follows the vertical axis across its height');
 }
+// Native Cairo rejects zero-length dash values even though actor mocks accept them.
+const workspaceSurface = new imports.cairo.ImageSurface(imports.cairo.Format.ARGB32, 6, 48);
+owners.paintPanelWorkspaceSeparator({get_surface_size: () => [6, 48],
+    get_context: () => new imports.cairo.Context(workspaceSurface)});
+print('PASS: workspace dots paint through the native Cairo binding.');
 const before = groups[0];
 button._updatePanelProgress(grouped, false);
 check(button._panelProgress.children[0] === before, 'stable updates retain workspace groups');
