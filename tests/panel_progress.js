@@ -53,6 +53,7 @@ class Actor {
      */
     destroy() {
         print(`this=${this}`);
+        this.destroy_all_children();
         this.destroyed = true;
         print(undefined);
     }
@@ -916,3 +917,44 @@ button.menu.isOpen = false;
 button._updatePanelProgress(null, false);
 Date.now = savedDateNow;
 print('PASS: HH:MM runtime above every known live/completed bar, minute ticks, final freeze and reload recovery.');
+// Exercise real retained taskbar cells using the same selector action as menu rows.
+Clutter.EVENT_STOP = 1;
+Clutter.EVENT_PROPAGATE = 0;
+const selectedNotes = [];
+button._focusAgent = noteId => selectedNotes.push(noteId);
+const selectionAgents = [
+    {session_id: 'select-a', note_id: '  note-a  ', workspace: 2, monitor: 0, phase: 'DRAFT'},
+    {session_id: 'select-b', note_id: 'note-b', workspace: 5, monitor: 1, phase: 'DONE'},
+    {session_id: 'select-c', note_id: 'note-c', workspace: 5, monitor: 1, phase: 'RUNNING', run_active: true},
+    {session_id: 'select-unlinked', note_id: '', workspace: 5, monitor: 1, phase: 'DONE'},
+];
+const selectionPayload = {providers: [{kind: 'codex', agents: selectionAgents}]};
+button._updatePanelProgress(selectionPayload, false);
+const selectionCell = key => button._panelProgressBars.get(key).get_parent();
+for (const key of ['select-a', 'select-b', 'select-c']) {
+    const cell = selectionCell(key);
+    check(cell.reactive && cell.can_focus, 'linked instance has its own interactive cell');
+    check(cell.children.every(child => child.reactive === false), 'progress and forecast route picking to their instance cell');
+    check(cell['button-press-event'](cell, {get_button: () => 1}) === Clutter.EVENT_STOP,
+        'individual left-click is consumed before the enclosing panel menu');
+}
+check(JSON.stringify(selectedNotes) === '["note-a","note-b","note-c"]', 'draft, done and running instances select their own exact note');
+const retainedSelectionCell = selectionCell('select-b');
+button._updatePanelProgress({providers: [{kind: 'codex', agents: selectionAgents.map(agent =>
+    agent.session_id === 'select-b' ? {...agent, note_id: 'note-b-new'} : agent)}]}, true);
+check(selectionCell('select-b') === retainedSelectionCell, 'refresh retains selection actor');
+retainedSelectionCell['button-press-event'](retainedSelectionCell, {get_button: () => 1});
+check(selectedNotes.at(-1) === 'note-b-new', 'click reads current identity after retained/stale refresh');
+for (const mouseButton of [2, 3, 8]) {
+    const before = selectedNotes.length;
+    check(retainedSelectionCell['button-press-event'](retainedSelectionCell, {get_button: () => mouseButton}) === Clutter.EVENT_PROPAGATE,
+        'other mouse buttons do not invoke instance selection');
+    check(selectedNotes.length === before, 'rejected selection leaves prior focus calls unchanged');
+    check(selectionCell('select-b') === retainedSelectionCell, 'rejected selection preserves rendered cells');
+}
+check(selectionCell('select-unlinked').reactive === false, 'no selection target means no misleading clickable cell');
+button._updatePanelProgress({providers: [{agents: selectionAgents.map(agent => ({...agent, note_id: ''}))}]}, false);
+check(retainedSelectionCell.reactive === false, 'retained cell stops accepting clicks when note identity disappears');
+button._updatePanelProgress(null, false);
+check(retainedSelectionCell.destroyed && button._panelProgressBars.size === 0, 'closing instances destroys their click targets');
+print('PASS: individual instance left-click selection, current identity, all phases, other-button rejection and cleanup.');

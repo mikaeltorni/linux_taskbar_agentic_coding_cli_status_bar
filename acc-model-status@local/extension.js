@@ -1126,11 +1126,12 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
 
 /**
  * Stack runtime, a retained progress bar and a forecast in the allocated panel height.
- * Parameters: agent - scoped open-window agent whose bar and estimate are displayed.
- * Returns: an inert fixed-width cell with a bar, lower estimate and upper runtime label.
+ * Parameters: agent - scoped open-window agent whose bar and timing are displayed;
+ * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering.
+ * Returns: a fixed-width instance click target with its bar, lower estimate and upper runtime label.
  */
-function buildPanelTaskCell(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
+function buildPanelTaskCell(agent, focusAgent = null) {
+    print(`agent=${JSON.stringify(agent)} focusAgent=${focusAgent}`);
     const cell = new St.Widget({
         style_class: 'ams-panel-task-cell',
         layout_manager: new Clutter.BinLayout(),
@@ -1138,7 +1139,8 @@ function buildPanelTaskCell(agent) {
         y_expand: true,
         y_align: Clutter.ActorAlign.FILL,
         clip_to_allocation: true,
-        reactive: false,
+        reactive: Boolean(focusAgent && String(agent.note_id || '').trim()),
+        can_focus: Boolean(focusAgent && String(agent.note_id || '').trim()),
     });
     const bar = buildPanelTaskProgress(agent);
     const estimate = new St.Label({
@@ -1160,6 +1162,14 @@ function buildPanelTaskCell(agent) {
         x_align: Clutter.ActorAlign.CENTER,
         y_align: Clutter.ActorAlign.START,
         reactive: false,
+    });
+    cell.connect('button-press-event', (_cell, event) => {
+        if (event.get_button() !== 1)
+            return Clutter.EVENT_PROPAGATE;
+        const noteId = String(bar._amsAgent.note_id || '').trim();
+        if (noteId && focusAgent)
+            focusAgent(noteId);
+        return Clutter.EVENT_STOP;
     });
     bar._amsEstimateLabel = estimate;
     bar._amsRuntimeLabel = runtime;
@@ -1681,7 +1691,7 @@ class AccModelStatusButton extends PanelMenu.Button {
                     if (previousMonitor !== null && monitor !== previousMonitor)
                         box.add_child(buildPanelMonitorSeparator());
                     previousMonitor = monitor;
-                    const cell = buildPanelTaskCell(entry.agent);
+                    const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId));
                     const bar = cell.get_children()[0];
                     this._panelProgressBars.set(entry.key, bar);
                     box.add_child(cell);
@@ -1703,6 +1713,9 @@ class AccModelStatusButton extends PanelMenu.Button {
         for (const entry of entries) {
             const bar = this._panelProgressBars.get(entry.key);
             bar._amsAgent = entry.agent;
+            const cell = bar.get_parent();
+            cell.reactive = Boolean(String(entry.agent.note_id || '').trim());
+            cell.can_focus = cell.reactive;
             const estimate = bar._amsEstimateLabel;
             estimate.text = panelAgentEstimateText(entry.agent);
             estimate.visible = Boolean(estimate.text);
