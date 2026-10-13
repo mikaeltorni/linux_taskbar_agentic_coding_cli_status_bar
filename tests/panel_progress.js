@@ -822,7 +822,7 @@ for (const isOpen of [true, false]) {
 check(visibleBars(button._panelProgress).some(bar => bar._amsEstimateLabel.text === '~3m'), 'own-agent forecasts survive refresh and recovery');
 print('PASS: trailing estimate removed in every refresh state; per-bar forecast remains.');
 
-// Runtime is a small HH:MM clock above the bar, including the recorded final run.
+// Runtime is an HH:MM clock above active runs; completed instances have no timer.
 const savedDateNow = Date.now;
 const runtimeReference = Date.parse('2026-10-13T10:00:00Z');
 Date.now = () => runtimeReference;
@@ -841,7 +841,7 @@ const runtimeCells = runtimeRow.children;
 check(runtimeCells.every(cell => cell.children.length === 3), 'each cell contains bar, lower forecast and upper runtime');
 const liveRuntime = runtimeCells[0].children[2];
 const doneRuntime = runtimeCells[1].children[2];
-check(liveRuntime.text === '01:01' && doneRuntime.text === '02:11', 'live run start and measured completed duration both format hours:minutes');
+check(liveRuntime.text === '01:01' && doneRuntime.text === '' && !doneRuntime.visible, 'live timer formats hours:minutes and completed measurement does not show a timer');
 for (const cell of runtimeCells) {
     const runtime = cell.children[2];
     check(runtime.style_class === 'ams-panel-agent-runtime' && runtime.x_align === Clutter.ActorAlign.CENTER &&
@@ -851,22 +851,25 @@ for (const cell of runtimeCells) {
 check(runtimeCells[0].children[1].text === '~3m' && !runtimeCells[1].children[1].visible,
     'running forecast remains below while completed runtime has no remaining estimate');
 button._applyPanelProgressPulse(runtimeReference + 60 * 1000);
-check(liveRuntime.text === '01:02' && doneRuntime.text === '02:11', 'live minute ticks without replacing actors or advancing final duration');
+check(liveRuntime.text === '01:02' && doneRuntime.text === '' && !doneRuntime.visible, 'live minute ticks keep completed timer hidden');
 check(liveRuntime.opacity === 255 && doneRuntime.opacity === 255, 'runtime labels do not pulse with progress fill');
 for (const [seconds, expected] of [[0, '00:00'], [59, '00:00'], [60, '00:01'], [3599, '00:59'],
     [3600, '01:00'], [3660, '01:01'], [90000, '25:00'], [360000, '100:00']]) {
     runtimeAgents[0].run_started_at = new Date(runtimeReference - seconds * 1000).toISOString();
     runtimeAgents[1].task_time_estimate.observed_active_seconds = seconds;
     button._updatePanelProgress(runtimePayload, false);
-    check(liveRuntime.text === expected && doneRuntime.text === expected, 'HH:MM truncates partial minutes and keeps hours beyond a day');
+    check(liveRuntime.text === expected && doneRuntime.text === '' && !doneRuntime.visible, 'active HH:MM truncates partial minutes and keeps completed timer hidden');
 }
 runtimeAgents[0].run_started_at = new Date(runtimeReference + 60000).toISOString();
 button._updatePanelProgress(runtimePayload, false);
 check(liveRuntime.text === '00:00', 'future live timestamp never produces negative runtime');
 for (const value of [null, -1, NaN, Infinity, '120']) {
+    runtimeAgents[0].run_started_at = 'invalid';
+    runtimeAgents[0].task_time_estimate.observed_active_seconds = value;
     runtimeAgents[1].task_time_estimate.observed_active_seconds = value;
     button._updatePanelProgress(runtimePayload, false);
-    check(doneRuntime.text === '' && !doneRuntime.visible, 'unavailable or invalid completed duration is omitted honestly');
+    check(liveRuntime.text === '' && !liveRuntime.visible && doneRuntime.text === '' && !doneRuntime.visible,
+        'invalid active duration stays blank and completed timers remain hidden');
 }
 for (const phase of ['DRAFT', 'STOPPED', 'ATTN', 'RATE', 'INTERRUPTED']) {
     runtimeAgents[1].phase = phase;
@@ -877,7 +880,7 @@ for (const phase of ['DRAFT', 'STOPPED', 'ATTN', 'RATE', 'INTERRUPTED']) {
 Object.assign(runtimeAgents[1], {phase: 'DONE', run_started_at: '2026-10-13T07:45:00Z',
     ready_completed_at: '2026-10-13T09:00:00Z', task_time_estimate: null});
 button._updatePanelProgress(runtimePayload, false);
-check(doneRuntime.text === '01:15', 'timestamp-backed completed records without measured duration retain their final clock');
+check(doneRuntime.text === '' && !doneRuntime.visible, 'completed timer remains hidden even with valid start/completion timestamps');
 runtimeAgents[1].ready_completed_at = 'invalid';
 button._updatePanelProgress(runtimePayload, false);
 check(doneRuntime.text === '' && !doneRuntime.visible, 'malformed completion timestamp is omitted');
@@ -900,23 +903,25 @@ Date.now = () => runtimeReference;
 Object.assign(runtimeAgents[0], {phase: 'DONE', run_active: false, run_started_at: '',
     task_time_estimate: {status: 'complete', observed_active_seconds: 3720}});
 button._updatePanelProgress(runtimePayload, false);
-check(runtimeRow.children[0] === runtimeCells[0] && liveRuntime.text === '01:02' && liveRuntime.visible && liveRuntime.opacity === 255 &&
-    !runtimeCells[0].children[1].visible, 'finishing run freezes measured runtime on same actor and clears remaining estimate');
+check(runtimeRow.children[0] === runtimeCells[0] && liveRuntime.text === '' && !liveRuntime.visible &&
+    !runtimeCells[0].children[1].visible, 'finishing run immediately clears runtime and remaining estimate on same actors');
 button._applyPanelProgressPulse(runtimeReference + 3600000);
-check(liveRuntime.text === '01:02', 'completed runtime remains fixed on later animation ticks');
+check(liveRuntime.text === '' && !liveRuntime.visible, 'completed runtime stays hidden on later animation ticks');
 // Rebuild with the same completed payload, as after an extension reload.
 button._updatePanelProgress(null, false);
 button._updatePanelProgress(runtimePayload, false);
-check(button._panelProgress.children[0].children[1].children[0].children[2].text === '01:02',
-    'completed runtime restores from published measurement without an in-memory clock cache');
+check(button._panelProgress.children[0].children[1].children[0].children[2].text === '' &&
+    !button._panelProgress.children[0].children[1].children[0].children[2].visible,
+    'completed timer remains hidden after rebuilding from its published measurement');
 snapshot = runtimePayload;
 button.menu.isOpen = true;
 button._refresh();
-check(button._panelProgress.children[0].children[1].children[0].children[2].text === '01:02', 'open-menu refresh preserves completed HH:MM runtime');
+check(button._panelProgress.children[0].children[1].children[0].children[2].text === '' &&
+    !button._panelProgress.children[0].children[1].children[0].children[2].visible, 'open-menu refresh keeps completed timer hidden');
 button.menu.isOpen = false;
 button._updatePanelProgress(null, false);
 Date.now = savedDateNow;
-print('PASS: HH:MM runtime above every known live/completed bar, minute ticks, final freeze and reload recovery.');
+print('PASS: active-only HH:MM runtime, minute ticks, completion clearing and hidden completed timers after reload.');
 // Exercise real retained taskbar cells using the same selector action as menu rows.
 Clutter.EVENT_STOP = 1;
 Clutter.EVENT_PROPAGATE = 0;
