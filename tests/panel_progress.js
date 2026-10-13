@@ -81,6 +81,7 @@ const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'pa
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator', 'taskEstimateText',
     ...(source.includes('function buildPanelTaskCell(') ? ['panelAgentEstimateText', 'buildPanelTaskCell'] : []),
     ...(source.includes('function panelAgentRuntimeText(') ? ['formatPanelRunDuration', 'panelAgentRuntimeText'] : []),
+    ...(source.includes('function panelAgentRuntimeColor(') ? ['panelAgentRuntimeColor'] : []),
     ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
     ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
@@ -441,7 +442,7 @@ for (const [fraction, expected] of [[0,[239,68,68]], [.25,[188,100,75]], [.5,[13
 }
 print('PASS: ordinary active bars transition red to green without changing measured widths or opacity.');
 
-// Goal identity is a three-pixel bottom edge, never a replacement for progress.
+// Goal identity moves to the timer; progress keeps its measured gradient and focus outline.
 for (const focused of [false, true]) {
     for (const [fraction, expected] of [[0, [239,68,68]], [.5, [137,133,81]], [1, [34,197,94]]]) {
         const agent = {phase: 'RUNNING', run_active: true, goal_active: true, focused,
@@ -451,16 +452,10 @@ for (const focused of [false, true]) {
         bar.queue_repaint();
         check(JSON.stringify(bar.draws[0].color.slice(0,3).map(value => Math.round(value*255))) === JSON.stringify(expected),
             'goal retains the measured progress gradient');
-        const goalEdge = bar.strokes.at(-1);
-        check(bar.strokes.length === (focused ? 2 : 1) && goalEdge.width === 3,
-            'goal has one bottom stroke three times as thick as the teal focus stroke');
-        check(JSON.stringify(goalEdge.start) === '[1,9.5]' && JSON.stringify(goalEdge.end) === '[51,9.5]',
-            'goal stroke extends upward inside the existing box');
-        check(goalEdge.start[1] - goalEdge.width / 2 === 8 &&
-            goalEdge.start[1] + goalEdge.width / 2 === bar.height,
-            'three-pixel goal marker grows inward without moving its bottom boundary');
-        check(JSON.stringify(goalEdge.color) === JSON.stringify([168/255,85/255,247/255,.8]),
-            'goal bottom uses goal purple and existing outline alpha');
+        check(bar.strokes.length === (focused ? 1 : 0), 'goal bar has only the optional teal focus outline');
+        check(bar.strokes.every(stroke => stroke.width === 1 &&
+            JSON.stringify(stroke.color) === JSON.stringify([0,1,230/255,.8])),
+            'goal painting adds no purple stroke and preserves the teal focus edge');
         check(bar.draws[0].color[3] === .22 && bar.width === 52 && bar.height === 11,
             'goal outline preserves alpha and actor dimensions');
         if (focused)
@@ -478,9 +473,9 @@ for (const state of [
     bar.queue_repaint();
     check(bar.strokes.length === 0, 'ordinary, inactive, ready and RATE bars have no active-goal edge');
 }
-print('PASS: goal bars keep the gradient and only a three-pixel purple bottom edge; focus and opacity remain intact.');
+print('PASS: goal bars keep gradient and teal focus outline with no purple partition.');
 
-// Goal fill pulses independently of its steady purple marker.
+// Goal fill retains its previous pulse while the purple stripe is removed.
 const steadyGoal = {session_id: 'steady-goal', phase: 'RUNNING', run_active: true,
     goal_active: true, workflow: {available: true, fraction: .5}};
 button._updatePanelProgress({providers: [{agents: [steadyGoal]}]}, false);
@@ -488,10 +483,7 @@ const steadyGoalBar = button._panelProgressBars.get('steady-goal');
 for (const [now, expectedAlpha] of [[0,1], [750,166/255], [1500,77/255], [3000,1]]) {
     button._applyPanelProgressPulse(now);
     check(steadyGoalBar.opacity === 255, 'goal host remains fully opaque throughout pulse');
-    check(steadyGoalBar.strokes.at(-1).color[3] === .8,
-        'purple goal stripe keeps constant effective alpha');
-    check(steadyGoalBar.strokes.at(-1).operator === imports.cairo.Operator.SOURCE,
-        'purple replaces pulsing pixels beneath it instead of blending with them');
+    check(steadyGoalBar.strokes.length === 0, 'goal pulses never repaint a purple stripe');
     check(steadyGoalBar.draws.at(-1).color[3] === expectedAlpha &&
         steadyGoalBar.draws.at(-2).color[3] === .22*expectedAlpha,
         'goal track and fill retain their previous effective opacity pulse');
@@ -503,7 +495,7 @@ button._updatePanelProgress({providers: [{agents: [steadyGoal]}]}, false);
 button._applyPanelProgressPulse(1500);
 check(steadyGoalBar.opacity === 77, 'ordinary run resumes compositor pulse on same actor');
 button._updatePanelProgress(null, false);
-print('PASS: purple goal stripe remains steady while progress opacity still pulses.');
+print('PASS: goal stripe stays removed while progress opacity still pulses.');
 
 // Exercise the shipped menu palette, including focus/goal/reset metadata.
 const phaseOwners = new Function('print', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
@@ -985,3 +977,48 @@ const runtimeStyle = stylesheet.match(/\.ams-panel-agent-runtime\s*\{([^}]+)\}/)
 check(/font-size:\s*13\.5px;/.test(runtimeStyle), 'runtime timer grows from 9px to 13.5px');
 check(/margin-top:\s*1px;/.test(runtimeStyle), 'larger runtime text retains clearance above the centered progress bar');
 print('PASS: runtime timer is 1.5x larger with clearance above the bar.');
+
+// A visible runtime carries the goal cue, and changes without rebuilding its cell.
+const savedColorDateNow = Date.now;
+const timerColorReference = Date.parse('2026-10-13T10:00:00Z');
+Date.now = () => timerColorReference;
+const timerColorAgents = [
+    {session_id: 'timer-regular', workspace: 2, monitor: 0, window_display_id: 1, phase: 'RUNNING', run_active: true,
+        goal_active: false, run_started_at: new Date(timerColorReference - 600000).toISOString(),
+        workflow: {fraction: .5}, task_time_estimate: {status: 'estimated', label: '~3m left'}},
+    {session_id: 'timer-goal', workspace: 2, monitor: 0, window_display_id: 2, phase: 'RUNNING', run_active: true,
+        goal_active: true, focused: true, run_started_at: new Date(timerColorReference - 3660000).toISOString(),
+        workflow: {fraction: .5}, task_time_estimate: {status: 'estimated', label: '~4m left'}},
+];
+const timerColorPayload = {providers: [{kind: 'codex', agents: timerColorAgents}]};
+button._updatePanelProgress(timerColorPayload, false);
+const regularTimerBar = button._panelProgressBars.get('timer-regular');
+const goalTimerBar = button._panelProgressBars.get('timer-goal');
+const regularTimer = regularTimerBar._amsRuntimeLabel;
+const goalTimer = goalTimerBar._amsRuntimeLabel;
+check(regularTimer.visible && regularTimer.text === '00:10' && regularTimer.style === 'color: #e6c200;',
+    'regular run runtime is yellow');
+check(goalTimer.visible && goalTimer.text === '01:01' && goalTimer.style === 'color: #a855f7;',
+    'goal runtime is purple');
+check(regularTimerBar.strokes.length === 0 && goalTimerBar.strokes.length === 1 && goalTimerBar.strokes[0].width === 1,
+    'neither regular nor focused goal bar has a purple partition');
+const regularTimerCell = regularTimerBar.get_parent();
+timerColorAgents[0].goal_active = true;
+timerColorAgents[1].goal_active = false;
+button._updatePanelProgress(timerColorPayload, false);
+check(regularTimerBar.get_parent() === regularTimerCell && regularTimer.style === 'color: #a855f7;' &&
+    goalTimer.style === 'color: #e6c200;', 'switching goal state recolors retained timer actors in both directions');
+button._applyPanelProgressPulse(timerColorReference + 60000);
+check(regularTimer.text === '00:11' && regularTimer.style === 'color: #a855f7;' && regularTimer.opacity === 255 &&
+    goalTimer.style === 'color: #e6c200;' && goalTimer.opacity === 255, 'minute ticks and bar pulses preserve steady timer colors');
+button._updatePanelProgress({...timerColorPayload, updatedAt: new Date(timerColorReference).toISOString()}, true);
+check(regularTimer.style === 'color: #a855f7;' && regularTimer.opacity === 128 &&
+    goalTimer.style === 'color: #e6c200;' && goalTimer.opacity === 128, 'stale timers retain identity color and normal dimming');
+Object.assign(timerColorAgents[0], {phase: 'DONE', run_active: false});
+button._updatePanelProgress(timerColorPayload, false);
+check(!regularTimer.visible && regularTimer.text === '', 'completed goal never leaves a colored timer visible');
+check(regularTimerBar.strokes.every(stroke => stroke.width === 1) && goalTimerBar.strokes.every(stroke => stroke.width === 1),
+    'state transitions never restore a purple stripe');
+button._updatePanelProgress(null, false);
+Date.now = savedColorDateNow;
+print('PASS: yellow regular runtime, purple goal runtime, retained state transitions and no goal stripe.');
