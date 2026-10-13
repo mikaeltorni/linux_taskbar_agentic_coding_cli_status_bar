@@ -705,7 +705,7 @@ const estimateCells = estimateRow.children;
 check(estimateCells.every(cell => cell.style_class === 'ams-panel-task-cell' && cell.width === 52 &&
     cell.layout_manager instanceof Clutter.BinLayout && cell.y_expand === true && cell.y_align === Clutter.ActorAlign.FILL && !cell.reactive),
     'each bar/time cell retains the drawing width and full-height panel allocation');
-check(JSON.stringify(estimateCells.map(cell => cell.children[1].text)) === '["~2m","~1h 1m",""]',
+check(JSON.stringify(estimateCells.map(cell => cell.children[1].text)) === '["~2m","~1h1m",""]',
     'each running bar gets its own compact forecast, completed bar gets none');
 for (const cell of estimateCells) {
     const [bar, estimate] = cell.children;
@@ -741,7 +741,7 @@ for (const state of [
     Object.assign(estimateAgents[0], state);
     button._updatePanelProgress(estimatePayload, false);
     check(retainedEstimateLabel.text === '' && !retainedEstimateLabel.visible, 'no estimate for inactive or unavailable forecast state');
-    check(estimateCells[1].children[1].text === '~1h 1m' && estimateCells[1].children[1].visible,
+    check(estimateCells[1].children[1].text === '~1h1m' && estimateCells[1].children[1].visible,
         'one missing forecast never changes another running agent estimate');
 }
 Object.assign(estimateAgents[0], {phase: 'RUNNING', run_active: true,
@@ -1100,3 +1100,40 @@ button._refresh();
 check(button._panelProgressBars.size === 0 && !button._panelProgress.visible,
     'missing publication still clears obsolete instances');
 print('PASS: continuous stage attachment during pointer/closed-menu refresh, unchanged highlight area, current updates, clicks and recovery.');
+
+// Keep only the forecast duration; no tail after its minute/hour unit reaches the panel.
+const compactForecastAgent = {session_id: 'compact-forecast', workspace: 5, monitor: 0,
+    phase: 'RUNNING', run_active: true, task_time_estimate: {status: 'estimated', label: '~7m left'}};
+const compactForecastPayload = {providers: [{kind: 'codex', agents: [compactForecastAgent]}]};
+button._updatePanelProgress(compactForecastPayload, false);
+const compactForecastBar = button._panelProgressBars.get('compact-forecast');
+const compactForecastLabel = compactForecastBar._amsEstimateLabel;
+for (const [label, expected] of [
+    ['~7m left', '~7m'], ['~7m left (historical)', '~7m'], ['~7m remaining', '~7m'],
+    ['~7mleft', '~7m'], ['~7m l', '~7m'], ['  ~7m left  ', '~7m'], ['~7m', '~7m'],
+    ['~1h 30m left (historical)', '~1h30m'], ['~1h30m left', '~1h30m'],
+    ['~1h 1m remaining', '~1h1m'], ['~1h left', '~1h'], ['7m extra text', '7m'],
+    ['', ''], ['not available', ''],
+]) {
+    compactForecastAgent.task_time_estimate.label = label;
+    button._updatePanelProgress(compactForecastPayload, false);
+    check(compactForecastBar._amsEstimateLabel === compactForecastLabel && compactForecastLabel.text === expected &&
+        compactForecastLabel.visible === Boolean(expected), 'only a compact duration appears on the retained forecast label');
+}
+compactForecastAgent.task_time_estimate.label = '~4m remaining (historical)';
+button._updatePanelProgress(compactForecastPayload, false);
+snapshot = compactForecastPayload;
+button.menu.isOpen = true;
+button._refresh();
+check(compactForecastLabel.text === '~4m', 'open-menu refresh cannot reintroduce trailing forecast text');
+compactForecastAgent.phase = 'DONE';
+compactForecastAgent.run_active = false;
+button._updatePanelProgress(compactForecastPayload, false);
+check(!compactForecastLabel.visible && compactForecastLabel.text === '', 'completed instance still has no remaining estimate');
+button.menu.isOpen = false;
+button._updatePanelProgress(null, false);
+const forecastStyle = stylesheet.match(/\.ams-panel-agent-estimate\s*\{([^}]+)\}/)?.[1] || '';
+check(/font-size:\s*13\.5px;/.test(forecastStyle), 'remaining estimate grows from 9px to 13.5px');
+check(/font-family:\s*monospace;/.test(forecastStyle) && /margin-bottom:\s*1px;/.test(forecastStyle),
+    'larger compact forecast fits below its bar with consistent timer typography');
+print('PASS: 1.5x lower forecast text contains only duration, across suffixes and retained refreshes.');
