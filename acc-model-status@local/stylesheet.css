@@ -60,6 +60,12 @@
   spacing: 6px;
 }
 
+.ams-panel-agent-estimate {
+  font-size: 9px;
+  color: #c4c7cf;
+  margin-bottom: 3px;
+}
+
 .ams-panel-workspace-group {
   spacing: 4px;
 }
