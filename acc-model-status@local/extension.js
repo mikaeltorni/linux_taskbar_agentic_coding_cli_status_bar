@@ -1440,6 +1440,26 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
+     * Open the detailed agent menu only on a secondary pointer press.
+     * Parameters: this - model-status button; event - incoming Clutter input event.
+     * Returns: EVENT_STOP for panel pointer presses, otherwise EVENT_PROPAGATE.
+     */
+    vfunc_event(event) {
+        print(`this=${this} event=${event}`);
+        const type = event.type();
+        let result = Clutter.EVENT_PROPAGATE;
+        if (type === Clutter.EventType.BUTTON_PRESS) {
+            if (event.get_button() === 3)
+                this.menu?.toggle();
+            result = Clutter.EVENT_STOP;
+        } else if (type === Clutter.EventType.TOUCH_BEGIN) {
+            result = Clutter.EVENT_STOP;
+        }
+        print(result);
+        return result;
+    }
+
+    /**
      * Watch the payload file and start the safety-net poll.
      *
      * The Gio monitor gives near-instant updates; the timer covers monitors
