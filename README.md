@@ -430,6 +430,9 @@ status line:
 Left-click an individual agent segment, including its runtime or remaining-time
 label, to jump to that agent's terminal. Hover highlights only that instance's
 portion of the bar. Provider icons, workspace labels and gaps stay neutral.
+The highlight stays steady as the pointer moves within an instance and status
+data refreshes. Task progress, timers and menu details continue updating in
+place; provider summary chips refresh after the pointer leaves the instance.
 Right-click anywhere on the panel indicator, or press **Alt+§**
 (`Alt+Above_Tab`), to open the detailed agent status menu. While this extension is enabled, it temporarily takes that
 accelerator from GNOME's window-group switcher and restores the existing
