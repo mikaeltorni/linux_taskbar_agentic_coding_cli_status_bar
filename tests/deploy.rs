@@ -507,7 +507,7 @@ fn model_status_phase_palette_and_rows() {
         );
     }
     let row = Regex::new(
-        r"    _agentMenuItem\(agent, provider, codexInstanceCount\) \{(?s)(.*?)\n    \}",
+        r"    _agentMenuItem\(agent, provider, codexInstanceCount, track = true\) \{(?s)(.*?)\n    \}",
     )
     .unwrap()
     .captures(&js)

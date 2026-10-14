@@ -1367,7 +1367,7 @@ fn model_status_menu_keeps_click_targets_until_closed() {
     println!("parameters=none");
     let model =
         fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
-    let methods = ["_init", "_refresh", "_queueRefresh"]
+    let methods = ["_init", "_refresh", "_queueRefresh", "_hideTaskHover"]
         .map(|name| extract_method(&model, name))
         .join("\n");
     let stubs = format!(

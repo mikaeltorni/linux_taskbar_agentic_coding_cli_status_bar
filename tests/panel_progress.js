@@ -79,9 +79,10 @@ class Actor {
         this.destroy_all_children();
         this._parent?.remove_child(this);
         this.destroyed = true;
+        this.destroySignal?.(this);
         print(undefined);
     }
-    connect = (signal, callback) => { this[signal] = callback; return 1; };
+    connect = (signal, callback) => { this[signal === 'destroy' ? 'destroySignal' : signal] = callback; return 1; };
     queue_repaint = () => { this.repaints++; this.repaint?.(this); };
     get_surface_size = () => [this.width, this.height];
     get_context = () => ({
@@ -127,10 +128,10 @@ ${snippets.join('\n')}
     const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
         ageSeconds, STALE_SECONDS,
         unreadCompletionCount, saveUnreadStates, log, workspaceAttentionCounts, panelHarnessRateRows} = services;
-    class Destroyer extends St.BoxLayout { ${declaration('destroy', true)} }
+    class Destroyer extends St.BoxLayout { ${declaration('_hideTaskHover', true)} ${declaration('destroy', true)} }
     return {agentPhaseBadgeColor, panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer, paintPanelWorkspaceSeparator,
-        updater: {${['_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
+        updater: {${['_hideTaskHover', '_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _updatePanelTaskEstimate(') ? ['_updatePanelTaskEstimate'] : []),
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
 const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo);
@@ -140,7 +141,7 @@ const visibleBars = container => container.children.flatMap(child =>
 const a = {session_id: 'a', phase: 'RUNNING', run_active: true, workflow: {available: true, fraction: 0.25}};
 const b = {session_id: 'b', phase: 'STOPPED', workflow: {available: true, fraction: 0.6}};
 const payload = {providers: [{kind: 'codex', agents: [a]}, {kind: 'claude', agents: [b]}]};
-const button = Object.assign({_box: new Actor()}, owners.updater);
+const button = Object.assign({_box: new Actor(), _syncTaskHover: () => {}}, owners.updater);
 button._updatePanelProgress(payload, false);
 let bars = visibleBars(button._panelProgress);
 check(bars.length === 2, 'one bar for every open agent');

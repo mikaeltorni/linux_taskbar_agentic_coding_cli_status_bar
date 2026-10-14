@@ -30,6 +30,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -1456,7 +1457,9 @@ class AccModelStatusButton extends PanelMenu.Button {
         // Run before addToStatusArea registers the manager's open callback.
         this.menu.connect('open-state-changed', (_menu, isOpen) => {
             setStatusMenuActionMode(menuManager, isOpen, this._statusMenuActionMode);
-            if (!isOpen)
+            if (isOpen)
+                this._hideTaskHover();
+            else
                 this._queueRefresh();
         });
 
@@ -1743,6 +1746,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         const groups = groupWorkspaceEntries(entries);
         const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry => [entry.key, monitorSortValue(entry.agent.monitor)])]));
         if (key !== this._panelProgressKey) {
+            this._hideTaskHover();
             this._panelProgress.destroy_all_children();
             this._panelProgressBars.clear();
             for (const [index, group] of groups.entries()) {
@@ -1763,6 +1767,12 @@ class AccModelStatusButton extends PanelMenu.Button {
                     previousMonitor = monitor;
                     const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId));
                     const bar = cell.get_children()[0];
+                    cell.connect('notify::hover', () => this._syncTaskHover(
+                        cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
+                    cell.connect('destroy', () => {
+                        if (this._taskHoverCell === cell)
+                            this._hideTaskHover();
+                    });
                     this._panelProgressBars.set(entry.key, bar);
                     box.add_child(cell);
                 }
@@ -1783,6 +1793,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         for (const entry of entries) {
             const bar = this._panelProgressBars.get(entry.key);
             bar._amsAgent = entry.agent;
+            bar._amsProvider = entry.provider;
+            bar._amsInstanceCount = payload.codexInstanceCount;
             const cell = bar.get_parent();
             cell.reactive = Boolean(String(entry.agent.note_id || '').trim());
             cell.can_focus = cell.reactive;
@@ -1809,6 +1821,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             bar._amsPulseAt = now;
             bar.opacity = panelProgressHostOpacity(entry.agent, bar._amsPulseAt, stale, bar._amsReady);
             bar.queue_repaint();
+            if (cell.hover)
+                this._syncTaskHover(cell, entry.agent, entry.provider, payload.codexInstanceCount);
         }
         const liveKeys = new Set(entries.map(entry => entry.key));
         for (const key of this._panelRuntimeStates.keys()) {
@@ -1817,6 +1831,47 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         this._panelProgress.visible = entries.length > 0;
         this._syncPanelPulseTimer();
+        print(undefined);
+    }
+
+    /** Show the colored task row in a box anchored above its panel cell.
+     * Parameters: this - status button; cell - hovered task actor; agent - current task;
+     * provider - task provider; codexInstanceCount - account count for the instance color.
+     * Returns: undefined.
+     */
+    _syncTaskHover(cell, agent, provider, codexInstanceCount) {
+        print(`this=${this} cell=${cell} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount}`);
+        if (!cell.hover || this.menu.isOpen) {
+            if (this._taskHoverCell === cell)
+                this._hideTaskHover();
+            print(undefined);
+            return;
+        }
+        this._hideTaskHover();
+        const item = this._agentMenuItem(agent, provider, codexInstanceCount, false);
+        item.reactive = false;
+        item.can_focus = false;
+        const popup = new BoxPointer.BoxPointer(St.Side.BOTTOM, {reactive: false});
+        popup.add_style_class_name('popup-menu-boxpointer');
+        popup.add_style_class_name('ams-task-hover');
+        popup.bin.set_child(item);
+        Main.layoutManager.addChrome(popup);
+        popup.setPosition(cell, 0.5);
+        this._taskHoverCell = cell;
+        this._taskHoverPopup = popup;
+        popup.open(BoxPointer.PopupAnimation.NONE);
+        print(undefined);
+    }
+
+    /** Remove the anchored preview and release its actor.
+     * Parameters: this - status button owning the optional preview.
+     * Returns: undefined.
+     */
+    _hideTaskHover() {
+        print(`this=${this}`);
+        this._taskHoverPopup?.destroy();
+        this._taskHoverPopup = null;
+        this._taskHoverCell = null;
         print(undefined);
     }
 
@@ -2102,22 +2157,13 @@ class AccModelStatusButton extends PanelMenu.Button {
         print(undefined);
     }
 
-    /**
-     * Build one agent row: project tag, colored phase badge, title, origin.
-     *
-     * The leading tag is Phrase Automation's persisted compact project label
-     * (for example ``INS`` for installation_scripts), omitted when ACC could
-     * not match the agent path to a project. Workspace numbers stay in the
-     * group headings. A live run shows the compact ACC clock in RUNNING
-     * yellow or goal purple instead of the word RUNNING; other phases keep
-     * their word.
-     *
-     * @param {object} agent - agent entry enriched from its live window.
-     * @param {object} provider - provider metadata owning the agent.
-     * @param {number} codexInstanceCount - registered accounts for CX tag colors.
-     * @returns {PopupMenu.PopupBaseMenuItem} the agent row.
+    /** Build the colored detail row for the menu or a noninteractive hover preview.
+     * Parameters: this - status button; agent - window-scoped task; provider - owning provider;
+     * codexInstanceCount - registered accounts; track - whether to register menu clocks and progress.
+     * Returns: the task menu item with its colored detail row.
      */
-    _agentMenuItem(agent, provider, codexInstanceCount) {
+    _agentMenuItem(agent, provider, codexInstanceCount, track = true) {
+        print(`this=${this} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount} track=${track}`);
         const noteId = String(agent.note_id || '').trim();
         const actionable = Boolean(noteId);
         const item = new PopupMenu.PopupBaseMenuItem({
@@ -2161,8 +2207,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             y_align: Clutter.ActorAlign.CENTER,
         });
         badge.set_style(`color: ${agentPhaseBadgeColor(agent)};`);
-        if ((agent.run_active && String(agent.phase || '').trim().toUpperCase() === 'RUNNING') ||
-            agent.queued_reset_at) {
+        if (track && ((agent.run_active && String(agent.phase || '').trim().toUpperCase() === 'RUNNING') ||
+            agent.queued_reset_at)) {
             badge._amsAgent = agent;
             this._runClockActors.push(badge);
         }
@@ -2199,8 +2245,9 @@ class AccModelStatusButton extends PanelMenu.Button {
         const widgets = buildTaskProgressLayer(item, row, badge, agent);
         widgets.estimateLabel = estimateLabel;
         const key = String(agent.session_id || agent.tmux_name || agent.key || '');
-        if (key)
+        if (track && key)
             this._taskRows.set(key, widgets);
+        print(item);
         return item;
     }
 
@@ -2238,6 +2285,7 @@ class AccModelStatusButton extends PanelMenu.Button {
      */
     destroy() {
         print(`this=${this}`);
+        this._hideTaskHover();
         if (this._panelPulseId) {
             GLib.source_remove(this._panelPulseId);
             this._panelPulseId = 0;
