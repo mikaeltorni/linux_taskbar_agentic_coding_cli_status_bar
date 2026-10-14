@@ -380,13 +380,25 @@ payloads lacking the confirmed field still use phase transitions.
 
 Each agent's bar has small timing labels centered above and below its fill.
 The upper label shows runtime as `HH:MM` (hours and whole minutes, without
-seconds) in 13.5px text, 1.5 times its original size. It appears only while the
-agent is actively running, using the current run's start or ACC's published
-active-duration measurement when the start is unavailable. It clears as soon
-as the run stops or finishes, including after a reload. Unknown timing is
-omitted. Regular runtime text is yellow (`#e6c200`); active goal runtime text
-is purple (`#a855f7`). Timer colors update when goal state changes and stay
-steady while the progress fill pulses.
+seconds) in 13.5px text, 1.5 times its original size. While the agent runs,
+it uses the current task's start or ACC's published active-duration measurement
+when the start is unavailable. Regular runtime text is yellow (`#e6c200`);
+active goal runtime text is purple (`#a855f7`). These running colors stay steady
+while the progress fill pulses.
+
+When a task finishes, its timer freezes at the final duration and flashes
+green to white with the completed bar on the same three-second cycle. It stays
+visible while that session is unread, until opening or focusing its terminal
+acknowledges the completion. Acknowledgement hides the timer and stops its
+flash; switching away does not bring it back. Other unread sessions retain
+their own timers. Starting another task shows a fresh running clock. Stopped,
+interrupted and other unfinished idle sessions have no timer.
+
+The taskbar retains the running start across completion and workspace moves.
+After an extension reload, an unread completion can use ACC's published
+completed active-duration measurement when its start is unavailable. Unknown
+or invalid timing is omitted. Stale completed timers stay dim and stop flashing,
+matching their bars.
 
 The lower label shows that running agent's own remaining estimate in 13.5px
 monospace text, 1.5 times its original size. It keeps only the duration, such
