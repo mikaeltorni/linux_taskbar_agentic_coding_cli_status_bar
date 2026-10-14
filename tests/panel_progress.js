@@ -106,6 +106,7 @@ const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'pa
     ...(source.includes('function buildPanelTaskCell(') ? ['panelAgentEstimateText', 'buildPanelTaskCell'] : []),
     ...(source.includes('function panelAgentRuntimeText(') ? ['formatPanelRunDuration', 'panelAgentRuntimeText'] : []),
     ...(source.includes('function panelAgentRuntimeColor(') ? ['panelAgentRuntimeColor'] : []),
+    ...(source.includes('function panelRuntimeObservation(') ? ['panelRuntimeObservation'] : []),
     ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
     ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
@@ -838,7 +839,7 @@ for (const isOpen of [true, false]) {
 check(visibleBars(button._panelProgress).some(bar => bar._amsEstimateLabel.text === '~3m'), 'own-agent forecasts survive refresh and recovery');
 print('PASS: trailing estimate removed in every refresh state; per-bar forecast remains.');
 
-// Runtime is an HH:MM clock above active runs; completed instances have no timer.
+// Runtime is an HH:MM clock above active runs; confirmed finishes retain their duration.
 const savedDateNow = Date.now;
 const runtimeReference = Date.parse('2026-10-13T10:00:00Z');
 Date.now = () => runtimeReference;
@@ -894,9 +895,9 @@ for (const phase of ['DRAFT', 'STOPPED', 'ATTN', 'RATE', 'INTERRUPTED']) {
     check(doneRuntime.text === '' && !doneRuntime.visible, 'nonrunning unfinished states do not invent a completed runtime');
 }
 Object.assign(runtimeAgents[1], {phase: 'DONE', run_started_at: '2026-10-13T07:45:00Z',
-    ready_completed_at: '2026-10-13T09:00:00Z', task_time_estimate: null});
+    ready_completed_at: '2026-10-13T09:00:00Z', unread_completion: true, task_time_estimate: null});
 button._updatePanelProgress(runtimePayload, false);
-check(doneRuntime.text === '' && !doneRuntime.visible, 'completed timer remains hidden even with valid start/completion timestamps');
+check(doneRuntime.text === '01:15' && doneRuntime.visible, 'confirmed completion freezes the clock at finish time');
 runtimeAgents[1].ready_completed_at = 'invalid';
 button._updatePanelProgress(runtimePayload, false);
 check(doneRuntime.text === '' && !doneRuntime.visible, 'malformed completion timestamp is omitted');
@@ -1147,3 +1148,48 @@ check(/font-size:\s*13\.5px;/.test(forecastStyle), 'remaining estimate grows fro
 check(/font-family:\s*monospace;/.test(forecastStyle) && /margin-bottom:\s*1px;/.test(forecastStyle),
     'larger compact forecast fits below its bar with consistent timer typography');
 print('PASS: 1.5x lower forecast text contains only duration, across suffixes and retained refreshes.');
+
+// A completed task keeps its final runtime and shares the exact ready-bar pulse.
+const completionClockNow = Date.parse('2026-10-14T10:00:00Z');
+const completionClockAgent = {session_id: 'completion-clock', phase: 'RUNNING', run_active: true,
+    run_started_at: '2026-10-14T08:45:00Z', note_id: 'completion-note',
+    workflow: {available: true, fraction: .5}};
+const completionClockPayload = {providers: [{kind: 'codex', agents: [completionClockAgent]}]};
+Date.now = () => completionClockNow;
+button._updatePanelProgress(completionClockPayload, false);
+const completionClockBar = button._panelProgressBars.get('completion-clock');
+const completionClockLabel = completionClockBar._amsRuntimeLabel;
+check(completionClockLabel.text === '01:15', 'running taskbar clock uses its published task start');
+Object.assign(completionClockAgent, {phase: 'DONE', run_active: false, unread_completion: true, run_started_at: '',
+    ready_completed_at: '2026-10-14T10:00:00Z'});
+button._updatePanelProgress(completionClockPayload, false);
+check(button._panelProgressBars.get('completion-clock') === completionClockBar &&
+    completionClockLabel.text === '01:15' && completionClockLabel.visible,
+    'completion retains the timer on the same taskbar actor');
+for (const [offset, expected] of [[0, [34,197,94]], [750, [145,226,175]],
+    [1500, [255,255,255]], [2250, [145,226,175]], [3000, [34,197,94]], [3600000, [34,197,94]]]) {
+    button._applyPanelProgressPulse(completionClockNow + offset);
+    check(completionClockLabel.text === '01:15' && completionClockLabel.visible,
+        'completed timer never accrues waiting time');
+    check(completionClockLabel.style === `color: rgb(${expected.join(', ')});`,
+        'timer flashes green to white on the same three-second wave as its bar');
+    const fill = completionClockBar.draws.at(-1).color.slice(0, 3).map(channel => Math.round(channel * 255));
+    check(fill.every((channel, index) => Math.abs(channel - expected[index]) <= 1),
+        'timer and progress fill sample the same flash at every phase');
+}
+Date.now = () => completionClockNow + 1500;
+button._updatePanelProgress(completionClockPayload, true);
+check(completionClockLabel.style === 'color: rgb(34, 197, 94);' && completionClockLabel.opacity === 128,
+    'stale completed timer stops flashing and dims with its bar');
+button._applyPanelProgressPulse(completionClockNow + 2250);
+check(completionClockLabel.style === 'color: rgb(34, 197, 94);', 'stale animation ticks cannot flash the timer');
+for (const [start, finish] of [['invalid', '2026-10-14T10:00:00Z'],
+    ['2026-10-14T08:45:00Z', 'invalid'], ['2026-10-14T10:01:00Z', '2026-10-14T10:00:00Z']]) {
+    Object.assign(completionClockAgent, {run_started_at: start, ready_completed_at: finish});
+    button._updatePanelProgress(completionClockPayload, false);
+    check(!completionClockLabel.visible && completionClockLabel.text === '',
+        'invalid or reversed completion clocks never invent a duration');
+}
+button._updatePanelProgress(null, false);
+Date.now = savedDateNow;
+print('PASS: completed taskbar clock freezes duration and flashes in sync with the ready progress bar.');
