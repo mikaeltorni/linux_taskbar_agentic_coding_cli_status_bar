@@ -1088,10 +1088,26 @@ function formatPanelRunDuration(seconds) {
 }
 
 /**
- * Read runtime only for an actively running task.
+ * Retain the displayed task start when ACC clears its active clock at completion.
+ * Parameters: agent - current scoped payload row; previous - prior observation for this session.
+ * Returns: copied presentation row with the same task's start, without changing the payload.
+ */
+function panelRuntimeObservation(agent, previous) {
+    print(`agent=${JSON.stringify(agent)} previous=${JSON.stringify(previous)}`);
+    const result = {...agent};
+    if (String(agent.phase || '').toUpperCase() === 'DONE' && !agent.run_started_at &&
+        previous && (panelProgressUnderway(previous) ||
+            agent.ready_completed_at === previous.ready_completed_at))
+        result.run_started_at = previous.run_started_at;
+    print(JSON.stringify(result));
+    return result;
+}
+
+/**
+ * Read the live runtime or the frozen duration of a confirmed finish.
  * Parameters: agent - scoped agent with run timestamps and optional measured duration;
  * now - reference epoch milliseconds, defaulting to the current clock.
- * Returns: live HH:MM runtime, or empty text for inactive tasks or unknown timing.
+ * Returns: HH:MM runtime, or empty text when task timing is unavailable.
  */
 function panelAgentRuntimeText(agent, now = Date.now()) {
     print(`agent=${JSON.stringify(agent)} now=${now}`);
@@ -1101,6 +1117,11 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
         seconds = Number.isFinite(started)
             ? Math.max(0, (now - started) / 1000)
             : agent.task_time_estimate?.observed_active_seconds;
+    } else if (String(agent.phase || '').toUpperCase() === 'DONE') {
+        const started = Date.parse(agent.run_started_at || '');
+        const completed = Date.parse(agent.ready_completed_at || '');
+        if (Number.isFinite(started) && Number.isFinite(completed) && completed >= started)
+            seconds = (completed - started) / 1000;
     }
     const text = formatPanelRunDuration(seconds);
     print(text);
@@ -1108,13 +1129,18 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
 }
 
 /**
- * Select the steady runtime color from the shared regular/goal palette.
- * Parameters: agent - scoped agent whose active goal state determines the timer color.
- * Returns: purple for an active goal, otherwise the regular running yellow.
+ * Color the runtime with the same completion wave as its taskbar bar.
+ * Parameters: agent - scoped task state; now - animation epoch milliseconds;
+ * stale - whether the published task state is too old to animate.
+ * Returns: completion RGB, goal purple, or regular running yellow CSS color.
  */
-function panelAgentRuntimeColor(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
-    const color = panelProgressGoalActive(agent) ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING;
+function panelAgentRuntimeColor(agent, now = Date.now(), stale = false) {
+    print(`agent=${JSON.stringify(agent)} now=${now} stale=${stale}`);
+    let color = panelProgressGoalActive(agent) ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING;
+    if (String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at) {
+        const rgb = panelProgressColor(1, agent.unread_completion === true && !stale, now, agent);
+        color = `rgb(${rgb.join(', ')})`;
+    }
     print(color);
     return color;
 }
@@ -1707,6 +1733,8 @@ class AccModelStatusButton extends PanelMenu.Button {
                     this._box.set_child_below_sibling(child, this._panelProgress);
             }
         }
+        if (!this._panelRuntimeStates)
+            this._panelRuntimeStates = new Map();
         const entries = (payload?.providers || []).flatMap(provider =>
             (provider.agents || []).map((agent, index) => ({provider, agent,
                 key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)})));
@@ -1765,9 +1793,12 @@ class AccModelStatusButton extends PanelMenu.Button {
             const publishedAt = Date.parse(payload?.updatedAt || '');
             const runtimeAt = stale ? (Number.isFinite(publishedAt) ? publishedAt : bar._amsRuntimeAt ?? now) : now;
             bar._amsRuntimeAt = runtimeAt;
+            const runtimeAgent = panelRuntimeObservation(entry.agent, this._panelRuntimeStates.get(entry.key));
+            this._panelRuntimeStates.set(entry.key, runtimeAgent);
+            bar._amsRuntimeAgent = runtimeAgent;
             const runtime = bar._amsRuntimeLabel;
-            runtime.text = panelAgentRuntimeText(entry.agent, runtimeAt);
-            runtime.style = `color: ${panelAgentRuntimeColor(entry.agent)};`;
+            runtime.text = panelAgentRuntimeText(runtimeAgent, runtimeAt);
+            runtime.style = `color: ${panelAgentRuntimeColor(entry.agent, now, stale)};`;
             runtime.visible = Boolean(runtime.text);
             runtime.opacity = stale ? 128 : 255;
             bar._amsUnderway = panelProgressUnderway(entry.agent);
@@ -1776,6 +1807,11 @@ class AccModelStatusButton extends PanelMenu.Button {
             bar._amsPulseAt = now;
             bar.opacity = panelProgressHostOpacity(entry.agent, bar._amsPulseAt, stale, bar._amsReady);
             bar.queue_repaint();
+        }
+        const liveKeys = new Set(entries.map(entry => entry.key));
+        for (const key of this._panelRuntimeStates.keys()) {
+            if (!liveKeys.has(key))
+                this._panelRuntimeStates.delete(key);
         }
         this._panelProgress.visible = entries.length > 0;
         this._syncPanelPulseTimer();
@@ -1805,16 +1841,17 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Update live runtime and pulse bar opacity and ready fills without replacing actors.
+     * Update live and frozen runtimes with bar opacity and completion color pulses.
      * Parameters: this - status button; now - optional epoch milliseconds.
      * Returns: undefined.
      */
     _applyPanelProgressPulse(now = Date.now()) {
         print(`this=${this} now=${now}`);
         for (const bar of this._panelProgressBars.values()) {
-            if (bar._amsRuntimeLabel && bar._amsUnderway && !bar._amsStale) {
-                bar._amsRuntimeLabel.text = panelAgentRuntimeText(bar._amsAgent, now);
+            if (bar._amsRuntimeLabel && (bar._amsUnderway || bar._amsReady) && !bar._amsStale) {
+                bar._amsRuntimeLabel.text = panelAgentRuntimeText(bar._amsRuntimeAgent, now);
                 bar._amsRuntimeLabel.visible = Boolean(bar._amsRuntimeLabel.text);
+                bar._amsRuntimeLabel.style = `color: ${panelAgentRuntimeColor(bar._amsAgent, now)};`;
             }
             if ((bar._amsUnderway || bar._amsReady) && !bar._amsStale) {
                 bar.opacity = panelProgressHostOpacity(bar._amsAgent, now, false, bar._amsReady);
