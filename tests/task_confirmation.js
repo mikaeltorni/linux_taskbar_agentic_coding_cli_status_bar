@@ -25,6 +25,7 @@ class Actor {
     add_style_class_name = () => {};
     set_style = style => { this.style = style; };
     remove_style_class_name = () => {};
+    get_stage = () => ({});
     get_width = () => 200;
     get_height = () => 24;
     set_position = () => {};

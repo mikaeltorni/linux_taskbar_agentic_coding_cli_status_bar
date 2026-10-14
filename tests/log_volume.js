@@ -7,8 +7,25 @@ const source = new TextDecoder().decode(bytes).replace(/^import .*;\n/gm, '')
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const traces = [];
 const errors = [];
-const api = new Function('GObject', 'PanelMenu', 'Extension', 'print', 'logError',
-    `${source}\nreturn {displayedPhase, agentPhaseBadgeText, agentPhaseBadgeColor, readPayload, AccModelStatusButton};`)(
+class Actor {
+    stage = null;
+    width = 200;
+    height = 24;
+    handlers = new Map();
+    get_stage = () => this.stage;
+    get_width = () => { check(this.stage !== null, 'detached geometry lookup causes GNOME theme warnings'); return this.width; };
+    get_height = () => { check(this.stage !== null, 'detached geometry lookup causes GNOME theme warnings'); return this.height; };
+    add_child = () => {};
+    set_position = () => {};
+    set_size = (width, height) => { this.width = width; this.height = height; };
+    set_style = () => {};
+    add_style_class_name = () => {};
+    remove_style_class_name = () => {};
+    connect = (name, callback) => this.handlers.set(name, callback);
+}
+const api = new Function('St', 'Clutter', 'GObject', 'PanelMenu', 'Extension', 'print', 'logError',
+    `${source}\nreturn {displayedPhase, agentPhaseBadgeText, agentPhaseBadgeColor, readPayload, buildTaskProgressLayer, AccModelStatusButton};`)(
+    {Widget: Actor}, {BinLayout: class {}, FixedLayout: class {}},
     {registerClass: value => value}, {Button: class {}}, class {},
     (...values) => traces.push(values.map(String).join(' ')),
     (...values) => errors.push(values));
@@ -37,3 +54,15 @@ check(errors.length === 1 && errors[0][1] === 'acc-model-status: unparsable payl
     'real payload errors remain visible');
 check(traces.length === 0, 'error handling adds no diagnostic trace spam');
 print('PASS: 300 status calls retain clocks/colors with zero traces, payload serialization or actor descriptions.');
+
+const item = new Actor();
+item.actor = item;
+const widgets = api.buildTaskProgressLayer(item, new Actor(), new Actor(),
+    {phase: 'RUNNING', workflow: {fraction: 0.5}});
+widgets.track.stage = {};
+widgets.track.handlers.get('notify::allocation')();
+check(widgets.fill.width === 100 && widgets.fill.height === 24, 'attached tracks size the progress fill');
+widgets.track.stage = null;
+widgets.track.handlers.get('notify::allocation')();
+check(widgets.fill.width === 100, 'detachment does not query theme or corrupt the retained fill');
+print('PASS: detached construction and teardown skip geometry; attached allocation retains progress.');
