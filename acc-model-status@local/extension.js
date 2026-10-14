@@ -1374,7 +1374,10 @@ function updateTaskProgress(widgets, agent) {
     }
 }
 
-/** Layer a measured fill behind task text without changing its click target. */
+/** Layer a measured fill behind task text without changing its click target.
+ * Parameters: item - menu row; row - text container; badge - status label; agent - task snapshot.
+ * Returns: retained progress widgets whose geometry updates only while attached to the stage.
+ */
 function buildTaskProgressLayer(item, row, badge, agent) {
     const stack = new St.Widget({layout_manager: new Clutter.BinLayout(), x_expand: true});
     const track = new St.Widget({style_class: 'ams-task-progress',
@@ -1386,7 +1389,14 @@ function buildTaskProgressLayer(item, row, badge, agent) {
     row.x_expand = true;
     stack.add_child(row);
     item.add_child(stack);
-    const widgets = {item, track, fill, badge, blocks: [], fraction: 0, resize() {
+    const widgets = {item, track, fill, badge, blocks: [], fraction: 0,
+    /** Size attached progress actors without requesting themes during construction or teardown.
+     * Parameters: this - retained progress widget group.
+     * Returns: undefined.
+     */
+    resize() {
+        if (!track.get_stage())
+            return;
         const width = track.get_width(), height = track.get_height();
         const rects = taskProgressRectangles(this.agent, width);
         fill.visible = track.visible && this.fraction > 0 && !rects.length;

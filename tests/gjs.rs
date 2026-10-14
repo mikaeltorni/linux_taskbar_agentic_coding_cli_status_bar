@@ -1660,6 +1660,7 @@ class Actor {
     }
     add_child(child) { this.children.push(child); }
     connect(name, callback) { this.handlers[name] = callback; }
+    get_stage = () => ({});
     get_width() { return this.width; }
     get_height() { return this.height; }
     set_size(width, height) { this.width = width; this.height = height; }
