@@ -278,7 +278,8 @@ A bell always appears at the far left of the ACC status indicator, including
 when no agent windows are open. Click it to mute or unmute announcements across
 all ACC instances: it runs the installed `agent-command-center silent toggle`,
 the same shared control as `acc silent on` / `acc silent off`. A slashed bell
-means muted; a regular bell means enabled. The indicator reads ACC's published
+means muted; a regular bell means enabled. Hovering or focusing the bell
+highlights its clickable area. The indicator reads ACC's published
 `announcements_muted` setting and updates even while its menu is open. ACC's
 per-invocation `ATTS_SILENT` / legacy `ACC_SILENT` environment overrides still
 apply.
