@@ -324,9 +324,17 @@ six pixels of space on each side (twice the normal spacing, plus the one-pixel
 line). Windows on the same monitor keep their normal gap. Monitor moves update
 these boundaries automatically without changing terminal-number order. The outline follows window
 focus; other terminals on the same workspace stay unoutlined.
+Hover an individual agent bar to show its colored task detail row in a separate
+box anchored above that bar: project tag, provider icon, Codex instance, phase
+or run clock, task title, branch, and any remaining estimate. The box stays in
+place as the pointer moves within the bar, disappears on leave, and is hidden
+while the right-click details menu is open. Left-click still focuses that exact
+agent terminal.
+
 The public render probe runs with
 `cargo test --test panel_progress --test panel_interaction` (or
-`gjs tests/panel_progress.js .` and `gjs tests/panel_interaction.js .`) using
+`gjs tests/panel_progress.js .`, `gjs tests/panel_interaction.js .`, and
+`gjs tests/task_hover.js .`) using
 isolated actors without changing the desktop or user metadata. These checks
 cover per-instance clicks and hover, right-click details, retained clocks,
 and the existing menu shortcut.
