@@ -1525,7 +1525,7 @@ function completionCommand(agent, registry) {
 const AccModelStatusButton = GObject.registerClass(
 class AccModelStatusButton extends PanelMenu.Button {
     /**
-     * Build the panel button.
+     * Build the panel button and identify the loaded completion routing.
      *
      * Parameters: this - button instance; extension - owning extension for the icon directory.
      * Returns: undefined after initialization.
@@ -1533,6 +1533,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     _init(extension) {
         print(`this=${this} extension=${extension}`);
         super._init(0.5, 'ACC Model Status');
+        print('acc-model-status: confirmed-close session recovery loaded');
         this.track_hover = false;
         // Native panel hover and open-menu styles must not paint every instance.
         this.style = 'background-color: transparent; box-shadow: none;';
@@ -2070,16 +2071,19 @@ class AccModelStatusButton extends PanelMenu.Button {
         print(undefined);
     }
 
-    /** Backup and complete the exact registered note, closing its linked CLI through pa.
-     * Parameters: this - status button; agent - confirmed task with stable session and note ids.
+    /** Complete the selected registry session through pa's direct or recovered note ownership.
+     * Parameters: this - status button; agent - confirmed task with a stable session id
+     * and its published note id or tmux identity.
      * Returns: undefined.
      */
     _completeAgent(agent) {
         print(`this=${this} agent=${JSON.stringify(agent)}`);
         try {
             const file = this._file.get_parent().get_child('sessions').get_child('registry.json');
+            print(`acc-model-status: completion registry ${file.get_path()}`);
             const [ok, bytes] = file.load_contents(null);
             const argv = ok ? completionCommand(agent, JSON.parse(new TextDecoder().decode(bytes))) : null;
+            print(`acc-model-status: confirmed-close session=${agent.session_id} note=${agent.note_id} argv=${JSON.stringify(argv)}`);
             if (!argv)
                 throw new Error('Selected task no longer has a matching registered note');
             const process = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
@@ -2092,6 +2096,7 @@ class AccModelStatusButton extends PanelMenu.Button {
                 }
             });
         } catch (error) {
+            print(`acc-model-status: confirmed-close rejected: ${error.message}`);
             Main.notifyError('Could not mark task Done', error.message);
         }
         print(undefined);
