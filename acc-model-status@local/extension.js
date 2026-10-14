@@ -1502,7 +1502,8 @@ function setStatusMenuActionMode(manager, isOpen, originalActionMode) {
 
 /** Resolve the completion argv from matching registry ownership.
  * Parameters: agent - confirmed task; registry - parsed ACC session registry.
- * Returns: public pa completion-and-close argv, or null for a missing/mismatched note link.
+ * Returns: public pa completion argv, using native session recovery when launch note links are absent;
+ * null for a missing session or mismatched panel identity.
  */
 function completionCommand(agent, registry) {
     print(`agent=${JSON.stringify(agent)} registry=${registry}`);
@@ -1510,8 +1511,13 @@ function completionCommand(agent, registry) {
     const env = entry?.launch_env;
     const id = env?.PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID;
     const file = env?.PHRASE_AUTOMATION_NOTES_FILE;
-    const result = agent.session_id && entry?.id === agent.session_id && id && id === agent.note_id && file
-        ? ['pa', 'mark-in-progress-done', '--id', id, '--notes-file', file, '--close-session', agent.session_id] : null;
+    let result = null;
+    if (agent.session_id && entry?.id === agent.session_id) {
+        if (id && id === agent.note_id && file)
+            result = ['pa', 'mark-in-progress-done', '--id', id, '--notes-file', file, '--close-session', agent.session_id];
+        else if (!id && !file && entry.tmux_name && agent.note_id === entry.tmux_name)
+            result = ['pa', 'mark-in-progress-done', '--close-session', agent.session_id];
+    }
     print(result);
     return result;
 }
