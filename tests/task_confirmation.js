@@ -178,3 +178,13 @@ button._hideTaskConfirmation();
 check(capturePress(captureRow, {type: () => 2}) === Clutter.EVENT_PROPAGATE,
     'non-pointer events retain native menu handling');
 print('PASS: menu captured-event arms before native ClickAction.');
+
+// The reported window has no launch-env note link; the panel carries its tmux name.
+const recoveredAgent = {...agent, note_id: 'acc-session-a', tmux_name: 'acc-session-a'};
+const recoveredRegistry = {sessions: {'session-a': {id: 'session-a', tmux_name: 'acc-session-a', launch_env: {}}}};
+check(JSON.stringify(Button.completionCommand(recoveredAgent, recoveredRegistry)) ===
+    JSON.stringify(['pa', 'mark-in-progress-done', '--close-session', 'session-a']),
+    'unlinked taskbar session delegates note recovery to the native completion owner');
+check(Button.completionCommand({...recoveredAgent, note_id: 'unrelated'}, recoveredRegistry) === null,
+    'changed panel identity cannot submit an unrelated recovered task');
+print('PASS: reported unlinked session reaches native note recovery without a guessed note id.');
