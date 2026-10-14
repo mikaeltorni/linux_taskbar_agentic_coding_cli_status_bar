@@ -66,3 +66,22 @@ widgets.track.stage = null;
 widgets.track.handlers.get('notify::allocation')();
 check(widgets.fill.width === 100, 'detachment does not query theme or corrupt the retained fill');
 print('PASS: detached construction and teardown skip geometry; attached allocation retains progress.');
+
+const [, rateBytes] = Gio.File.new_for_path(`${root}/agentic-cli-status@local/extension.js`).load_contents(null);
+const rateSource = new TextDecoder().decode(rateBytes).replace(/^import .*;\n/gm, '')
+    .replace('export default class', 'class');
+const rates = new Function('GObject', 'PanelMenu', 'Extension', 'print',
+    `${rateSource}\nreturn {codexBarWithForecastMarkup, codexResetForecastMenuEntries};`)(
+    {registerClass: value => value}, {Button: class {}}, class {},
+    (...values) => traces.push(values.map(String).join(' ')));
+const forecast = {enabled: true, consensus_percent_24h: 28, consensus_percent_48h: 49,
+    sites: [{name: 'Example', predictions: [{label: '24h', percent: 28}]}],
+    toJSON: () => { serializations++; return {enabled: true}; }};
+for (let i = 0; i < 100; i++) {
+    const markup = rates.codexBarWithForecastMarkup(forecast, 'CX1', null, 0);
+    check(markup.includes('28%') && markup.includes('49%'), 'forecast percentages are retained');
+    const entries = rates.codexResetForecastMenuEntries(forecast);
+    check(entries[1].text === 'Example — 24h: 28%', 'forecast menu entries are retained');
+}
+check(traces.length === 0 && serializations === 0, 'forecast rendering must not dump snapshots into syslog');
+print('PASS: 200 forecast calls retain output with zero traces or diagnostic serialization.');
