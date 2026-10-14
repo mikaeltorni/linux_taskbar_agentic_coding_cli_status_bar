@@ -110,7 +110,7 @@ emit(JSON.stringify({{flags, absent, unmuted, muted, restored, same: box.childre
     assert_eq!(observed, serde_json::json!({"flags": [false, true, false, false], "absent": null, "unmuted": [2, "preferences-system-notifications-symbolic", true], "muted": ["notifications-disabled-symbolic", true, true], "restored": ["preferences-system-notifications-symbolic", true, true], "same": true, "calls": [["/test/.local/bin/agent-command-center", "silent", "toggle"], ["/test/.local/bin/agent-command-center", "silent", "toggle"], ["/test/.local/bin/agent-command-center", "silent", "toggle"]], "errors": ["acc-model-status: could not toggle announcements", "acc-model-status: could not toggle announcements"]}));
     let css = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/acc-model-status@local/stylesheet.css")).unwrap();
     assert!(css.contains(".ams-mute-button {"));
-    assert!(css.contains("min-width: 24px;") && css.contains("min-height: 24px;"));
+    assert!(css.contains("min-width: 28px;") && css.contains("min-height: 24px;"));
     assert!(css.contains(".ams-mute-button:hover"));
     eprintln!("None");
 }

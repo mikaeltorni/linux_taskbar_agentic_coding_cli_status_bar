@@ -40,8 +40,12 @@
   icon-size: 16px;
 }
 
+.ams-mute-button .ams-icon {
+  icon-size: 20px;
+}
+
 .ams-mute-button {
-  min-width: 24px;
+  min-width: 28px;
   min-height: 24px;
   border-radius: 4px;
 }
