@@ -1849,6 +1849,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         this._hideTaskHover();
         const item = this._agentMenuItem(agent, provider, codexInstanceCount, false);
+        item.add_style_class_name('ams-task-hover-content');
         item.reactive = false;
         item.can_focus = false;
         const popup = new BoxPointer.BoxPointer(St.Side.BOTTOM, {reactive: false});

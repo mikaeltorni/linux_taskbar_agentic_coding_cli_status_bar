@@ -218,3 +218,11 @@
   border-radius: 4px;
   background-color: rgba(255, 255, 255, 0.16);
 }
+
+/* Keep the anchored hover details readable above any desktop background. */
+.ams-task-hover-content {
+  background-color: #242424;
+  border: 1px solid #606060;
+  border-radius: 8px;
+  padding: 12px 16px;
+}

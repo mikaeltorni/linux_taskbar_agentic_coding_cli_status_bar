@@ -31,7 +31,7 @@ const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', '
     {layoutManager: {addChrome: actor => { actor.chrome = true; }}}, print);
 const button = new Button();
 button.menu = {isOpen: false};
-button._agentMenuItem = (agent, provider, count, track) => ({agent, provider, count, track, reactive: true});
+button._agentMenuItem = (agent, provider, count, track) => ({agent, provider, count, track, reactive: true, add_style_class_name: () => {}});
 const cell = {hover: true};
 const agent = {title: 'Monitor task placement', project_tag: 'ACC', branch: 'master', phase: 'DONE', note_id: '123'};
 const provider = {kind: 'codex'};
@@ -62,3 +62,8 @@ check(popups[2].destroyed, 'cleanup is safe with and without an active preview')
 check(source.includes("cell.connect('notify::hover'") && source.includes("cell.connect('destroy'"),
     'real task actors wire hover and destruction cleanup');
 print('PASS: anchored hover, task details, leave, task switch, menu suppression and cleanup.');
+const [, cssBytes] = Gio.File.new_for_path(`${root}/acc-model-status@local/stylesheet.css`).load_contents(null);
+const css = new TextDecoder().decode(cssBytes);
+check(/\.ams-task-hover-content\s*\{[^}]*background-color:[^}]*border:[^}]*padding:/s.test(css),
+    'hover preview has an explicit separate box background, border and padding');
+check(source.includes("item.add_style_class_name('ams-task-hover-content')"), 'preview applies the separate box style');
