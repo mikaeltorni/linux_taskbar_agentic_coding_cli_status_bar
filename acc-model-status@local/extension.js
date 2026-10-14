@@ -2402,8 +2402,8 @@ class AccModelStatusButton extends PanelMenu.Button {
                 this._focusAgent(noteId);
             });
             if (track) {
-                item.connect('button-press-event', (_item, event) => {
-                    if (event.get_button() !== 1 || !(event.get_state() & Clutter.ModifierType.CONTROL_MASK))
+                item.connect('captured-event', (_item, event) => {
+                    if (event.type() !== Clutter.EventType.BUTTON_PRESS || event.get_button() !== 1 || !(event.get_state() & Clutter.ModifierType.CONTROL_MASK))
                         return Clutter.EVENT_PROPAGATE;
                     item._amsSuppressActivation = true;
                     this._armMenuTaskConfirmation(agent, provider, codexInstanceCount);
