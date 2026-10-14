@@ -40,6 +40,17 @@
   icon-size: 16px;
 }
 
+.ams-mute-button {
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 4px;
+}
+
+.ams-mute-button:hover,
+.ams-mute-button:focus {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
 .ams-count {
   font-weight: bold;
   margin-right: 2px;
