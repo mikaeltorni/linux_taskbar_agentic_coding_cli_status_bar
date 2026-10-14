@@ -76,8 +76,8 @@ const agent = {note_id: 'note-a', session_id: 'session-a', title: 'Fix test run 
 const provider = {kind: 'codex'};
 const cell = Button.buildPanelTaskCell(agent, id => focused.push(id),
     (target, current) => button._showTaskConfirmation(target, current, provider, 3));
-const click = (actor, buttonNumber, ctrl = false) => actor.signals['button-press-event'](actor,
-    {get_button: () => buttonNumber, get_state: () => ctrl ? 4 : 0});
+const click = (actor, buttonNumber, ctrl = false) => (actor.signals['button-press-event'] || actor.signals['captured-event'])(actor,
+    {type: () => 1, get_button: () => buttonNumber, get_state: () => ctrl ? 4 : 0});
 check(click(cell, 1, true) === Clutter.EVENT_STOP, 'Ctrl+left-click consumes the panel event');
 check(focused.length === 0 && completed.length === 0, 'arming neither focuses nor completes');
 check(popups.length === 1 && popups[0].anchor === cell && popups[0].side === 3, 'confirmation sits above the exact instance');
@@ -165,3 +165,16 @@ check(button._taskConfirmation?.agent.session_id === 'session-a', 'native Ctrl+c
 check(focused.length === focusBeforeNative && !button.menu.isOpen, 'native Ctrl activation closes details without focusing terminal');
 button._hideTaskConfirmation();
 print('PASS: native menu ClickAction Ctrl activation bypasses focus and opens confirmation.');
+
+const captureRow = Button.Button.prototype._agentMenuItem.call(button, agent, provider, 3);
+const capturePress = captureRow.signals['captured-event'];
+check(Boolean(capturePress), 'menu captures Ctrl press before native ClickAction consumes it');
+const captureFocus = focused.length;
+check(capturePress(captureRow, {type: () => 1, get_button: () => 1, get_state: () => 4}) === Clutter.EVENT_STOP,
+    'captured Ctrl press arms without reaching ClickAction');
+check(button._taskConfirmation?.agent.session_id === 'session-a' && focused.length === captureFocus,
+    'captured menu press confirms exact task without focusing');
+button._hideTaskConfirmation();
+check(capturePress(captureRow, {type: () => 2}) === Clutter.EVENT_PROPAGATE,
+    'non-pointer events retain native menu handling');
+print('PASS: menu captured-event arms before native ClickAction.');
