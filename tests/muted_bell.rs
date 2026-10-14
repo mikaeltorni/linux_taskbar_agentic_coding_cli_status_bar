@@ -31,6 +31,7 @@ fn muted_bell_is_leftmost_and_updates_without_replacing_providers() {
     eprintln!("parameters=none");
     let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/acc-model-status@local/extension.js")).unwrap();
     let sync = method(&source, "_syncMuteIndicator");
+    let toggle = method(&source, "_toggleAnnouncements");
     let reader = method(&source, "readPayload");
     let refresh = method(&source, "_refresh");
     let early = refresh.find("if (this.menu.isOpen)").unwrap();
@@ -38,11 +39,31 @@ fn muted_bell_is_leftmost_and_updates_without_replacing_providers() {
     let clear = refresh.find("destroy_all_children").unwrap();
     assert!(refresh[clear..].find("this._syncMuteIndicator").unwrap() < refresh[clear..].find("this._renderEmpty").unwrap());
     assert!(source.contains("announcementsMuted: parsed.announcements_muted === true"));
+    assert!(refresh.contains("child !== this._muteButton"));
     let script = format!(r#"
 const emit = print; print = () => {{}};
 {reader}
 const Clutter = {{ActorAlign: {{CENTER: 0}}}};
-const St = {{Icon: class {{ constructor(props) {{
+const calls = []; const errors = []; let failed = false; let exitFailed = false;
+const GLib = {{get_home_dir: () => '/test', build_filenamev: parts => parts.join('/')}};
+const Gio = {{SubprocessFlags: {{NONE: 0}}, Subprocess: {{new: (argv, flags) => {{
+    if (failed) throw new Error('unavailable');
+    calls.push(argv);
+    return {{wait_check_async: (_cancel, callback) => callback({{wait_check_finish: () => {{ if (exitFailed) throw new Error('exit 1'); return true; }}}}, null)}};
+}} }} }};
+const logError = (error, message) => errors.push(message);
+const St = {{Button: class {{ constructor(props) {{
+    // Construct a button. Parameters: this - receiver; props - actor options. Returns: undefined.
+    print(`this=${{this}}, props=${{JSON.stringify(props)}}`);
+    Object.assign(this, props); this.signals = {{}}; this.visible = true;
+    print(undefined);
+}} set_child(child) {{
+    // Attach the bell. Parameters: this - receiver; child - icon. Returns: undefined.
+    print(`this=${{this}}, child=${{child}}`); this.child = child; print(undefined);
+}} connect(signal, callback) {{
+    // Save click handler. Parameters: this - receiver; signal - name; callback - handler. Returns: undefined.
+    print(`this=${{this}}, signal=${{signal}}, callback=${{callback}}`); this.signals[signal] = callback; print(undefined);
+}} }}, Icon: class {{ constructor(props) {{
     // Initialize an icon stub. Parameters: this - icon receiver; props - actor options. Returns: undefined.
     print(`this=${{this}}, props=${{JSON.stringify(props)}}`);
     Object.assign(this, props);
@@ -58,20 +79,25 @@ const box = {{children: [provider], insert_child_at_index(actor, index) {{
     this.children.splice(index, 0, actor);
     print(undefined);
 }} }};
-const button = {{_box: box, _muteIcon: null, {sync}}};
+const button = {{_box: box, _muteIcon: null, _muteButton: null, {sync}, {toggle}}};
 button._syncMuteIndicator(false);
-const unmuted = box.children.length;
+const unmuted = [box.children.length, button._muteIcon.icon_name, box.children[0].visible];
+box.children[0].signals.clicked();
 button._syncMuteIndicator(true);
-const icon = box.children[0];
+const actor = box.children[0];
+const icon = button._muteIcon;
+actor.signals.clicked();
 const muted = [icon.icon_name, icon.visible, box.children[1] === provider];
 button._syncMuteIndicator(false);
-const restored = [icon.visible, box.children[1] === provider];
+const restored = [icon.icon_name, actor.visible, box.children[1] === provider];
+exitFailed = true; actor.signals.clicked();
+failed = true; actor.signals.clicked();
 button._syncMuteIndicator(true);
-emit(JSON.stringify({{flags, absent, unmuted, muted, restored, same: box.children[0] === icon}}) + '\n');
+emit(JSON.stringify({{flags, absent, unmuted, muted, restored, same: box.children[0] === actor, calls, errors}}) + '\n');
 "#);
     let result = Command::new("gjs").args(["-c", &script]).output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     let observed: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(observed, serde_json::json!({"flags": [false, true, false, false], "absent": null, "unmuted": 1, "muted": ["notifications-disabled-symbolic", true, true], "restored": [false, true], "same": true}));
+    assert_eq!(observed, serde_json::json!({"flags": [false, true, false, false], "absent": null, "unmuted": [2, "notifications-symbolic", true], "muted": ["notifications-disabled-symbolic", true, true], "restored": ["notifications-symbolic", true, true], "same": true, "calls": [["/test/.local/bin/agent-command-center", "silent", "toggle"], ["/test/.local/bin/agent-command-center", "silent", "toggle"], ["/test/.local/bin/agent-command-center", "silent", "toggle"]], "errors": ["acc-model-status: could not toggle announcements", "acc-model-status: could not toggle announcements"]}));
     eprintln!("None");
 }

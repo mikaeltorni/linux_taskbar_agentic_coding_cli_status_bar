@@ -1773,15 +1773,15 @@ class AccModelStatusButton extends PanelMenu.Button {
             if (this._panelProgress) {
                 // Detaching a hovered subtree clears its highlight, even if reattached.
                 for (const child of this._box.get_children()) {
-                    if (child !== this._panelProgress)
+                    if (child !== this._panelProgress && child !== this._muteButton)
                         child.destroy();
                 }
             } else {
                 this._box.destroy_all_children();
+                this._muteIcon = null;
             }
-            this._muteIcon = null;
-            this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
         }
+        this._syncMuteIndicator(Boolean(payload?.announcementsMuted));
         this.menu.removeAll();
         // Run clocks are re-collected on every repaint; never keep stale ones.
         this._runClockActors = [];
@@ -2157,23 +2157,60 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Show the muted bell before all provider segments, including in open menus.
+     * Keep a clickable announcement bell before providers in either mute state.
      * Parameters: this - status button; muted - effective published speech mute.
      * Returns: undefined.
      */
     _syncMuteIndicator(muted) {
         print(`this=${this}, muted=${muted}`);
-        if (muted && !this._muteIcon) {
+        if (!this._muteIcon) {
             this._muteIcon = new St.Icon({
-                icon_name: 'notifications-disabled-symbolic',
-                style_class: 'ams-icon ams-muted',
-                accessible_name: 'ACC announcements muted',
+                style_class: 'ams-icon',
                 y_align: Clutter.ActorAlign.CENTER,
             });
-            this._box.insert_child_at_index(this._muteIcon, 0);
+            this._muteButton = new St.Button({
+                can_focus: true,
+                reactive: true,
+                track_hover: true,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            this._muteButton.set_child(this._muteIcon);
+            this._muteButton.connect('clicked', () => this._toggleAnnouncements());
+            this._box.insert_child_at_index(this._muteButton, 0);
         }
-        if (this._muteIcon)
-            this._muteIcon.visible = muted;
+        this._muteIcon.icon_name = muted
+            ? 'notifications-disabled-symbolic' : 'notifications-symbolic';
+        this._muteIcon.style_class = muted ? 'ams-icon ams-muted' : 'ams-icon';
+        this._muteButton.accessible_name = muted
+            ? 'Unmute ACC announcements' : 'Mute ACC announcements';
+        this._muteIcon.visible = true;
+        this._muteButton.visible = true;
+        print(undefined);
+    }
+
+    /**
+     * Toggle shared announcement silence through the installed ACC dispatcher.
+     * Parameters: this - status button requesting the toggle.
+     * Returns: undefined.
+     */
+    _toggleAnnouncements() {
+        print(`this=${this}`);
+        const dispatcher = GLib.build_filenamev([
+            GLib.get_home_dir(), '.local', 'bin', 'agent-command-center',
+        ]);
+        try {
+            const process = Gio.Subprocess.new(
+                [dispatcher, 'silent', 'toggle'], Gio.SubprocessFlags.NONE);
+            process.wait_check_async(null, (child, result) => {
+                try {
+                    child.wait_check_finish(result);
+                } catch (error) {
+                    logError(error, 'acc-model-status: could not toggle announcements');
+                }
+            });
+        } catch (error) {
+            logError(error, 'acc-model-status: could not toggle announcements');
+        }
         print(undefined);
     }
 
