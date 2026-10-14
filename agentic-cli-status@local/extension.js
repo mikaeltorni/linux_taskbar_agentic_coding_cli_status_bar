@@ -667,7 +667,6 @@ function codexBarWithForecastMarkup(
   snapshot,
   nowEpoch = GLib.get_real_time() / 1000000,
 ) {
-  print(`forecast=${JSON.stringify(forecast)}, tag=${tag}, snapshot=${JSON.stringify(snapshot)}, nowEpoch=${nowEpoch}`);
   const codex = codexBarMarkup(tag, snapshot, nowEpoch);
   let resetForecast = '';
   if (forecast?.enabled === true) {
@@ -703,7 +702,6 @@ function codexBarWithForecastMarkup(
   const result = resetForecast
     ? `${resetForecast}<span foreground="${NEUTRAL_COLOR}"> | </span>${codex}`
     : codex;
-  print(result);
   return result;
 }
 
@@ -747,9 +745,7 @@ function formatPolymarketDate(label) {
  * Returns: Heading followed by one linked entry per source.
  */
 function codexResetForecastMenuEntries(forecast) {
-  print(`forecast=${JSON.stringify(forecast)}`);
   if (forecast?.enabled !== true) {
-    print('[]');
     return [];
   }
   const horizon = String(forecast.horizon ?? '24h');
@@ -792,7 +788,6 @@ function codexResetForecastMenuEntries(forecast) {
       url: site?.url ?? null,
     });
   }
-  print(JSON.stringify(entries));
   return entries;
 }
 
