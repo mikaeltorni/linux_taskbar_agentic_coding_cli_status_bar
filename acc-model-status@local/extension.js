@@ -2388,9 +2388,15 @@ class AccModelStatusButton extends PanelMenu.Button {
             can_focus: actionable,
         });
         if (actionable) {
-            item.connect('activate', () => {
+            item.connect('activate', (_item, event) => {
                 if (item._amsSuppressActivation) {
                     item._amsSuppressActivation = false;
+                    if (this._taskConfirmation?.agent.session_id === agent.session_id)
+                        return;
+                }
+                if (track && event?.get_button?.() === 1 &&
+                    (event.get_state() & Clutter.ModifierType.CONTROL_MASK)) {
+                    this._armMenuTaskConfirmation(agent, provider, codexInstanceCount);
                     return;
                 }
                 this._focusAgent(noteId);
@@ -2400,13 +2406,7 @@ class AccModelStatusButton extends PanelMenu.Button {
                     if (event.get_button() !== 1 || !(event.get_state() & Clutter.ModifierType.CONTROL_MASK))
                         return Clutter.EVENT_PROPAGATE;
                     item._amsSuppressActivation = true;
-                    const key = String(agent.session_id || agent.tmux_name || agent.key || '');
-                    const bar = this._panelProgressBars?.get(key);
-                    if (bar) {
-                        this.menu.close();
-                        this._showTaskConfirmation(bar.get_parent(), bar._amsAgent || agent,
-                            bar._amsProvider || provider, bar._amsInstanceCount || codexInstanceCount);
-                    }
+                    this._armMenuTaskConfirmation(agent, provider, codexInstanceCount);
                     return Clutter.EVENT_STOP;
                 });
             }
@@ -2488,6 +2488,23 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._taskRows.set(key, widgets);
         print(item);
         return item;
+    }
+
+    /** Anchor a menu-requested confirmation to the task's current panel cell.
+     * Parameters: this - status button; agent - selected menu task; provider - row provider;
+     * codexInstanceCount - account count for the detail colors.
+     * Returns: undefined; vanished panel targets remain unarmed.
+     */
+    _armMenuTaskConfirmation(agent, provider, codexInstanceCount) {
+        print(`this=${this} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount}`);
+        const key = String(agent.session_id || agent.tmux_name || agent.key || '');
+        const bar = this._panelProgressBars?.get(key);
+        if (bar) {
+            this.menu.close();
+            this._showTaskConfirmation(bar.get_parent(), bar._amsAgent || agent,
+                bar._amsProvider || provider, bar._amsInstanceCount || codexInstanceCount);
+        }
+        print(undefined);
     }
 
     /** Activate one agent terminal through ACC's shared focus-and-pointer selector. */
