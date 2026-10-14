@@ -1104,10 +1104,10 @@ function panelRuntimeObservation(agent, previous) {
 }
 
 /**
- * Read the live runtime or the frozen duration of a confirmed finish.
+ * Read the live runtime or frozen duration while a finished task remains unread.
  * Parameters: agent - scoped agent with run timestamps and optional measured duration;
  * now - reference epoch milliseconds, defaulting to the current clock.
- * Returns: HH:MM runtime, or empty text when task timing is unavailable.
+ * Returns: HH:MM runtime while running or unread, otherwise empty text.
  */
 function panelAgentRuntimeText(agent, now = Date.now()) {
     print(`agent=${JSON.stringify(agent)} now=${now}`);
@@ -1117,11 +1117,13 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
         seconds = Number.isFinite(started)
             ? Math.max(0, (now - started) / 1000)
             : agent.task_time_estimate?.observed_active_seconds;
-    } else if (String(agent.phase || '').toUpperCase() === 'DONE') {
+    } else if (String(agent.phase || '').toUpperCase() === 'DONE' && agent.unread_completion === true) {
         const started = Date.parse(agent.run_started_at || '');
         const completed = Date.parse(agent.ready_completed_at || '');
         if (Number.isFinite(started) && Number.isFinite(completed) && completed >= started)
             seconds = (completed - started) / 1000;
+        else if (!agent.run_started_at && Number.isFinite(completed) && agent.task_time_estimate?.status === 'complete')
+            seconds = agent.task_time_estimate.observed_active_seconds;
     }
     const text = formatPanelRunDuration(seconds);
     print(text);

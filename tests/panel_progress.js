@@ -1193,3 +1193,77 @@ for (const [start, finish] of [['invalid', '2026-10-14T10:00:00Z'],
 button._updatePanelProgress(null, false);
 Date.now = savedDateNow;
 print('PASS: completed taskbar clock freezes duration and flashes in sync with the ready progress bar.');
+
+// Completion visibility follows the real unread/focus state, independently per session.
+const applyCompletionState = new Function('print', `${declaration('unreadCompletionCount')}\nreturn unreadCompletionCount;`)(print);
+const acknowledgementNow = Date.parse('2026-10-14T11:00:00Z');
+Date.now = () => acknowledgementNow;
+const acknowledgementStates = new Map();
+const acknowledgementAgents = ['first', 'second'].map(session_id => ({session_id, workspace: 1,
+    phase: 'RUNNING', run_active: true, focused: false, run_started_at: '2026-10-14T10:45:00Z'}));
+const acknowledgementPayload = {providers: [{kind: 'codex', agents: acknowledgementAgents}]};
+applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow);
+button._updatePanelProgress(acknowledgementPayload, false);
+for (const agent of acknowledgementAgents)
+    Object.assign(agent, {phase: 'DONE', run_active: false, run_started_at: '',
+        ready_completed_at: '2026-10-14T11:00:00Z'});
+check(applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow) === 2,
+    'two newly finished sessions independently await acknowledgement');
+button._updatePanelProgress(acknowledgementPayload, false);
+const firstAcknowledgedBar = button._panelProgressBars.get('first');
+const secondAcknowledgedBar = button._panelProgressBars.get('second');
+check(firstAcknowledgedBar._amsRuntimeLabel.text === '00:15' && secondAcknowledgedBar._amsRuntimeLabel.text === '00:15',
+    'both completed sessions keep their last running timers');
+acknowledgementAgents[0].focused = true;
+check(applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow) === 1,
+    'focusing a finished session acknowledges only that session');
+button._updatePanelProgress(acknowledgementPayload, false);
+check(firstAcknowledgedBar._amsRuntimeLabel.text === '' && !firstAcknowledgedBar._amsRuntimeLabel.visible,
+    'acknowledgement immediately hides the completed timer');
+check(secondAcknowledgedBar._amsRuntimeLabel.visible && secondAcknowledgedBar._amsRuntimeLabel.text === '00:15',
+    'acknowledging one session preserves another unread timer');
+button._applyPanelProgressPulse(acknowledgementNow + 1500);
+check(!firstAcknowledgedBar._amsRuntimeLabel.visible && firstAcknowledgedBar.opacity === 255,
+    'animation ticks keep an acknowledged timer hidden and its bar steady');
+check(secondAcknowledgedBar._amsRuntimeLabel.style === 'color: rgb(255, 255, 255);',
+    'the other unread session keeps flashing');
+acknowledgementAgents[0].focused = false;
+applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow + 10000);
+button._updatePanelProgress(acknowledgementPayload, false);
+check(!firstAcknowledgedBar._amsRuntimeLabel.visible, 'leaving a checked session cannot replay its timer');
+// Reordering/rebuilding cells for a workspace move must not discard an unread clock.
+acknowledgementAgents[1].workspace = 2;
+button._updatePanelProgress(acknowledgementPayload, false);
+check(button._panelProgressBars.get('second')._amsRuntimeLabel.text === '00:15',
+    'workspace regrouping preserves the completed session timer');
+Object.assign(acknowledgementAgents[0], {phase: 'RUNNING', run_active: true,
+    ready_completed_at: '', run_started_at: '2026-10-14T10:58:00Z'});
+applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow);
+button._updatePanelProgress(acknowledgementPayload, false);
+check(button._panelProgressBars.get('first')._amsRuntimeLabel.text === '00:02',
+    'a new task restores the timer using its own start');
+Object.assign(acknowledgementAgents[0], {phase: 'DONE', run_active: false, run_started_at: '',
+    ready_completed_at: '2026-10-14T11:00:01Z'});
+applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow + 1000);
+button._updatePanelProgress(acknowledgementPayload, false);
+check(button._panelProgressBars.get('first')._amsRuntimeLabel.text === '00:02',
+    'a later completion rearms the timer for its new duration');
+// Persisted acknowledgement suppresses old clocks after rebuilding; unread measured durations remain available.
+button._updatePanelProgress(null, false);
+Object.assign(acknowledgementAgents[0], {focused: true, run_started_at: '2026-10-14T10:58:00Z'});
+Object.assign(acknowledgementAgents[1], {task_time_estimate: {status: 'complete', observed_active_seconds: 900}});
+const restoredAcknowledgements = new Map(JSON.parse(JSON.stringify([...acknowledgementStates])));
+applyCompletionState(acknowledgementPayload, restoredAcknowledgements, acknowledgementNow + 1000);
+button._updatePanelProgress(acknowledgementPayload, false);
+check(!button._panelProgressBars.get('first')._amsRuntimeLabel.visible,
+    'restored completed session stays hidden after acknowledgement');
+check(button._panelProgressBars.get('second')._amsRuntimeLabel.text === '00:15',
+    'persisted unread completion can use its published measured task duration after reload');
+for (const agent of acknowledgementAgents)
+    Object.assign(agent, {phase: 'STOPPED', run_active: false, unread_completion: false});
+button._updatePanelProgress(acknowledgementPayload, false);
+check([...button._panelProgressBars.values()].every(bar => !bar._amsRuntimeLabel.visible) && timers.size === 0,
+    'stopped sessions expose neither runtime labels nor completion animation');
+button._updatePanelProgress(null, false);
+Date.now = savedDateNow;
+print('PASS: acknowledgement hides only its own timer; unread sessions, new tasks and restored state retain correct timing.');
