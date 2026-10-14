@@ -285,6 +285,26 @@ target. The indicator reads ACC's published
 per-invocation `ATTS_SILENT` / legacy `ACC_SILENT` environment overrides still
 apply.
 
+Both taskbar extensions keep routine rendering silent: they do not dump agent
+payloads, forecasts, widget objects, or function entry/return traces into the
+system journal. Startup and actionable error reports remain available. Progress
+widgets defer geometry queries until attached to the Shell stage, including
+construction and teardown, to avoid off-stage theme warnings.
+
+The log-volume regression runs the real JavaScript helpers against isolated
+actors and observed output sinks, checking 500 status/forecast calls plus
+attached/detached allocation behavior:
+
+```bash
+gjs tests/log_volume.js .
+cargo test --test log_volume
+```
+
+The existing `model_status_bar` installer component deploys the corrected source
+on a clean installation. System-wide retention and recovery commands belong to
+`linux_configuration_setup`'s `log_retention` component; see that repository's
+README when recovering an already oversized `/var/log/syslog`.
+
 A second, independent taskbar extension (`acc-model-status@local`) shows the
 number of Agent Command Center agents of each provider that are **currently
 running in open terminal windows** to the left of that provider's icon. The
