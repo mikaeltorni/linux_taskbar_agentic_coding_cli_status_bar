@@ -331,10 +331,25 @@ place as the pointer moves within the bar, disappears on leave, and is hidden
 while the right-click details menu is open. Left-click still focuses that exact
 agent terminal.
 
+**Ctrl+left-click** an instance bar, or its task row in the right-click details
+menu, to ask **“Close this task and mark Done? Right-click to confirm”**. The
+confirmation shows the colored task details above the selected instance. From
+the details menu, the menu closes before the confirmation appears.
+**Right-click** the same bar or the confirmation to finish that task and close
+its CLI window. **Escape** or a click outside cancels. Ctrl+left-click itself
+never completes or closes a task.
+
+This uses Phrase Automation's existing focused-task completion service: a
+private timestamped notes backup, the move to Done, and cleanup of the exact
+registered ACC tmux session and its Kitty window. The installed `pa` command
+must support `mark-in-progress-done --close-session SESSION_ID`. A missing or
+changed session/note link is rejected with a desktop error; other tasks stay
+open. Ordinary left-click continues to focus the selected terminal.
+
 The public render probe runs with
-`cargo test --test panel_progress --test panel_interaction` (or
+`cargo test --test panel_progress --test panel_interaction --test task_confirmation` (or
 `gjs tests/panel_progress.js .`, `gjs tests/panel_interaction.js .`, and
-`gjs tests/task_hover.js .`) using
+`gjs tests/task_hover.js .`, and `gjs tests/task_confirmation.js .`) using
 isolated actors without changing the desktop or user metadata. These checks
 cover per-instance clicks and hover, right-click details, retained clocks,
 and the existing menu shortcut.
