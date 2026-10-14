@@ -1500,24 +1500,25 @@ function setStatusMenuActionMode(manager, isOpen, originalActionMode) {
     return undefined;
 }
 
-/** Resolve the completion argv from matching registry ownership.
- * Parameters: agent - confirmed task; registry - parsed ACC session registry.
- * Returns: public pa completion argv, using native session recovery when launch note links are absent;
- * null for a missing session or mismatched panel identity.
+/** Build the native completion command from the selected published session identity.
+ * Parameters: agent - confirmed panel task with its stable registered session id.
+ * Returns: public session-only pa completion argv, or null when the session id is absent.
  */
-function completionCommand(agent, registry) {
-    print(`agent=${JSON.stringify(agent)} registry=${registry}`);
-    const entry = registry?.sessions?.[agent.session_id];
-    const env = entry?.launch_env;
-    const id = env?.PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID;
-    const file = env?.PHRASE_AUTOMATION_NOTES_FILE;
-    let result = null;
-    if (agent.session_id && entry?.id === agent.session_id) {
-        if (id && id === agent.note_id && file)
-            result = ['pa', 'mark-in-progress-done', '--id', id, '--notes-file', file, '--close-session', agent.session_id];
-        else if (!id && !file && entry.tmux_name && agent.note_id === entry.tmux_name)
-            result = ['pa', 'mark-in-progress-done', '--close-session', agent.session_id];
-    }
+function completionCommand(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const sessionId = typeof agent?.session_id === 'string' ? agent.session_id.trim() : '';
+    const result = sessionId ? ['pa', 'mark-in-progress-done', '--close-session', sessionId] : null;
+    print(result);
+    return result;
+}
+
+/** Extract the native completion rejection after its diagnostic lines.
+ * Parameters: stderr - captured native command error output, or empty text.
+ * Returns: its final nonblank message or a useful generic native-failure reason.
+ */
+function completionErrorMessage(stderr) {
+    print(`stderr=${stderr}`);
+    const result = String(stderr || '').trim().split('\n').at(-1) || 'Native task completion failed';
     print(result);
     return result;
 }
@@ -1533,7 +1534,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     _init(extension) {
         print(`this=${this} extension=${extension}`);
         super._init(0.5, 'ACC Model Status');
-        print('acc-model-status: confirmed-close session recovery loaded');
+        print('acc-model-status: confirmed-close native session routing loaded');
         this.track_hover = false;
         // Native panel hover and open-menu styles must not paint every instance.
         this.style = 'background-color: transparent; box-shadow: none;';
@@ -1996,6 +1997,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         print(`this=${this} cell=${cell} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount}`);
         this._hideTaskConfirmation();
         this._hideTaskHover();
+        print(`acc-model-status: confirmed-close prepared=${JSON.stringify(completionCommand(agent))}`);
         const content = new St.BoxLayout({vertical: true, reactive: true,
             style_class: 'ams-task-hover-content'});
         const details = this._agentMenuItem(agent, provider, codexInstanceCount, false);
@@ -2071,27 +2073,32 @@ class AccModelStatusButton extends PanelMenu.Button {
         print(undefined);
     }
 
-    /** Complete the selected registry session through pa's direct or recovered note ownership.
-     * Parameters: this - status button; agent - confirmed task with a stable session id
-     * and its published note id or tmux identity.
-     * Returns: undefined.
+    /** Delegate the selected session to pa's authoritative ownership and completion service.
+     * Parameters: this - status button; agent - confirmed task with its stable published session id.
+     * Returns: undefined after scheduling completion, showing native failures without reporting success.
      */
     _completeAgent(agent) {
         print(`this=${this} agent=${JSON.stringify(agent)}`);
         try {
-            const file = this._file.get_parent().get_child('sessions').get_child('registry.json');
-            print(`acc-model-status: completion registry ${file.get_path()}`);
-            const [ok, bytes] = file.load_contents(null);
-            const argv = ok ? completionCommand(agent, JSON.parse(new TextDecoder().decode(bytes))) : null;
-            print(`acc-model-status: confirmed-close session=${agent.session_id} note=${agent.note_id} argv=${JSON.stringify(argv)}`);
+            const argv = completionCommand(agent);
+            print(`acc-model-status: confirmed-close session=${agent.session_id} argv=${JSON.stringify(argv)}`);
             if (!argv)
-                throw new Error('Selected task no longer has a matching registered note');
-            const process = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
-            process.wait_check_async(null, (child, result) => {
+                throw new Error('Selected window has no registered session id');
+            const process = Gio.Subprocess.new(argv,
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+            process.communicate_utf8_async(null, null, (child, result) => {
                 try {
-                    child.wait_check_finish(result);
-                    this._queueRefresh();
+                    const [ok, _output, stderr] = child.communicate_utf8_finish(result);
+                    if (!ok || !child.get_successful()) {
+                        const message = completionErrorMessage(stderr);
+                        print(`acc-model-status: confirmed-close failed: ${message}`);
+                        Main.notifyError('Could not mark task Done', message);
+                    } else {
+                        print(`acc-model-status: confirmed-close completed session=${agent.session_id}`);
+                        this._queueRefresh();
+                    }
                 } catch (error) {
+                    print(`acc-model-status: confirmed-close failed: ${error.message}`);
                     Main.notifyError('Could not mark task Done', error.message);
                 }
             });
