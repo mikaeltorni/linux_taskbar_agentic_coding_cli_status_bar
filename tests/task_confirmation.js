@@ -121,12 +121,12 @@ print('PASS: Ctrl+click, anchored task details, right-click confirmation, other-
 
 const registry = {sessions: {'session-a': {id: 'session-a', launch_env: {PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID: 'note-a', PHRASE_AUTOMATION_NOTES_FILE: '/tmp/isolated-notes.json'}}}};
 const command = Button.completionCommand(agent, registry);
-check(JSON.stringify(command) === JSON.stringify(['pa', 'mark-in-progress-done', '--id', 'note-a', '--notes-file', '/tmp/isolated-notes.json', '--close-session', 'session-a']), 'completion passes the exact registered task and notes document as argv');
-for (const invalid of [{...agent, session_id: 'missing'}, {...agent, note_id: 'other'}, {...agent, session_id: ''}]) {
+check(JSON.stringify(command) === JSON.stringify(['pa', 'mark-in-progress-done', '--close-session', 'session-a']), 'completion passes the exact registered task and notes document as argv');
+for (const invalid of [{...agent, session_id: ''}, {...agent, session_id: '   '}, {...agent, session_id: null}]) {
     check(Button.completionCommand(invalid, registry) === null, 'missing or changed session identity cannot complete another task');
     check(registry.sessions['session-a'].launch_env.PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID === 'note-a', 'rejected identity preserves registered ownership');
 }
-check(Button.completionCommand(agent, {sessions: {}}) === null, 'absent registry rejects completion');
+check(JSON.stringify(Button.completionCommand(agent, {sessions: {}})) === JSON.stringify(['pa', 'mark-in-progress-done', '--close-session', 'session-a']), 'native owner validates missing frontend registry instead of frontend rejecting it');
 print('PASS: completion uses registered note ownership; missing and mismatched identities are rejected.');
 
 // Use the real menu row builder and events while details are open.
@@ -185,8 +185,8 @@ const recoveredRegistry = {sessions: {'session-a': {id: 'session-a', tmux_name: 
 check(JSON.stringify(Button.completionCommand(recoveredAgent, recoveredRegistry)) ===
     JSON.stringify(['pa', 'mark-in-progress-done', '--close-session', 'session-a']),
     'unlinked taskbar session delegates note recovery to the native completion owner');
-check(Button.completionCommand({...recoveredAgent, note_id: 'unrelated'}, recoveredRegistry) === null,
-    'changed panel identity cannot submit an unrelated recovered task');
+check(JSON.stringify(Button.completionCommand({...recoveredAgent, note_id: 'unrelated'}, recoveredRegistry)) === JSON.stringify(['pa', 'mark-in-progress-done', '--close-session', 'session-a']),
+    'published label changes preserve the selected session identity for native validation');
 print('PASS: reported unlinked session reaches native note recovery without a guessed note id.');
 
 // Exercise the actual dispatch owner, including its registry file and subprocess boundary.
@@ -201,9 +201,16 @@ const dispatchFile = {get_parent: () => ({get_child: part => {
     }};
 }})};
 const dispatchMain = {notifyError: (title, reason) => dispatchErrors.push({title, reason})};
-const dispatchGio = {SubprocessFlags: {NONE: 0}, Subprocess: {new: argv => {
+let nativeOutcome = {success: true, stdout: '{"moved":true}', stderr: ''};
+let nativePipeReads = 0;
+const dispatchGio = {SubprocessFlags: {NONE: 0, STDOUT_PIPE: 4, STDERR_PIPE: 16}, Subprocess: {new: argv => {
     dispatches.push(argv);
-    return {wait_check_async: (_cancel, callback) => callback({wait_check_finish: () => true}, {})};
+    return {wait_check_async: (_cancel, callback) => callback({wait_check_finish: () => true}, {}),
+        communicate_utf8_async: (_input, _cancel, callback) => {
+            nativePipeReads++;
+            callback({communicate_utf8_finish: () => [true, nativeOutcome.stdout, nativeOutcome.stderr],
+                get_successful: () => nativeOutcome.success}, {});
+        }};
 }}};
 const DispatchButton = new Function('GObject', 'PanelMenu', 'Extension', 'print', 'Gio', 'Main',
     `${source}\nreturn AccModelStatusButton;`)(
@@ -218,3 +225,31 @@ check(dispatchErrors.length === 0 && dispatches.length === 1 && dispatchRefreshe
 check(JSON.stringify(dispatches[0]) === JSON.stringify(['pa', 'mark-in-progress-done', '--close-session', 'session-a']),
     'full dispatch sends the selected recovered session to pa');
 print('PASS: actual completion owner, registry path, subprocess boundary and completion refresh.');
+
+// Frontend identity lookup must never block the native session ownership resolver.
+liveDispatch._file = {get_parent: () => ({get_child: () => ({get_child: () => ({
+    get_path: () => '/isolated/frontend/sessions/registry.json',
+    load_contents: () => [true, new TextEncoder().encode('{"sessions":{}}')],
+})})})};
+const beforeNativeValidation = dispatches.length;
+liveDispatch._completeAgent(recoveredAgent);
+check(dispatches.length === beforeNativeValidation + 1 && dispatchErrors.length === 0,
+    'the photographed frontend note-match error cannot block stable-session dispatch');
+print('PASS: native ownership validation remains authoritative when frontend registry has no note match.');
+
+const beforeFailureRefresh = dispatchRefreshes;
+nativeOutcome = {success: false, stdout: '{"moved":false}', stderr: 'parameters=debug\nSelected ACC session no longer exists\n'};
+liveDispatch._completeAgent(recoveredAgent);
+check(dispatchErrors.at(-1)?.reason === 'Selected ACC session no longer exists',
+    'native ownership error is shown instead of a generic subprocess status');
+check(dispatchRefreshes === beforeFailureRefresh && nativePipeReads === 3,
+    'failed completion drains both output pipes and never reports success');
+nativeOutcome = {success: false, stdout: '', stderr: ''};
+liveDispatch._completeAgent(recoveredAgent);
+check(dispatchErrors.at(-1)?.reason === 'Native task completion failed', 'empty native stderr has a useful fallback');
+check(dispatchRefreshes === beforeFailureRefresh, 'empty native failure does not refresh as success');
+const beforeMissingId = dispatches.length;
+liveDispatch._completeAgent({...recoveredAgent, session_id: ''});
+check(dispatches.length === beforeMissingId && dispatchRefreshes === beforeFailureRefresh,
+    'missing session id still rejects before starting a subprocess');
+print('PASS: native output pipes, precise failures, missing-id rejection and success-only refresh.');

@@ -71,7 +71,7 @@ hoverButton._startWatching = () => {};
 hoverButton._startWindowWatching = () => {};
 hoverButton._refresh = () => {};
 hoverButton._init({dir: {get_child: () => ({})}});
-check(startupTrace.includes('acc-model-status: confirmed-close session recovery loaded'),
+check(startupTrace.includes('acc-model-status: confirmed-close native session routing loaded'),
     'initialization identifies the actual loaded completion handler in the Shell journal');
 check(hoverButton.track_hover === false, 'enclosing panel never tracks whole-bar hover');
 check(hoverButton.style.includes('background-color: transparent') && hoverButton.style.includes('box-shadow: none'),
