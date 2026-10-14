@@ -342,9 +342,11 @@ never completes or closes a task.
 This uses Phrase Automation's existing focused-task completion service: a
 private timestamped notes backup, the move to Done, and cleanup of the exact
 registered ACC tmux session and its Kitty window. The installed `pa` command
-must support `mark-in-progress-done --close-session SESSION_ID`. A missing or
-changed session/note link is rejected with a desktop error; other tasks stay
-open. Ordinary left-click continues to focus the selected terminal.
+must support `mark-in-progress-done --close-session SESSION_ID`. Sessions without
+saved note-link fields use Phrase Automation's existing recovery matcher: the
+full launch prompt, tagged project and saved task title must identify one
+in-progress task. Missing or ambiguous ownership is rejected with a desktop
+error; other tasks stay open. Ordinary left-click continues to focus the selected terminal.
 
 The public render probe runs with
 `cargo test --test panel_progress --test panel_interaction --test task_confirmation` (or
