@@ -1151,11 +1151,12 @@ function panelAgentRuntimeColor(agent, now = Date.now(), stale = false) {
 /**
  * Stack runtime, a retained progress bar and a forecast in the allocated panel height.
  * Parameters: agent - scoped open-window agent whose bar and timing are displayed;
- * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering.
+ * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering;
+ * confirmAgent - callback arming task completion, or null when unavailable.
  * Returns: a fixed-width instance click and hover target with its bar, lower estimate and upper runtime label.
  */
-function buildPanelTaskCell(agent, focusAgent = null) {
-    print(`agent=${JSON.stringify(agent)} focusAgent=${focusAgent}`);
+function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
+    print(`agent=${JSON.stringify(agent)} focusAgent=${focusAgent} confirmAgent=${confirmAgent}`);
     const cell = new St.Widget({
         style_class: 'ams-panel-task-cell',
         layout_manager: new Clutter.BinLayout(),
@@ -1189,6 +1190,15 @@ function buildPanelTaskCell(agent, focusAgent = null) {
         reactive: false,
     });
     cell.connect('button-press-event', (_cell, event) => {
+        if (event.get_button() === 3 && cell._amsConfirmation) {
+            cell._amsConfirmation();
+            return Clutter.EVENT_STOP;
+        }
+        if (event.get_button() === 1 && (event.get_state?.() & Clutter.ModifierType.CONTROL_MASK) &&
+            String(bar._amsAgent.note_id || '').trim() && confirmAgent) {
+            confirmAgent(cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount);
+            return Clutter.EVENT_STOP;
+        }
         if (event.get_button() !== 1)
             return Clutter.EVENT_PROPAGATE;
         const noteId = String(bar._amsAgent.note_id || '').trim();
@@ -1418,6 +1428,22 @@ function setStatusMenuActionMode(manager, isOpen, originalActionMode) {
         : originalActionMode;
     print(undefined);
     return undefined;
+}
+
+/** Resolve the completion argv from matching registry ownership.
+ * Parameters: agent - confirmed task; registry - parsed ACC session registry.
+ * Returns: public pa argv, or null for a missing/mismatched note link.
+ */
+function completionCommand(agent, registry) {
+    print(`agent=${JSON.stringify(agent)} registry=${registry}`);
+    const entry = registry?.sessions?.[agent.session_id];
+    const env = entry?.launch_env;
+    const id = env?.PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID;
+    const file = env?.PHRASE_AUTOMATION_NOTES_FILE;
+    const result = agent.session_id && entry?.id === agent.session_id && id && id === agent.note_id && file
+        ? ['pa', 'mark-in-progress-done', '--id', id, '--notes-file', file] : null;
+    print(result);
+    return result;
 }
 
 const AccModelStatusButton = GObject.registerClass(
@@ -1765,13 +1791,16 @@ class AccModelStatusButton extends PanelMenu.Button {
                     if (previousMonitor !== null && monitor !== previousMonitor)
                         box.add_child(buildPanelMonitorSeparator());
                     previousMonitor = monitor;
-                    const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId));
+                    const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId),
+                        (target, agent, provider, count) => this._showTaskConfirmation(target, agent, provider, count));
                     const bar = cell.get_children()[0];
                     cell.connect('notify::hover', () => this._syncTaskHover(
                         cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
                     cell.connect('destroy', () => {
                         if (this._taskHoverCell === cell)
                             this._hideTaskHover();
+                        if (this._taskConfirmation?.cell === cell)
+                            this._hideTaskConfirmation();
                     });
                     this._panelProgressBars.set(entry.key, bar);
                     box.add_child(cell);
@@ -1841,6 +1870,10 @@ class AccModelStatusButton extends PanelMenu.Button {
      */
     _syncTaskHover(cell, agent, provider, codexInstanceCount) {
         print(`this=${this} cell=${cell} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount}`);
+        if (this._taskConfirmation) {
+            print(undefined);
+            return;
+        }
         if (!cell.hover || this.menu.isOpen) {
             if (this._taskHoverCell === cell)
                 this._hideTaskHover();
@@ -1873,6 +1906,111 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._taskHoverPopup?.destroy();
         this._taskHoverPopup = null;
         this._taskHoverCell = null;
+        print(undefined);
+    }
+
+    /** Arm an above-instance confirmation containing the task's colored details.
+     * Parameters: this - status button; cell - selected instance actor; agent - selected task;
+     * provider - task provider; codexInstanceCount - registered account count.
+     * Returns: undefined.
+     */
+    _showTaskConfirmation(cell, agent, provider, codexInstanceCount) {
+        print(`this=${this} cell=${cell} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount}`);
+        this._hideTaskConfirmation();
+        this._hideTaskHover();
+        const content = new St.BoxLayout({vertical: true, reactive: true,
+            style_class: 'ams-task-hover-content'});
+        const details = this._agentMenuItem(agent, provider, codexInstanceCount, false);
+        details.reactive = false;
+        details.can_focus = false;
+        content.add_child(details);
+        content.add_child(new St.Label({text: 'Mark task Done? Right-click to confirm · Esc to cancel',
+            style_class: 'ams-task-confirmation-hint', reactive: false}));
+        const popup = new BoxPointer.BoxPointer(St.Side.BOTTOM, {reactive: true});
+        popup.add_style_class_name('popup-menu-boxpointer');
+        popup.add_style_class_name('ams-task-hover');
+        popup.bin.set_child(content);
+        this._taskConfirmation = {cell, agent, popup};
+        cell._amsConfirmation = () => this._confirmTaskCompletion();
+        content.connect('button-press-event', (_actor, event) => {
+            if (event.get_button() === 3)
+                this._confirmTaskCompletion();
+            return Clutter.EVENT_STOP;
+        });
+        this._taskConfirmationSignal = global.stage.connect('captured-event', (_stage, event) => {
+            if (event.type() === Clutter.EventType.KEY_PRESS && event.get_key_symbol() === Clutter.KEY_Escape) {
+                this._hideTaskConfirmation();
+                return Clutter.EVENT_STOP;
+            }
+            if (event.type() === Clutter.EventType.BUTTON_PRESS) {
+                const source = event.get_source();
+                if (source !== cell && !cell.contains?.(source) && source !== popup && !popup.contains?.(source))
+                    this._hideTaskConfirmation();
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+        Main.layoutManager.addChrome(popup);
+        popup.setPosition(cell, 0.5);
+        popup.open(BoxPointer.PopupAnimation.NONE);
+        print(undefined);
+    }
+
+    /** Cancel an armed task and disconnect its stage input handler.
+     * Parameters: this - status button owning the confirmation.
+     * Returns: undefined.
+     */
+    _hideTaskConfirmation() {
+        print(`this=${this}`);
+        if (this._taskConfirmationSignal) {
+            global.stage.disconnect(this._taskConfirmationSignal);
+            this._taskConfirmationSignal = null;
+        }
+        const pending = this._taskConfirmation;
+        this._taskConfirmation = null;
+        if (pending) {
+            pending.cell._amsConfirmation = null;
+            pending.popup.destroy();
+        }
+        print(undefined);
+    }
+
+    /** Consume the selected task confirmation once before invoking completion.
+     * Parameters: this - status button owning the confirmation.
+     * Returns: undefined.
+     */
+    _confirmTaskCompletion() {
+        print(`this=${this}`);
+        const agent = this._taskConfirmation?.agent;
+        this._hideTaskConfirmation();
+        if (agent)
+            this._completeAgent(agent);
+        print(undefined);
+    }
+
+    /** Complete the exact registered note using Phrase Automation's public CLI.
+     * Parameters: this - status button; agent - confirmed task with stable session and note ids.
+     * Returns: undefined.
+     */
+    _completeAgent(agent) {
+        print(`this=${this} agent=${JSON.stringify(agent)}`);
+        try {
+            const file = this._file.get_parent().get_child('sessions').get_child('registry.json');
+            const [ok, bytes] = file.load_contents(null);
+            const argv = ok ? completionCommand(agent, JSON.parse(new TextDecoder().decode(bytes))) : null;
+            if (!argv)
+                throw new Error('Selected task no longer has a matching registered note');
+            const process = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
+            process.wait_check_async(null, (child, result) => {
+                try {
+                    child.wait_check_finish(result);
+                    this._queueRefresh();
+                } catch (error) {
+                    Main.notifyError('Could not mark task Done', error.message);
+                }
+            });
+        } catch (error) {
+            Main.notifyError('Could not mark task Done', error.message);
+        }
         print(undefined);
     }
 
@@ -2287,6 +2425,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     destroy() {
         print(`this=${this}`);
         this._hideTaskHover();
+        this._hideTaskConfirmation();
         if (this._panelPulseId) {
             GLib.source_remove(this._panelPulseId);
             this._panelPulseId = 0;
