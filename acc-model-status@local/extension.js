@@ -1432,7 +1432,7 @@ function setStatusMenuActionMode(manager, isOpen, originalActionMode) {
 
 /** Resolve the completion argv from matching registry ownership.
  * Parameters: agent - confirmed task; registry - parsed ACC session registry.
- * Returns: public pa argv, or null for a missing/mismatched note link.
+ * Returns: public pa completion-and-close argv, or null for a missing/mismatched note link.
  */
 function completionCommand(agent, registry) {
     print(`agent=${JSON.stringify(agent)} registry=${registry}`);
@@ -1441,7 +1441,7 @@ function completionCommand(agent, registry) {
     const id = env?.PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID;
     const file = env?.PHRASE_AUTOMATION_NOTES_FILE;
     const result = agent.session_id && entry?.id === agent.session_id && id && id === agent.note_id && file
-        ? ['pa', 'mark-in-progress-done', '--id', id, '--notes-file', file] : null;
+        ? ['pa', 'mark-in-progress-done', '--id', id, '--notes-file', file, '--close-session', agent.session_id] : null;
     print(result);
     return result;
 }
@@ -1952,6 +1952,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         Main.layoutManager.addChrome(popup);
         popup.setPosition(cell, 0.5);
         popup.open(BoxPointer.PopupAnimation.NONE);
+        // Grab the stage so both the popup and its original panel cell remain clickable.
+        this._taskConfirmationGrab = Main.pushModal(global.stage, {actionMode: Shell.ActionMode.NORMAL});
         print(undefined);
     }
 
@@ -1964,6 +1966,10 @@ class AccModelStatusButton extends PanelMenu.Button {
         if (this._taskConfirmationSignal) {
             global.stage.disconnect(this._taskConfirmationSignal);
             this._taskConfirmationSignal = null;
+        }
+        if (this._taskConfirmationGrab) {
+            Main.popModal(this._taskConfirmationGrab);
+            this._taskConfirmationGrab = null;
         }
         const pending = this._taskConfirmation;
         this._taskConfirmation = null;
@@ -1987,7 +1993,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         print(undefined);
     }
 
-    /** Complete the exact registered note using Phrase Automation's public CLI.
+    /** Backup and complete the exact registered note, closing its linked CLI through pa.
      * Parameters: this - status button; agent - confirmed task with stable session and note ids.
      * Returns: undefined.
      */
