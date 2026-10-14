@@ -392,7 +392,11 @@ seconds) in 13.5px text, 1.5 times its original size. While the agent runs,
 it uses the current task's start or ACC's published active-duration measurement
 when the start is unavailable. Regular runtime text is yellow (`#e6c200`);
 active goal runtime text is purple (`#a855f7`). These running colors stay steady
-while the progress fill pulses.
+while the progress fill pulses. An instance that is rate-limited and still
+waiting to start uses that same upper slot for the launch countdown, prefixed
+with `-` (for example `-02:45`). A partial minute stays visible as `-00:01`.
+The countdown is yellow-green (`#b5d747`), or red (`#ef4444`) when the session
+is interrupted. Finished work does not show this countdown.
 
 When a task finishes, its timer freezes at the final duration and flashes
 green to white with the completed bar on the same three-second cycle. It stays
@@ -411,8 +415,9 @@ matching their bars.
 The lower label shows that running agent's own remaining estimate in 13.5px
 monospace text, 1.5 times its original size. It keeps only the duration, such
 as `~3m` or `~1h30m`; hour/minute components are compact and any text after the
-duration unit is omitted. It disappears when the agent stops running or no
-estimate is available. The far-right aggregate time estimate is removed. Timing labels
+duration unit is omitted. It disappears when the agent stops running, when a
+launch countdown is showing, or when no estimate is available. A rate-limited
+wait does not put time left under the bar. The far-right aggregate time estimate is removed. Timing labels
 stay readable while the progress fill pulses, update in place with the menu
 open, and dim when the snapshot is stale; stale runtimes stop ticking.
 All timings come from ACC's local `model_status_bar.json` data, with no AI
@@ -495,7 +500,10 @@ the payload stops being refreshed.
 In the Agent Command Center menu, a Codex row queued for auto-continue shows
 ACC's negative reset countdown (such as `-1:22`) in yellow-green. The menu
 updates the clock locally from `queued_reset_at`, including for terminals with
-no Phrase Automation note.
+no Phrase Automation note. The same wait shows `-HH:MM` above that instance's
+taskbar bar. `RATE` is only for an instance still waiting to start. A finished
+plan, a completion timestamp, or a visible completion footer is marked `DONE`
+instead, including while the account remains rate-limited.
 
 An ACC conversation currently marked `INTERRUPTED` uses red (`#ef4444`) for
 its taskbar progress track, fill and menu badge, including focused windows and

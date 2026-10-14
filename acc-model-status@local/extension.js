@@ -124,16 +124,30 @@ function formatRunTimer(seconds) {
  * @param {number} [nowMs] - clock override in milliseconds (tests).
  * @returns {string} clock text or uppercase phase word.
  */
+/**
+ * Use DONE for finished work. RATE stays only on instances still waiting to start.
+ * Parameters: agent - published row.
+ * Returns: the phase word shown on the taskbar.
+ */
+function displayedPhase(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    let phase = String(agent && agent.phase || 'UNKNOWN').trim().toUpperCase();
+    if (phase === 'RATE' && taskMarkedDone(agent))
+        phase = 'DONE';
+    print(phase);
+    return phase;
+}
+
 function agentPhaseBadgeText(agent, nowMs) {
-    const phase = String(agent && agent.phase || 'UNKNOWN').trim().toUpperCase();
+    const phase = displayedPhase(agent);
     const completed = agent?.workflow?.phase_completed;
     const total = agent?.workflow?.phase_total;
-    const showProgress = !agent?.unread_completion && !(phase === 'DONE' && agent?.ready_completed_at) &&
+    const showProgress = phase !== 'DONE' && !agent?.unread_completion && !(phase === 'DONE' && agent?.ready_completed_at) &&
         Number.isInteger(completed) && Number.isInteger(total) &&
         total > 0 && completed >= 0 && completed <= total;
     const prefix = showProgress ? `[${completed}/${total}] ` : '';
     const resetAt = Date.parse(agent && agent.queued_reset_at || '');
-    if (!Number.isNaN(resetAt)) {
+    if (phase !== 'DONE' && !Number.isNaN(resetAt)) {
         const now = Number.isFinite(nowMs) ? nowMs : Date.now();
         if (resetAt > now)
             return `${prefix}-${formatRunTimer(Math.ceil((resetAt - now) / 1000))}`;
@@ -155,9 +169,9 @@ function agentPhaseBadgeText(agent, nowMs) {
 function agentPhaseBadgeColor(agent, nowMs) {
     print(`agent=${JSON.stringify(agent)} nowMs=${nowMs}`);
     const now = Number.isFinite(nowMs) ? nowMs : Date.now();
-    const phase = String(agent && agent.phase || '').trim().toUpperCase();
+    const phase = displayedPhase(agent);
     let result = phaseColor(phase);
-    if (phase !== 'INTERRUPTED') {
+    if (phase !== 'INTERRUPTED' && phase !== 'DONE') {
         if (agent && agent.queued_reset_at && Date.parse(agent.queued_reset_at) > now)
             result = PHASE_COLORS.QUEUED_RESET;
         else if (phase === 'RUNNING' && agent && agent.goal_active && agent.run_active &&
@@ -930,7 +944,7 @@ function panelProgressColor(fraction, ready = false, now = Date.now(), agent = n
  */
 function panelProgressStateColor(agent) {
     print(`agent=${JSON.stringify(agent)}`);
-    const phase = String(agent?.phase || '').trim().toUpperCase();
+    const phase = displayedPhase(agent);
     const hex = ['RATE', 'DRAFT', 'INTERRUPTED'].includes(phase) ? PHASE_COLORS[phase] : null;
     const result = hex ? [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) : null;
     print(result);
@@ -1057,13 +1071,59 @@ function buildPanelTaskProgress(agent) {
 }
 
 /**
+ * Read seconds remaining until a rate-limited instance can launch.
+ * Parameters: agent - published row with optional queued_reset_at; now - reference epoch milliseconds.
+ * Returns: remaining seconds, or null when no future reset is published.
+ */
+function panelResetRemainingSeconds(agent, now) {
+    print(`agent=${JSON.stringify(agent)} now=${now}`);
+    const resetAt = Date.parse(agent && agent.queued_reset_at || '');
+    const result = !Number.isNaN(resetAt) && resetAt > now ? (resetAt - now) / 1000 : null;
+    print(result);
+    return result;
+}
+
+/**
+ * Report work that has already finished, including a completed workflow plan.
+ * Parameters: agent - published row with phase, completion, and optional workflow counts.
+ * Returns: true when the task is done and must not be presented as waiting to start.
+ */
+function taskMarkedDone(agent) {
+    print(`agent=${JSON.stringify(agent)}`);
+    const phase = String(agent?.phase || '').trim().toUpperCase();
+    const completed = agent?.workflow?.phase_completed;
+    const total = agent?.workflow?.phase_total;
+    const workflowDone = Number.isInteger(completed) && Number.isInteger(total) &&
+        total > 0 && completed >= total;
+    const result = phase === 'DONE' || Boolean(agent?.ready_completed_at) || workflowDone;
+    print(result);
+    return result;
+}
+
+/**
+ * Read the launch wait only for an instance that has not started and has not finished.
+ * Parameters: agent - published row; now - reference epoch milliseconds.
+ * Returns: seconds until launch, or null when this row is running, done, or has no reset.
+ */
+function panelLaunchWaitSeconds(agent, now) {
+    print(`agent=${JSON.stringify(agent)} now=${now}`);
+    const remaining = panelResetRemainingSeconds(agent, now);
+    const result = remaining !== null && !taskMarkedDone(agent) && !panelProgressUnderway(agent)
+        ? remaining : null;
+    print(result);
+    return result;
+}
+
+/**
  * Format the published forecast only for an actively running agent.
+ * A future launch countdown replaces this lower label, so time left stays off the bottom.
  * Parameters: agent - scoped open-window agent with an optional ACC estimate.
  * Returns: compact duration through its minute/hour unit, with no trailing text, or empty text.
  */
 function panelAgentEstimateText(agent) {
     print(`agent=${JSON.stringify(agent)}`);
-    const label = panelProgressUnderway(agent) && agent.task_time_estimate?.status === 'estimated'
+    const label = panelLaunchWaitSeconds(agent, Date.now()) === null &&
+        panelProgressUnderway(agent) && agent.task_time_estimate?.status === 'estimated'
         ? taskEstimateText(agent) : '';
     const duration = label.match(/^[~<>≤≥]?\s*(?:\d+h(?:\s*\d+m)?|\d+m)/)?.[0] || '';
     const text = duration.replace(/\s+/g, '');
@@ -1106,12 +1166,19 @@ function panelRuntimeObservation(agent, previous) {
 
 /**
  * Read the live runtime or frozen duration while a finished task remains unread.
+ * A future queued reset uses the same upper HH:MM slot, prefixed so it counts down to launch.
  * Parameters: agent - scoped agent with run timestamps and optional measured duration;
  * now - reference epoch milliseconds, defaulting to the current clock.
- * Returns: HH:MM runtime while running or unread, otherwise empty text.
+ * Returns: HH:MM runtime while running or unread, a negative launch countdown, or empty text.
  */
 function panelAgentRuntimeText(agent, now = Date.now()) {
     print(`agent=${JSON.stringify(agent)} now=${now}`);
+    const remaining = panelLaunchWaitSeconds(agent, now);
+    if (remaining !== null) {
+        const countdown = `-${formatPanelRunDuration(remaining < 60 ? 60 : remaining)}`;
+        print(countdown);
+        return countdown;
+    }
     let seconds = null;
     if (panelProgressUnderway(agent)) {
         const started = Date.parse(agent.run_started_at || '');
@@ -1135,12 +1202,15 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
  * Color the runtime with the same completion wave as its taskbar bar.
  * Parameters: agent - scoped task state; now - animation epoch milliseconds;
  * stale - whether the published task state is too old to animate.
- * Returns: completion RGB, goal purple, or regular running yellow CSS color.
+ * Returns: completion RGB, goal purple, queued-reset green, interruption red, or running yellow CSS color.
  */
 function panelAgentRuntimeColor(agent, now = Date.now(), stale = false) {
     print(`agent=${JSON.stringify(agent)} now=${now} stale=${stale}`);
     let color = panelProgressGoalActive(agent) ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING;
-    if (String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at) {
+    if (panelLaunchWaitSeconds(agent, now) !== null) {
+        const phase = String(agent?.phase || '').trim().toUpperCase();
+        color = phase === 'INTERRUPTED' ? PHASE_COLORS.INTERRUPTED : PHASE_COLORS.QUEUED_RESET;
+    } else if (String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at) {
         const rgb = panelProgressColor(1, agent.unread_completion === true && !stale, now, agent);
         color = `rgb(${rgb.join(', ')})`;
     }
@@ -1839,6 +1909,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             const runtimeAgent = panelRuntimeObservation(entry.agent, this._panelRuntimeStates.get(entry.key));
             this._panelRuntimeStates.set(entry.key, runtimeAgent);
             bar._amsRuntimeAgent = runtimeAgent;
+            bar._amsResetCountdown = panelLaunchWaitSeconds(runtimeAgent, runtimeAt) !== null;
             const runtime = bar._amsRuntimeLabel;
             runtime.text = panelAgentRuntimeText(runtimeAgent, runtimeAt);
             runtime.style = `color: ${panelAgentRuntimeColor(entry.agent, now, stale)};`;
@@ -2027,7 +2098,8 @@ class AccModelStatusButton extends PanelMenu.Button {
      */
     _syncPanelPulseTimer() {
         print(`this=${this}`);
-        const active = [...this._panelProgressBars.values()].some(bar => (bar._amsUnderway || bar._amsReady) && !bar._amsStale);
+        const active = [...this._panelProgressBars.values()].some(bar =>
+            (bar._amsUnderway || bar._amsReady || bar._amsResetCountdown) && !bar._amsStale);
         if (!active) {
             if (this._panelPulseId) {
                 GLib.source_remove(this._panelPulseId);
@@ -2050,7 +2122,7 @@ class AccModelStatusButton extends PanelMenu.Button {
     _applyPanelProgressPulse(now = Date.now()) {
         print(`this=${this} now=${now}`);
         for (const bar of this._panelProgressBars.values()) {
-            if (bar._amsRuntimeLabel && (bar._amsUnderway || bar._amsReady) && !bar._amsStale) {
+            if (bar._amsRuntimeLabel && (bar._amsUnderway || bar._amsReady || bar._amsResetCountdown) && !bar._amsStale) {
                 bar._amsRuntimeLabel.text = panelAgentRuntimeText(bar._amsRuntimeAgent, now);
                 bar._amsRuntimeLabel.visible = Boolean(bar._amsRuntimeLabel.text);
                 bar._amsRuntimeLabel.style = `color: ${panelAgentRuntimeColor(bar._amsAgent, now)};`;

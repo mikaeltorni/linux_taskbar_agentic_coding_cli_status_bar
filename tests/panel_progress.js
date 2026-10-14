@@ -105,6 +105,10 @@ const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'pa
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator', 'taskEstimateText',
     ...(source.includes('function buildPanelTaskCell(') ? ['panelAgentEstimateText', 'buildPanelTaskCell'] : []),
+    ...(source.includes('function panelResetRemainingSeconds(') ? ['panelResetRemainingSeconds'] : []),
+    ...(source.includes('function taskMarkedDone(') ? ['taskMarkedDone'] : []),
+    ...(source.includes('function displayedPhase(') ? ['displayedPhase'] : []),
+    ...(source.includes('function panelLaunchWaitSeconds(') ? ['panelLaunchWaitSeconds'] : []),
     ...(source.includes('function panelAgentRuntimeText(') ? ['formatPanelRunDuration', 'panelAgentRuntimeText'] : []),
     ...(source.includes('function panelAgentRuntimeColor(') ? ['panelAgentRuntimeColor'] : []),
     ...(source.includes('function panelRuntimeObservation(') ? ['panelRuntimeObservation'] : []),
@@ -525,6 +529,8 @@ print('PASS: goal stripe stays removed while progress opacity still pulses.');
 
 // Exercise the shipped menu palette, including focus/goal/reset metadata.
 const phaseOwners = new Function('print', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
+    ${declaration('taskMarkedDone')}
+    ${declaration('displayedPhase')}
     ${declaration('phaseColor')}
     ${declaration('agentPhaseBadgeColor')}
     return {phaseColor, agentPhaseBadgeColor};`)(print);
@@ -1048,6 +1054,88 @@ check(regularTimerBar.strokes.every(stroke => stroke.width === 1) && goalTimerBa
 button._updatePanelProgress(null, false);
 Date.now = savedColorDateNow;
 print('PASS: yellow regular runtime, purple goal runtime, retained state transitions and no goal stripe.');
+
+// A rate-limited launch countdown uses the upper timer and leaves the lower estimate blank.
+const savedResetNow = Date.now;
+const resetReference = Date.parse('2026-10-14T12:00:00Z');
+Date.now = () => resetReference;
+const resetAgents = [
+    {session_id: 'reset-rate', workspace: 2, monitor: 0, window_display_id: 1, phase: 'RATE',
+        run_active: false, goal_active: true, queued_reset_at: new Date(resetReference + (2 * 3600 + 45 * 60 + 50) * 1000).toISOString(),
+        task_time_estimate: {status: 'estimated', label: '~9m left'}, workflow: {fraction: 0.4}},
+    {session_id: 'reset-running', workspace: 2, monitor: 0, window_display_id: 2, phase: 'RUNNING',
+        run_active: true, goal_active: false, run_started_at: new Date(resetReference - 60 * 1000).toISOString(),
+        task_time_estimate: {status: 'estimated', label: '~5m left'}, workflow: {fraction: 0.2}},
+];
+const resetPayload = {providers: [{kind: 'codex', agents: resetAgents}]};
+button._updatePanelProgress(resetPayload, false);
+const resetCell = button._panelProgressBars.get('reset-rate').get_parent();
+const runningCell = button._panelProgressBars.get('reset-running').get_parent();
+const resetUpper = resetCell.children[2];
+const resetLower = resetCell.children[1];
+const runningUpper = runningCell.children[2];
+const runningLower = runningCell.children[1];
+check(resetUpper.style_class === 'ams-panel-agent-runtime' && resetUpper.y_align === Clutter.ActorAlign.START &&
+    resetUpper.visible && resetUpper.text === '-02:45' && resetUpper.style === 'color: #b5d747;',
+    'rate-limited launch countdown sits above the bar like the run timer');
+check(resetLower.text === '' && !resetLower.visible, 'rate-limited bar does not show time left underneath');
+check(runningUpper.text === '00:01' && runningUpper.style === 'color: #e6c200;' &&
+    runningLower.text === '~5m' && runningLower.visible,
+    'a neighboring run keeps its upper clock and lower remaining estimate');
+for (const [seconds, expected] of [[1, '-00:01'], [59, '-00:01'], [60, '-00:01'], [61, '-00:01'],
+    [3599, '-00:59'], [3600, '-01:00'], [3661, '-01:01'], [2 * 3600 + 47 * 60 + 55, '-02:47'],
+    [100 * 3600, '-100:00']]) {
+    resetAgents[0].queued_reset_at = new Date(resetReference + seconds * 1000).toISOString();
+    button._updatePanelProgress(resetPayload, false);
+    check(resetUpper.text === expected && resetUpper.visible && resetLower.text === '' && !resetLower.visible,
+        `launch countdown ${seconds}s renders ${expected} without a lower estimate`);
+    check(runningUpper.text === '00:01' && runningLower.text === '~5m',
+        'countdown boundaries leave the neighboring run timers unchanged');
+}
+resetAgents[0].phase = 'INTERRUPTED';
+resetAgents[0].queued_reset_at = new Date(resetReference + (2 * 3600 + 45 * 60 + 50) * 1000).toISOString();
+button._updatePanelProgress(resetPayload, false);
+check(resetUpper.text === '-02:45' && resetUpper.style === 'color: #ef4444;' && !resetLower.visible,
+    'an interrupted wait keeps the red countdown and still hides time left');
+for (const queued of ['', 'not-a-time', new Date(resetReference).toISOString(), new Date(resetReference - 1000).toISOString()]) {
+    resetAgents[0].queued_reset_at = queued;
+    resetAgents[0].phase = 'RATE';
+    button._updatePanelProgress(resetPayload, false);
+    check(resetUpper.text === '' && !resetUpper.visible && resetLower.text === '' && !resetLower.visible,
+        'missing, invalid, or expired resets do not invent a countdown or a lower estimate');
+    check(runningUpper.text === '00:01' && runningLower.text === '~5m' && runningLower.visible,
+        'a rejected reset leaves the running neighbor timers in place');
+}
+resetAgents[0].queued_reset_at = new Date(resetReference + 125 * 1000).toISOString();
+resetAgents[0].phase = 'WAITING';
+button._updatePanelProgress(resetPayload, false);
+check(resetUpper.text === '-00:02' && resetUpper.style === 'color: #b5d747;', 'two whole minutes remain above the bar');
+button._applyPanelProgressPulse(resetReference + 60 * 1000);
+check(resetUpper.text === '-00:01' && resetLower.text === '' && runningUpper.text === '00:02' && runningLower.text === '~5m',
+    'the launch countdown ticks down a minute while the running estimate stays below its own bar');
+button._updatePanelProgress({...resetPayload, updatedAt: new Date(resetReference).toISOString()}, true);
+const staleResetText = resetUpper.text;
+button._applyPanelProgressPulse(resetReference + 180 * 1000);
+check(resetUpper.text === staleResetText && resetUpper.opacity === 128 && !resetLower.visible,
+    'a stale launch countdown stays dim and does not keep ticking');
+button._updatePanelProgress(resetPayload, false);
+check(resetUpper.opacity === 255 && resetUpper.text === '-00:02', 'a fresh snapshot resumes the launch countdown');
+Object.assign(resetAgents[0], {phase: 'RATE', run_active: false,
+    workflow: {fraction: 1, phase_completed: 6, phase_total: 6},
+    queued_reset_at: new Date(resetReference + 7200 * 1000).toISOString(),
+    task_time_estimate: {status: 'estimated', label: '~9m left'}});
+button._updatePanelProgress(resetPayload, false);
+check(resetUpper.text === '' && !resetUpper.visible && resetLower.text === '' && !resetLower.visible,
+    'finished work shows neither a launch countdown nor time left underneath');
+const finishedBar = button._panelProgressBars.get('reset-rate');
+finishedBar.queue_repaint();
+const finishedRgb = finishedBar.draws.at(-1).color.slice(0, 3).map(channel => Math.round(channel * 255));
+check(JSON.stringify(finishedRgb) !== '[244,114,182]', 'a finished plan is not painted with the rate-limit color');
+check(runningUpper.text === '00:01' && runningLower.text === '~5m',
+    'marking one plan finished leaves the running neighbor timers alone');
+button._updatePanelProgress(null, false);
+Date.now = savedResetNow;
+print('PASS: rate-limit launch countdown above the bar, with no time left underneath.');
 // GNOME clears hover if an attached instance subtree is removed, even when reused.
 button._renderProvider = provider => button._box.add_child(new Actor({
     style_class: 'ams-segment', text: String(provider.running || 0), reactive: false}));
