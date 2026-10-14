@@ -38,6 +38,7 @@ const Clutter = {ModifierType: {CONTROL_MASK: 4}, EventType: {BUTTON_PRESS: 1, K
     ActorAlign: {CENTER: 0, FILL: 1, START: 2, END: 3}, BinLayout: class {}, FixedLayout: class {}};
 const stage = new Actor();
 const popups = [];
+const grabs = [];
 const Pointer = class {
     /** Record an anchored popup.
      * Parameters: this - popup; side - arrow edge; options - actor properties.
@@ -58,12 +59,15 @@ const Pointer = class {
 };
 const completed = [];
 const focused = [];
-const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', 'St', 'Main', 'Clutter', 'global', 'print', 'PopupMenu',
+const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', 'St', 'Main', 'Clutter', 'global', 'print', 'PopupMenu', 'Shell',
     `${source}\nreturn {Button: AccModelStatusButton, buildPanelTaskCell, completionCommand};`)(
     {registerClass: value => value}, {Button: class {}}, class {},
     {BoxPointer: Pointer, PopupAnimation: {NONE: 0}},
     {Widget: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Icon: Actor, Side: {BOTTOM: 3}},
-    {layoutManager: {addChrome: () => {}}}, Clutter, {stage}, print, {PopupBaseMenuItem: Actor});
+    {layoutManager: {addChrome: () => {}},
+        pushModal: actor => { const grab = {actor}; grabs.push(grab); return grab; },
+        popModal: grab => { grabs.splice(grabs.indexOf(grab), 1); }},
+    Clutter, {stage}, print, {PopupBaseMenuItem: Actor}, {ActionMode: {NORMAL: 1}});
 const button = new Button.Button();
 button.menu = {isOpen: false};
 button._agentMenuItem = (agent, provider, count, track) => new Actor({agent, provider, count, track});
@@ -77,6 +81,7 @@ const click = (actor, buttonNumber, ctrl = false) => actor.signals['button-press
 check(click(cell, 1, true) === Clutter.EVENT_STOP, 'Ctrl+left-click consumes the panel event');
 check(focused.length === 0 && completed.length === 0, 'arming neither focuses nor completes');
 check(popups.length === 1 && popups[0].anchor === cell && popups[0].side === 3, 'confirmation sits above the exact instance');
+check(grabs.length === 1 && grabs[0].actor === stage, 'confirmation grabs pointer and keyboard so outside clicks and Escape reach Shell');
 const popup = popups[0];
 const content = popup.children[0];
 check(content.children[0].agent === agent, 'confirmation includes the original colored task details');
@@ -107,6 +112,7 @@ button._syncTaskHover({...cell, hover: false}, agent, provider, 3);
 check(!popups.at(-1).destroyed, 'pointer leave does not dismiss the armed confirmation');
 button._hideTaskConfirmation();
 button._hideTaskConfirmation();
+check(grabs.length === 0, 'cancellation releases modal input grab');
 check(Object.keys(stage.signals).length === 0, 'cancellation releases stage input handler');
 const missing = Button.buildPanelTaskCell({}, id => focused.push(id), () => { throw Error('must not arm missing task'); });
 click(missing, 1, true);
@@ -115,7 +121,7 @@ print('PASS: Ctrl+click, anchored task details, right-click confirmation, other-
 
 const registry = {sessions: {'session-a': {id: 'session-a', launch_env: {PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID: 'note-a', PHRASE_AUTOMATION_NOTES_FILE: '/tmp/isolated-notes.json'}}}};
 const command = Button.completionCommand(agent, registry);
-check(JSON.stringify(command) === JSON.stringify(['pa', 'mark-in-progress-done', '--id', 'note-a', '--notes-file', '/tmp/isolated-notes.json']), 'completion passes the exact registered task and notes document as argv');
+check(JSON.stringify(command) === JSON.stringify(['pa', 'mark-in-progress-done', '--id', 'note-a', '--notes-file', '/tmp/isolated-notes.json', '--close-session', 'session-a']), 'completion passes the exact registered task and notes document as argv');
 for (const invalid of [{...agent, session_id: 'missing'}, {...agent, note_id: 'other'}, {...agent, session_id: ''}]) {
     check(Button.completionCommand(invalid, registry) === null, 'missing or changed session identity cannot complete another task');
     check(registry.sessions['session-a'].launch_env.PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID === 'note-a', 'rejected identity preserves registered ownership');
