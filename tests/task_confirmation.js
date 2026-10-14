@@ -14,6 +14,7 @@ class Actor {
         Object.assign(this, options);
         this.children = [];
         this.signals = {};
+        this.actor = this;
         this.bin = {set_child: child => this.children.push(child)};
         print(undefined);
     }
@@ -23,13 +24,18 @@ class Actor {
     get_children = () => this.children;
     add_style_class_name = () => {};
     set_style = style => { this.style = style; };
+    remove_style_class_name = () => {};
+    get_width = () => 200;
+    get_height = () => 24;
+    set_position = () => {};
+    set_size = () => {};
     setPosition = actor => { this.anchor = actor; };
     open = () => { this.visible = true; };
     destroy = () => { this.destroyed = true; this.signals.destroy?.(this); };
 }
 const Clutter = {ModifierType: {CONTROL_MASK: 4}, EventType: {BUTTON_PRESS: 1, KEY_PRESS: 2},
     KEY_Escape: 27, EVENT_STOP: true, EVENT_PROPAGATE: false,
-    ActorAlign: {CENTER: 0, FILL: 1, START: 2, END: 3}, BinLayout: class {}};
+    ActorAlign: {CENTER: 0, FILL: 1, START: 2, END: 3}, BinLayout: class {}, FixedLayout: class {}};
 const stage = new Actor();
 const popups = [];
 const Pointer = class {
@@ -52,12 +58,12 @@ const Pointer = class {
 };
 const completed = [];
 const focused = [];
-const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', 'St', 'Main', 'Clutter', 'global', 'print',
+const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', 'St', 'Main', 'Clutter', 'global', 'print', 'PopupMenu',
     `${source}\nreturn {Button: AccModelStatusButton, buildPanelTaskCell, completionCommand};`)(
     {registerClass: value => value}, {Button: class {}}, class {},
     {BoxPointer: Pointer, PopupAnimation: {NONE: 0}},
-    {Widget: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Side: {BOTTOM: 3}},
-    {layoutManager: {addChrome: () => {}}}, Clutter, {stage}, print);
+    {Widget: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Icon: Actor, Side: {BOTTOM: 3}},
+    {layoutManager: {addChrome: () => {}}}, Clutter, {stage}, print, {PopupBaseMenuItem: Actor});
 const button = new Button.Button();
 button.menu = {isOpen: false};
 button._agentMenuItem = (agent, provider, count, track) => new Actor({agent, provider, count, track});
@@ -116,3 +122,29 @@ for (const invalid of [{...agent, session_id: 'missing'}, {...agent, note_id: 'o
 }
 check(Button.completionCommand(agent, {sessions: {}}) === null, 'absent registry rejects completion');
 print('PASS: completion uses registered note ownership; missing and mismatched identities are rejected.');
+
+// Use the real menu row builder and events while details are open.
+button._icon = () => ({});
+button._focusAgent = id => focused.push(id);
+button._taskRows = new Map();
+button._runClockActors = [];
+button._panelProgressBars = new Map([['session-a', {get_parent: () => cell}]]);
+button.menu.close = () => { button.menu.isOpen = false; };
+button.menu.isOpen = true;
+const row = Button.Button.prototype._agentMenuItem.call(button, agent, provider, 3);
+const beforeMenu = completed.length;
+check(click(row, 1, true) === Clutter.EVENT_STOP, 'Ctrl+left-click inside details arms confirmation');
+check(!button.menu.isOpen && popups.at(-1).anchor === cell, 'details closes and confirmation anchors above matching panel instance');
+row.signals.activate?.(row, {get_button: () => 1, get_state: () => 4});
+check(focused.length === 1 && completed.length === beforeMenu, 'menu release neither focuses nor prematurely completes');
+check(/close.*right.click.*confirm/i.test(popups.at(-1).children[0].children.at(-1).text), 'confirmation explicitly asks to close the task');
+click(cell, 3);
+check(completed.length === beforeMenu + 1 && completed.at(-1).session_id === 'session-a', 'menu arming confirms only the selected instance');
+button._panelProgressBars.clear();
+button.menu.isOpen = true;
+check(click(row, 1, true) === Clutter.EVENT_STOP, 'a vanished panel instance consumes Ctrl+click');
+check(!button._taskConfirmation && completed.length === beforeMenu + 1, 'vanished instance cannot arm a stale menu task');
+const normal = Button.Button.prototype._agentMenuItem.call(button, agent, provider, 3);
+normal.signals.activate(normal, {get_button: () => 1, get_state: () => 0});
+check(focused.at(-1) === 'note-a', 'ordinary menu activation retains focus behavior');
+print('PASS: details-menu Ctrl+click, exact panel anchor, release suppression, vanished target and normal activation.');
