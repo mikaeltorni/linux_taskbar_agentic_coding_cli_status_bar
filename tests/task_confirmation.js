@@ -154,3 +154,14 @@ const normal = Button.Button.prototype._agentMenuItem.call(button, agent, provid
 normal.signals.activate(normal, {get_button: () => 1, get_state: () => 0});
 check(focused.at(-1) === 'note-a', 'ordinary menu activation retains focus behavior');
 print('PASS: details-menu Ctrl+click, exact panel anchor, release suppression, vanished target and normal activation.');
+
+// GNOME ClickAction may emit activate without our pointer-press callback.
+button._panelProgressBars = new Map([['session-a', {get_parent: () => cell}]]);
+button.menu.isOpen = true;
+const nativeClick = Button.Button.prototype._agentMenuItem.call(button, agent, provider, 3);
+const focusBeforeNative = focused.length;
+nativeClick.signals.activate(nativeClick, {get_button: () => 1, get_state: () => 4});
+check(button._taskConfirmation?.agent.session_id === 'session-a', 'native Ctrl+click activation arms confirmation even without pointer-press');
+check(focused.length === focusBeforeNative && !button.menu.isOpen, 'native Ctrl activation closes details without focusing terminal');
+button._hideTaskConfirmation();
+print('PASS: native menu ClickAction Ctrl activation bypasses focus and opens confirmation.');
