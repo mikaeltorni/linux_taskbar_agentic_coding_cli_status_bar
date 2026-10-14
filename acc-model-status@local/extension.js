@@ -1924,7 +1924,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         details.reactive = false;
         details.can_focus = false;
         content.add_child(details);
-        content.add_child(new St.Label({text: 'Mark task Done? Right-click to confirm · Esc to cancel',
+        content.add_child(new St.Label({text: 'Close this task and mark Done? Right-click to confirm · Esc to cancel',
             style_class: 'ams-task-confirmation-hint', reactive: false}));
         const popup = new BoxPointer.BoxPointer(St.Side.BOTTOM, {reactive: true});
         popup.add_style_class_name('popup-menu-boxpointer');
@@ -2309,8 +2309,30 @@ class AccModelStatusButton extends PanelMenu.Button {
             reactive: actionable,
             can_focus: actionable,
         });
-        if (actionable)
-            item.connect('activate', () => this._focusAgent(noteId));
+        if (actionable) {
+            item.connect('activate', () => {
+                if (item._amsSuppressActivation) {
+                    item._amsSuppressActivation = false;
+                    return;
+                }
+                this._focusAgent(noteId);
+            });
+            if (track) {
+                item.connect('button-press-event', (_item, event) => {
+                    if (event.get_button() !== 1 || !(event.get_state() & Clutter.ModifierType.CONTROL_MASK))
+                        return Clutter.EVENT_PROPAGATE;
+                    item._amsSuppressActivation = true;
+                    const key = String(agent.session_id || agent.tmux_name || agent.key || '');
+                    const bar = this._panelProgressBars?.get(key);
+                    if (bar) {
+                        this.menu.close();
+                        this._showTaskConfirmation(bar.get_parent(), bar._amsAgent || agent,
+                            bar._amsProvider || provider, bar._amsInstanceCount || codexInstanceCount);
+                    }
+                    return Clutter.EVENT_STOP;
+                });
+            }
+        }
         const row = new St.BoxLayout({style_class: 'ams-agent-row'});
 
         const projectTag = String(agent.project_tag || '').trim();
