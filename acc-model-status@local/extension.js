@@ -2163,12 +2163,16 @@ class AccModelStatusButton extends PanelMenu.Button {
      */
     _syncMuteIndicator(muted) {
         print(`this=${this}, muted=${muted}`);
+        const iconName = muted
+            ? 'notifications-disabled-symbolic' : 'preferences-system-notifications-symbolic';
         if (!this._muteIcon) {
             this._muteIcon = new St.Icon({
+                icon_name: iconName,
                 style_class: 'ams-icon',
                 y_align: Clutter.ActorAlign.CENTER,
             });
             this._muteButton = new St.Button({
+                style_class: 'ams-mute-button',
                 can_focus: true,
                 reactive: true,
                 track_hover: true,
@@ -2178,8 +2182,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._muteButton.connect('clicked', () => this._toggleAnnouncements());
             this._box.insert_child_at_index(this._muteButton, 0);
         }
-        this._muteIcon.icon_name = muted
-            ? 'notifications-disabled-symbolic' : 'notifications-symbolic';
+        this._muteIcon.icon_name = iconName;
         this._muteIcon.style_class = muted ? 'ams-icon ams-muted' : 'ams-icon';
         this._muteButton.accessible_name = muted
             ? 'Unmute ACC announcements' : 'Mute ACC announcements';

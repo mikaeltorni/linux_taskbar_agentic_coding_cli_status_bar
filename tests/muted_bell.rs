@@ -42,6 +42,10 @@ fn muted_bell_is_leftmost_and_updates_without_replacing_providers() {
     assert!(refresh.contains("child !== this._muteButton"));
     let script = format!(r#"
 const emit = print; print = () => {{}};
+imports.gi.versions.Gtk = '3.0';
+const Gtk = imports.gi.Gtk;
+const theme = new Gtk.IconTheme(); theme.set_custom_theme('Adwaita');
+const check = (condition, message) => {{ if (!condition) throw Error(message); }};
 {reader}
 const Clutter = {{ActorAlign: {{CENTER: 0}}}};
 const calls = []; const errors = []; let failed = false; let exitFailed = false;
@@ -82,8 +86,13 @@ const box = {{children: [provider], insert_child_at_index(actor, index) {{
 const button = {{_box: box, _muteIcon: null, _muteButton: null, {sync}, {toggle}}};
 button._syncMuteIndicator(false);
 const unmuted = [box.children.length, button._muteIcon.icon_name, box.children[0].visible];
+check(theme.has_icon(button._muteIcon.icon_name), 'unmuted bell must resolve in the desktop icon theme');
+check(box.children[0].accessible_name === 'Mute ACC announcements', 'unmuted button describes its action');
+check(box.children[0].style_class === 'ams-mute-button', 'button has a stable click target style');
 box.children[0].signals.clicked();
 button._syncMuteIndicator(true);
+check(theme.has_icon(button._muteIcon.icon_name), 'muted bell must resolve in the desktop icon theme');
+check(box.children[0].accessible_name === 'Unmute ACC announcements', 'muted button describes its action');
 const actor = box.children[0];
 const icon = button._muteIcon;
 actor.signals.clicked();
@@ -98,6 +107,10 @@ emit(JSON.stringify({{flags, absent, unmuted, muted, restored, same: box.childre
     let result = Command::new("gjs").args(["-c", &script]).output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     let observed: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
-    assert_eq!(observed, serde_json::json!({"flags": [false, true, false, false], "absent": null, "unmuted": [2, "notifications-symbolic", true], "muted": ["notifications-disabled-symbolic", true, true], "restored": ["notifications-symbolic", true, true], "same": true, "calls": [["/test/.local/bin/agent-command-center", "silent", "toggle"], ["/test/.local/bin/agent-command-center", "silent", "toggle"], ["/test/.local/bin/agent-command-center", "silent", "toggle"]], "errors": ["acc-model-status: could not toggle announcements", "acc-model-status: could not toggle announcements"]}));
+    assert_eq!(observed, serde_json::json!({"flags": [false, true, false, false], "absent": null, "unmuted": [2, "preferences-system-notifications-symbolic", true], "muted": ["notifications-disabled-symbolic", true, true], "restored": ["preferences-system-notifications-symbolic", true, true], "same": true, "calls": [["/test/.local/bin/agent-command-center", "silent", "toggle"], ["/test/.local/bin/agent-command-center", "silent", "toggle"], ["/test/.local/bin/agent-command-center", "silent", "toggle"]], "errors": ["acc-model-status: could not toggle announcements", "acc-model-status: could not toggle announcements"]}));
+    let css = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/acc-model-status@local/stylesheet.css")).unwrap();
+    assert!(css.contains(".ams-mute-button {"));
+    assert!(css.contains("min-width: 24px;") && css.contains("min-height: 24px;"));
+    assert!(css.contains(".ams-mute-button:hover"));
     eprintln!("None");
 }
