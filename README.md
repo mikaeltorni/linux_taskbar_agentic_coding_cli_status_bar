@@ -274,10 +274,14 @@ re-reads it every tick, so changes apply without a service restart.
 
 ### Optional: Agent Command Center model status bar
 
-A slashed bell appears at the far left of the ACC status indicator while
-`acc silent on` mutes announcements. `acc silent off` removes it. The indicator
-reads ACC's published `announcements_muted` setting and updates even while its
-menu is open; it remains available when no agent windows are open.
+A bell always appears at the far left of the ACC status indicator, including
+when no agent windows are open. Click it to mute or unmute announcements across
+all ACC instances: it runs the installed `agent-command-center silent toggle`,
+the same shared control as `acc silent on` / `acc silent off`. A slashed bell
+means muted; a regular bell means enabled. The indicator reads ACC's published
+`announcements_muted` setting and updates even while its menu is open. ACC's
+per-invocation `ATTS_SILENT` / legacy `ACC_SILENT` environment overrides still
+apply.
 
 A second, independent taskbar extension (`acc-model-status@local`) shows the
 number of Agent Command Center agents of each provider that are **currently
