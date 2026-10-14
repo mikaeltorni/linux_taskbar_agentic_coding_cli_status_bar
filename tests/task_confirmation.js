@@ -188,3 +188,33 @@ check(JSON.stringify(Button.completionCommand(recoveredAgent, recoveredRegistry)
 check(Button.completionCommand({...recoveredAgent, note_id: 'unrelated'}, recoveredRegistry) === null,
     'changed panel identity cannot submit an unrelated recovered task');
 print('PASS: reported unlinked session reaches native note recovery without a guessed note id.');
+
+// Exercise the actual dispatch owner, including its registry file and subprocess boundary.
+const dispatches = [];
+const dispatchErrors = [];
+const dispatchFile = {get_parent: () => ({get_child: part => {
+    if (part !== 'sessions') throw Error('incorrect state parent');
+    return {get_child: name => {
+        if (name !== 'registry.json') throw Error('incorrect registry filename');
+        return {get_path: () => '/isolated/state/sessions/registry.json',
+            load_contents: () => [true, new TextEncoder().encode(JSON.stringify(recoveredRegistry))]};
+    }};
+}})};
+const dispatchMain = {notifyError: (title, reason) => dispatchErrors.push({title, reason})};
+const dispatchGio = {SubprocessFlags: {NONE: 0}, Subprocess: {new: argv => {
+    dispatches.push(argv);
+    return {wait_check_async: (_cancel, callback) => callback({wait_check_finish: () => true}, {})};
+}}};
+const DispatchButton = new Function('GObject', 'PanelMenu', 'Extension', 'print', 'Gio', 'Main',
+    `${source}\nreturn AccModelStatusButton;`)(
+    {registerClass: value => value}, {Button: class {}}, class {}, print, dispatchGio, dispatchMain);
+const liveDispatch = new DispatchButton();
+liveDispatch._file = dispatchFile;
+let dispatchRefreshes = 0;
+liveDispatch._queueRefresh = () => { dispatchRefreshes++; };
+liveDispatch._completeAgent(recoveredAgent);
+check(dispatchErrors.length === 0 && dispatches.length === 1 && dispatchRefreshes === 1,
+    'actual pre-dispatch owner reads the expected registry and invokes native session recovery');
+check(JSON.stringify(dispatches[0]) === JSON.stringify(['pa', 'mark-in-progress-done', '--close-session', 'session-a']),
+    'full dispatch sends the selected recovered session to pa');
+print('PASS: actual completion owner, registry path, subprocess boundary and completion refresh.');

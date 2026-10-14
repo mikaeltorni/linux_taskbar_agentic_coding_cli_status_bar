@@ -35,8 +35,9 @@ class NativePanelButton {
 }
 const makeButton = new Function('Clutter', 'GObject', 'PanelMenu', 'Extension', 'print', 'Main', 'St', 'file',
     `${source}\npayloadFile = () => file; readUnreadStates = () => new Map(); return AccModelStatusButton;`);
+const startupTrace = [];
 const Button = makeButton(Clutter, {registerClass: value => value},
-    {Button: NativePanelButton}, class {}, print,
+    {Button: NativePanelButton}, class {}, value => { startupTrace.push(String(value)); print(value); },
     {panel: {menuManager: {_grabParams: {actionMode: 1}}}},
     {BoxLayout: class {}}, {get_parent: () => ({get_child: () => ({})})});
 const button = new Button();
@@ -70,6 +71,8 @@ hoverButton._startWatching = () => {};
 hoverButton._startWindowWatching = () => {};
 hoverButton._refresh = () => {};
 hoverButton._init({dir: {get_child: () => ({})}});
+check(startupTrace.includes('acc-model-status: confirmed-close session recovery loaded'),
+    'initialization identifies the actual loaded completion handler in the Shell journal');
 check(hoverButton.track_hover === false, 'enclosing panel never tracks whole-bar hover');
 check(hoverButton.style.includes('background-color: transparent') && hoverButton.style.includes('box-shadow: none'),
     'native active/focus/menu theme cannot highlight the entire indicator');
