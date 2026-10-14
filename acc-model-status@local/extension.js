@@ -130,11 +130,9 @@ function formatRunTimer(seconds) {
  * Returns: the phase word shown on the taskbar.
  */
 function displayedPhase(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     let phase = String(agent && agent.phase || 'UNKNOWN').trim().toUpperCase();
     if (phase === 'RATE' && taskMarkedDone(agent))
         phase = 'DONE';
-    print(phase);
     return phase;
 }
 
@@ -167,7 +165,6 @@ function agentPhaseBadgeText(agent, nowMs) {
  * Returns: CSS color from the phase palette.
  */
 function agentPhaseBadgeColor(agent, nowMs) {
-    print(`agent=${JSON.stringify(agent)} nowMs=${nowMs}`);
     const now = Number.isFinite(nowMs) ? nowMs : Date.now();
     const phase = displayedPhase(agent);
     let result = phaseColor(phase);
@@ -178,7 +175,6 @@ function agentPhaseBadgeColor(agent, nowMs) {
             !Number.isNaN(Date.parse(agent.run_started_at || '')))
             result = PHASE_COLORS.GOAL;
     }
-    print(result);
     return result;
 }
 
@@ -207,18 +203,15 @@ function payloadFile() {
  *     must never throw into the Shell).
  */
 function readPayload(file) {
-    print(`file=${file}`);
     let bytes;
     try {
         const [ok, contents] = file.load_contents(null);
         if (!ok) {
-            print(null);
             return null;
         }
         bytes = contents;
     } catch (_error) {
         // Missing file is the normal "ACC not running yet" case.
-        print(null);
         return null;
     }
 
@@ -227,11 +220,9 @@ function readPayload(file) {
         parsed = JSON.parse(new TextDecoder().decode(bytes));
     } catch (error) {
         logError(error, 'acc-model-status: unparsable payload');
-        print(null);
         return null;
     }
     if (!parsed || typeof parsed !== 'object') {
-        print(null);
         return null;
     }
 
@@ -246,7 +237,6 @@ function readPayload(file) {
         announcementsMuted: parsed.announcements_muted === true,
         updatedAt: typeof parsed.updated_at === 'string' ? parsed.updated_at : '',
     };
-    print(JSON.stringify(result));
     return result;
 }
 
@@ -568,7 +558,6 @@ function workspaceSortValue(workspace) {
  * Returns: a map from note identity to its 1-based workspace badge and desktop.
  */
 function readWindowDisplayIds(file) {
-    print(`file=${file}`);
     const ids = new Map();
     try {
         const [ok, bytes] = file.load_contents(null);
@@ -583,7 +572,6 @@ function readWindowDisplayIds(file) {
     } catch (_error) {
         // Missing or corrupt numbering must not hide open task rows.
     }
-    print(ids);
     return ids;
 }
 
@@ -593,12 +581,10 @@ function readWindowDisplayIds(file) {
  * Returns: the numeric display ID, or a final-position sentinel.
  */
 function windowDisplaySortValue(agent) {
-    print(`agent=${agent}`);
     const id = agent.window_display_id;
     const result = id !== null && id !== undefined &&
         Number.isInteger(Number(id)) && Number(id) >= 0
         ? Number(id) : Number.MAX_SAFE_INTEGER;
-    print(result);
     return result;
 }
 
@@ -608,7 +594,6 @@ function windowDisplaySortValue(agent) {
  * Returns: a copied payload with corner display IDs on matching desktops.
  */
 function withWindowDisplayIds(payload, ids) {
-    print(`payload=${payload} ids=${ids}`);
     const providers = payload.providers.map(provider => ({...provider,
         agents: (provider.agents || []).map(agent => {
             const indexed = [agent.note_id, agent.tmux_name, agent.session_id, agent.key]
@@ -619,7 +604,6 @@ function withWindowDisplayIds(payload, ids) {
         }),
     }));
     const result = {...payload, providers};
-    print(result);
     return result;
 }
 
@@ -629,13 +613,11 @@ function withWindowDisplayIds(payload, ids) {
  * Returns: negative, zero, or positive ordering comparison.
  */
 function compareWorkspaceEntries(left, right) {
-    print(`left=${left} right=${right}`);
     const result = workspaceSortValue(left.agent.workspace) - workspaceSortValue(right.agent.workspace) ||
         windowDisplaySortValue(left.agent) - windowDisplaySortValue(right.agent) ||
         monitorSortValue(left.agent.monitor) - monitorSortValue(right.agent.monitor) ||
         String(left.provider.label || '').localeCompare(String(right.provider.label || '')) ||
         String(left.agent.title || '').localeCompare(String(right.agent.title || ''));
-    print(result);
     return result;
 }
 
@@ -645,7 +627,6 @@ function compareWorkspaceEntries(left, right) {
  * Returns: workspace groups sorted by workspace and numeric corner ID.
  */
 function groupWorkspaceEntries(entries) {
-    print(`entries=${entries}`);
     const groups = new Map();
     for (const entry of entries) {
         const workspace = Number(entry.agent.workspace) || 0;
@@ -662,7 +643,6 @@ function groupWorkspaceEntries(entries) {
         group.entries.sort(compareWorkspaceEntries);
     orderedGroups.sort((left, right) => workspaceSortValue(left.workspace) -
         workspaceSortValue(right.workspace));
-    print(orderedGroups);
     return orderedGroups;
 }
 
@@ -672,7 +652,6 @@ function groupWorkspaceEntries(entries) {
  * Returns: undefined after releasing its Cairo context.
  */
 function paintMonitorSeparator(area) {
-    print(`area=${area}`);
     const [width] = area.get_surface_size();
     const context = area.get_context();
     context.setSourceRGBA(0.63, 0.63, 0.63, 0.55);
@@ -682,7 +661,6 @@ function paintMonitorSeparator(area) {
     context.lineTo(width, 0.5);
     context.stroke();
     context.$dispose();
-    print(undefined);
 }
 
 /**
@@ -691,7 +669,6 @@ function paintMonitorSeparator(area) {
  * Returns: a noninteractive native separator with a full-width dashed drawing.
  */
 function buildMonitorSeparator() {
-    print('parameters=none');
     const separator = new PopupMenu.PopupSeparatorMenuItem();
     separator.actor.add_style_class_name('ams-monitor-separator');
     for (const child of separator.get_children()) {
@@ -705,7 +682,6 @@ function buildMonitorSeparator() {
     });
     area.connect('repaint', paintMonitorSeparator);
     separator.add_child(area);
-    print(separator);
     return separator;
 }
 
@@ -909,11 +885,9 @@ function taskProgressValue(agent) {
  * Returns: a fraction from zero to one, or null when progress is unavailable.
  */
 function panelTaskProgressValue(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     const result = agent.unread_completion ||
         (String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at)
         ? 1 : agent.workflow?.available === false ? null : taskProgressValue(agent);
-    print(result);
     return result;
 }
 
@@ -924,7 +898,6 @@ function panelTaskProgressValue(agent) {
  * Returns: red, green and blue byte values for the progress color.
  */
 function panelProgressColor(fraction, ready = false, now = Date.now(), agent = null) {
-    print(`fraction=${fraction} ready=${ready} now=${now} agent=${JSON.stringify(agent)}`);
     const red = [239, 68, 68];
     const green = [34, 197, 94];
     const interrupted = String(agent?.phase || '').trim().toUpperCase() === 'INTERRUPTED';
@@ -933,7 +906,6 @@ function panelProgressColor(fraction, ready = false, now = Date.now(), agent = n
         red.map((channel, index) => Math.round(channel + (green[index] - channel) * fraction)));
     const wave = ready && !interrupted ? panelProgressWave(now) : 0;
     const result = base.map(channel => Math.round(channel + (255 - channel) * wave));
-    print(result);
     return result;
 }
 
@@ -943,11 +915,9 @@ function panelProgressColor(fraction, ready = false, now = Date.now(), agent = n
  * Returns: state RGB bytes, or null to retain the measured progress gradient.
  */
 function panelProgressStateColor(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     const phase = displayedPhase(agent);
     const hex = ['RATE', 'DRAFT', 'INTERRUPTED'].includes(phase) ? PHASE_COLORS[phase] : null;
     const result = hex ? [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) : null;
-    print(result);
     return result;
 }
 
@@ -957,9 +927,7 @@ function panelProgressStateColor(agent) {
  * Returns: the brightness wave from zero to one.
  */
 function panelProgressWave(now) {
-    print(`now=${now}`);
     const result = (1 - Math.cos(2 * Math.PI * (now % 3000) / 3000)) / 2;
-    print(result);
     return result;
 }
 
@@ -969,9 +937,7 @@ function panelProgressWave(now) {
  * Returns: true only for an active running turn.
  */
 function panelProgressUnderway(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     const result = agent.run_active === true && String(agent.phase || '').toUpperCase() === 'RUNNING';
-    print(result);
     return result;
 }
 
@@ -981,9 +947,7 @@ function panelProgressUnderway(agent) {
  * Returns: true when the bar needs a purple goal edge.
  */
 function panelProgressGoalActive(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     const result = Boolean(agent?.goal_active && panelProgressUnderway(agent));
-    print(result);
     return result;
 }
 
@@ -994,10 +958,8 @@ function panelProgressGoalActive(agent) {
  * Returns: compositor opacity from 0 to 255, steadily dim when stale.
  */
 function panelProgressOpacity(underway, now, stale, ready = false) {
-    print(`underway=${underway} now=${now} stale=${stale} ready=${ready}`);
     const alpha = underway && !ready ? 1 - 0.7 * panelProgressWave(now) : 1;
     const result = stale ? 128 : Math.round(255 * alpha);
-    print(result);
     return result;
 }
 
@@ -1008,10 +970,8 @@ function panelProgressOpacity(underway, now, stale, ready = false) {
  * Returns: compositor opacity byte, preserving ordinary and stale behavior.
  */
 function panelProgressHostOpacity(agent, now, stale, ready) {
-    print(`agent=${JSON.stringify(agent)} now=${now} stale=${stale} ready=${ready}`);
     const result = panelProgressGoalActive(agent) ? (stale ? 128 : 255) :
         panelProgressOpacity(panelProgressUnderway(agent), now, stale, ready);
-    print(result);
     return result;
 }
 
@@ -1021,7 +981,6 @@ function panelProgressHostOpacity(agent, now, stale, ready) {
  * Returns: undefined after releasing the Cairo drawing context.
  */
 function paintPanelTaskProgress(area) {
-    print(`area=${area}`);
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
     const fillWidth = Math.max(0, width - 2);
@@ -1048,7 +1007,6 @@ function paintPanelTaskProgress(area) {
         context.stroke();
     }
     context.$dispose();
-    print(undefined);
 }
 
 /**
@@ -1057,7 +1015,6 @@ function paintPanelTaskProgress(area) {
  * Returns: a DrawingArea showing actual progress on its next repaint.
  */
 function buildPanelTaskProgress(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     const area = new St.DrawingArea({
         style_class: 'ams-panel-progress-bar',
         width: 52, height: 11,
@@ -1066,7 +1023,6 @@ function buildPanelTaskProgress(agent) {
     });
     area._amsAgent = agent;
     area.connect('repaint', paintPanelTaskProgress);
-    print(area);
     return area;
 }
 
@@ -1076,10 +1032,8 @@ function buildPanelTaskProgress(agent) {
  * Returns: remaining seconds, or null when no future reset is published.
  */
 function panelResetRemainingSeconds(agent, now) {
-    print(`agent=${JSON.stringify(agent)} now=${now}`);
     const resetAt = Date.parse(agent && agent.queued_reset_at || '');
     const result = !Number.isNaN(resetAt) && resetAt > now ? (resetAt - now) / 1000 : null;
-    print(result);
     return result;
 }
 
@@ -1089,14 +1043,12 @@ function panelResetRemainingSeconds(agent, now) {
  * Returns: true when the task is done and must not be presented as waiting to start.
  */
 function taskMarkedDone(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     const phase = String(agent?.phase || '').trim().toUpperCase();
     const completed = agent?.workflow?.phase_completed;
     const total = agent?.workflow?.phase_total;
     const workflowDone = Number.isInteger(completed) && Number.isInteger(total) &&
         total > 0 && completed >= total;
     const result = phase === 'DONE' || Boolean(agent?.ready_completed_at) || workflowDone;
-    print(result);
     return result;
 }
 
@@ -1106,11 +1058,9 @@ function taskMarkedDone(agent) {
  * Returns: seconds until launch, or null when this row is running, done, or has no reset.
  */
 function panelLaunchWaitSeconds(agent, now) {
-    print(`agent=${JSON.stringify(agent)} now=${now}`);
     const remaining = panelResetRemainingSeconds(agent, now);
     const result = remaining !== null && !taskMarkedDone(agent) && !panelProgressUnderway(agent)
         ? remaining : null;
-    print(result);
     return result;
 }
 
@@ -1121,13 +1071,11 @@ function panelLaunchWaitSeconds(agent, now) {
  * Returns: compact duration through its minute/hour unit, with no trailing text, or empty text.
  */
 function panelAgentEstimateText(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     const label = panelLaunchWaitSeconds(agent, Date.now()) === null &&
         panelProgressUnderway(agent) && agent.task_time_estimate?.status === 'estimated'
         ? taskEstimateText(agent) : '';
     const duration = label.match(/^[~<>≤≥]?\s*(?:\d+h(?:\s*\d+m)?|\d+m)/)?.[0] || '';
     const text = duration.replace(/\s+/g, '');
-    print(text);
     return text;
 }
 
@@ -1137,14 +1085,12 @@ function panelAgentEstimateText(agent) {
  * Returns: HH:MM text without seconds, or empty text when the duration is unknown.
  */
 function formatPanelRunDuration(seconds) {
-    print(`seconds=${seconds}`);
     let text = '';
     if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0) {
         const totalMinutes = Math.floor(seconds / 60);
         const hours = Math.floor(totalMinutes / 60);
         text = `${String(hours).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
     }
-    print(text);
     return text;
 }
 
@@ -1154,13 +1100,11 @@ function formatPanelRunDuration(seconds) {
  * Returns: copied presentation row with the same task's start, without changing the payload.
  */
 function panelRuntimeObservation(agent, previous) {
-    print(`agent=${JSON.stringify(agent)} previous=${JSON.stringify(previous)}`);
     const result = {...agent};
     if (String(agent.phase || '').toUpperCase() === 'DONE' && !agent.run_started_at &&
         previous && (panelProgressUnderway(previous) ||
             agent.ready_completed_at === previous.ready_completed_at))
         result.run_started_at = previous.run_started_at;
-    print(JSON.stringify(result));
     return result;
 }
 
@@ -1172,11 +1116,9 @@ function panelRuntimeObservation(agent, previous) {
  * Returns: HH:MM runtime while running or unread, a negative launch countdown, or empty text.
  */
 function panelAgentRuntimeText(agent, now = Date.now()) {
-    print(`agent=${JSON.stringify(agent)} now=${now}`);
     const remaining = panelLaunchWaitSeconds(agent, now);
     if (remaining !== null) {
         const countdown = `-${formatPanelRunDuration(remaining < 60 ? 60 : remaining)}`;
-        print(countdown);
         return countdown;
     }
     let seconds = null;
@@ -1194,7 +1136,6 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
             seconds = agent.task_time_estimate.observed_active_seconds;
     }
     const text = formatPanelRunDuration(seconds);
-    print(text);
     return text;
 }
 
@@ -1205,7 +1146,6 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
  * Returns: completion RGB, goal purple, queued-reset green, interruption red, or running yellow CSS color.
  */
 function panelAgentRuntimeColor(agent, now = Date.now(), stale = false) {
-    print(`agent=${JSON.stringify(agent)} now=${now} stale=${stale}`);
     let color = panelProgressGoalActive(agent) ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING;
     if (panelLaunchWaitSeconds(agent, now) !== null) {
         const phase = String(agent?.phase || '').trim().toUpperCase();
@@ -1214,7 +1154,6 @@ function panelAgentRuntimeColor(agent, now = Date.now(), stale = false) {
         const rgb = panelProgressColor(1, agent.unread_completion === true && !stale, now, agent);
         color = `rgb(${rgb.join(', ')})`;
     }
-    print(color);
     return color;
 }
 
@@ -1226,7 +1165,6 @@ function panelAgentRuntimeColor(agent, now = Date.now(), stale = false) {
  * Returns: a fixed-width instance click and hover target with its bar, lower estimate and upper runtime label.
  */
 function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
-    print(`agent=${JSON.stringify(agent)} focusAgent=${focusAgent} confirmAgent=${confirmAgent}`);
     const cell = new St.Widget({
         style_class: 'ams-panel-task-cell',
         layout_manager: new Clutter.BinLayout(),
@@ -1281,7 +1219,6 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
     cell.add_child(bar);
     cell.add_child(estimate);
     cell.add_child(runtime);
-    print(cell);
     return cell;
 }
 
@@ -1291,10 +1228,8 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
  * Returns: a CSS hex color, neutral for unknown and capped at W8 for higher workspaces.
  */
 function panelWorkspaceColor(workspace) {
-    print(`workspace=${workspace}`);
     if (!Number.isInteger(workspace) || workspace < 1) {
         const result = '#9a9996';
-        print(result);
         return result;
     }
     const fraction = Math.min(1, (workspace - 1) / 7);
@@ -1302,7 +1237,6 @@ function panelWorkspaceColor(workspace) {
     const end = [192, 132, 252];
     const channels = start.map((value, index) => Math.round(value + (end[index] - value) * fraction));
     const result = '#' + channels.map(value => value.toString(16).padStart(2, '0')).join('');
-    print(result);
     return result;
 }
 
@@ -1312,7 +1246,6 @@ function panelWorkspaceColor(workspace) {
  * Returns: undefined after releasing the Cairo drawing context.
  */
 function paintPanelWorkspaceSeparator(area) {
-    print(`area=${area}`);
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
     context.setSourceRGBA(0.63, 0.63, 0.63, 0.55);
@@ -1324,7 +1257,6 @@ function paintPanelWorkspaceSeparator(area) {
     context.lineTo(width / 2, height);
     context.stroke();
     context.$dispose();
-    print(undefined);
 }
 
 /**
@@ -1333,7 +1265,6 @@ function paintPanelWorkspaceSeparator(area) {
  * Returns: a full-height DrawingArea with no label or added interaction.
  */
 function buildPanelWorkspaceSeparator() {
-    print('parameters=none');
     const area = new St.DrawingArea({
         style_class: 'ams-panel-workspace-divider',
         width: 6,
@@ -1342,7 +1273,6 @@ function buildPanelWorkspaceSeparator() {
         y_align: Clutter.ActorAlign.FILL,
     });
     area.connect('repaint', paintPanelWorkspaceSeparator);
-    print(area);
     return area;
 }
 
@@ -1352,7 +1282,6 @@ function buildPanelWorkspaceSeparator() {
  * Returns: undefined after releasing the Cairo context.
  */
 function paintPanelMonitorSeparator(area) {
-    print(`area=${area}`);
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
     context.setSourceRGBA(0, 1, 230 / 255, 0.8);
@@ -1361,7 +1290,6 @@ function paintPanelMonitorSeparator(area) {
     context.lineTo(width / 2, height * 3 / 4);
     context.stroke();
     context.$dispose();
-    print(undefined);
 }
 
 /**
@@ -1370,7 +1298,6 @@ function paintPanelMonitorSeparator(area) {
  * Returns: an inert DrawingArea stretching through the allocated panel height.
  */
 function buildPanelMonitorSeparator() {
-    print('parameters=none');
     const area = new St.DrawingArea({
         style_class: 'ams-panel-monitor-divider',
         // The two adjacent six-pixel gaps double the spacing around this line.
@@ -1380,7 +1307,6 @@ function buildPanelMonitorSeparator() {
         y_align: Clutter.ActorAlign.FILL,
     });
     area.connect('repaint', paintPanelMonitorSeparator);
-    print(area);
     return area;
 }
 
@@ -1492,11 +1418,9 @@ function buildTaskProgressLayer(item, row, badge, agent) {
  * Returns: undefined after updating the popup action mode.
  */
 function setStatusMenuActionMode(manager, isOpen, originalActionMode) {
-    print(`manager=${manager} isOpen=${isOpen} originalActionMode=${originalActionMode}`);
     manager._grabParams.actionMode = isOpen
         ? originalActionMode | Shell.ActionMode.NORMAL
         : originalActionMode;
-    print(undefined);
     return undefined;
 }
 
@@ -1505,10 +1429,8 @@ function setStatusMenuActionMode(manager, isOpen, originalActionMode) {
  * Returns: public session-only pa completion argv, or null when the session id is absent.
  */
 function completionCommand(agent) {
-    print(`agent=${JSON.stringify(agent)}`);
     const sessionId = typeof agent?.session_id === 'string' ? agent.session_id.trim() : '';
     const result = sessionId ? ['pa', 'mark-in-progress-done', '--close-session', sessionId] : null;
-    print(result);
     return result;
 }
 
@@ -1517,9 +1439,7 @@ function completionCommand(agent) {
  * Returns: its final nonblank message or a useful generic native-failure reason.
  */
 function completionErrorMessage(stderr) {
-    print(`stderr=${stderr}`);
     const result = String(stderr || '').trim().split('\n').at(-1) || 'Native task completion failed';
-    print(result);
     return result;
 }
 
@@ -1532,7 +1452,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined after initialization.
      */
     _init(extension) {
-        print(`this=${this} extension=${extension}`);
         super._init(0.5, 'ACC Model Status');
         print('acc-model-status: confirmed-close native session routing loaded');
         this.track_hover = false;
@@ -1570,7 +1489,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._startWatching();
         this._startWindowWatching();
         this._refresh();
-        print(undefined);
     }
 
     /**
@@ -1579,7 +1497,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: EVENT_STOP for panel pointer presses, otherwise EVENT_PROPAGATE.
      */
     vfunc_event(event) {
-        print(`this=${this} event=${event}`);
         const type = event.type();
         let result = Clutter.EVENT_PROPAGATE;
         if (type === Clutter.EventType.BUTTON_PRESS) {
@@ -1591,7 +1508,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         } else if (type === Clutter.EventType.LEAVE) {
             this._queueRefresh();
         }
-        print(result);
         return result;
     }
 
@@ -1741,7 +1657,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _refresh() {
-        print(`this=${this}`);
         const published = readPayload(this._file);
         const windows = this._openWindowDescriptors();
         const payload = published
@@ -1763,7 +1678,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             // Preserve row identities while refreshing progress and glow together.
             this._updateTaskRows(payload);
             this._updatePanelProgress(payload, stale);
-            print(undefined);
             return;
         }
         const hovering = Boolean(payload?.providers.length) && [...(this._panelProgressBars?.values() || [])]
@@ -1800,7 +1714,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             }
             this._syncRunClockTimer();
             this._updatePanelProgress(payload, stale);
-            print(undefined);
             return;
         }
 
@@ -1817,7 +1730,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._updatePanelProgress(payload, stale);
         this._renderMenu(payload, stale, attention);
         this._syncRunClockTimer();
-        print(undefined);
     }
 
     /**
@@ -1827,7 +1739,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _updatePanelProgress(payload, stale) {
-        print(`this=${this} payload=${JSON.stringify(payload)} stale=${stale}`);
         if (!this._panelProgress) {
             this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
             this._panelProgressBars = new Map();
@@ -1939,7 +1850,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         this._panelProgress.visible = entries.length > 0;
         this._syncPanelPulseTimer();
-        print(undefined);
     }
 
     /** Show the colored task row in a box anchored above its panel cell.
@@ -1948,15 +1858,12 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _syncTaskHover(cell, agent, provider, codexInstanceCount) {
-        print(`this=${this} cell=${cell} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount}`);
         if (this._taskConfirmation) {
-            print(undefined);
             return;
         }
         if (!cell.hover || this.menu.isOpen) {
             if (this._taskHoverCell === cell)
                 this._hideTaskHover();
-            print(undefined);
             return;
         }
         this._hideTaskHover();
@@ -1973,7 +1880,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._taskHoverCell = cell;
         this._taskHoverPopup = popup;
         popup.open(BoxPointer.PopupAnimation.NONE);
-        print(undefined);
     }
 
     /** Remove the anchored preview and release its actor.
@@ -1981,11 +1887,9 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _hideTaskHover() {
-        print(`this=${this}`);
         this._taskHoverPopup?.destroy();
         this._taskHoverPopup = null;
         this._taskHoverCell = null;
-        print(undefined);
     }
 
     /** Arm an above-instance confirmation containing the task's colored details.
@@ -1994,10 +1898,8 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _showTaskConfirmation(cell, agent, provider, codexInstanceCount) {
-        print(`this=${this} cell=${cell} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount}`);
         this._hideTaskConfirmation();
         this._hideTaskHover();
-        print(`acc-model-status: confirmed-close prepared=${JSON.stringify(completionCommand(agent))}`);
         const content = new St.BoxLayout({vertical: true, reactive: true,
             style_class: 'ams-task-hover-content'});
         const details = this._agentMenuItem(agent, provider, codexInstanceCount, false);
@@ -2034,7 +1936,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         popup.open(BoxPointer.PopupAnimation.NONE);
         // Grab the stage so both the popup and its original panel cell remain clickable.
         this._taskConfirmationGrab = Main.pushModal(global.stage, {actionMode: Shell.ActionMode.NORMAL});
-        print(undefined);
     }
 
     /** Cancel an armed task and disconnect its stage input handler.
@@ -2042,7 +1943,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _hideTaskConfirmation() {
-        print(`this=${this}`);
         if (this._taskConfirmationSignal) {
             global.stage.disconnect(this._taskConfirmationSignal);
             this._taskConfirmationSignal = null;
@@ -2057,7 +1957,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             pending.cell._amsConfirmation = null;
             pending.popup.destroy();
         }
-        print(undefined);
     }
 
     /** Consume the selected task confirmation once before invoking completion.
@@ -2065,12 +1964,10 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _confirmTaskCompletion() {
-        print(`this=${this}`);
         const agent = this._taskConfirmation?.agent;
         this._hideTaskConfirmation();
         if (agent)
             this._completeAgent(agent);
-        print(undefined);
     }
 
     /** Delegate the selected session to pa's authoritative ownership and completion service.
@@ -2078,10 +1975,8 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined after scheduling completion, showing native failures without reporting success.
      */
     _completeAgent(agent) {
-        print(`this=${this} agent=${JSON.stringify(agent)}`);
         try {
             const argv = completionCommand(agent);
-            print(`acc-model-status: confirmed-close session=${agent.session_id} argv=${JSON.stringify(argv)}`);
             if (!argv)
                 throw new Error('Selected window has no registered session id');
             const process = Gio.Subprocess.new(argv,
@@ -2094,7 +1989,6 @@ class AccModelStatusButton extends PanelMenu.Button {
                         print(`acc-model-status: confirmed-close failed: ${message}`);
                         Main.notifyError('Could not mark task Done', message);
                     } else {
-                        print(`acc-model-status: confirmed-close completed session=${agent.session_id}`);
                         this._queueRefresh();
                     }
                 } catch (error) {
@@ -2106,7 +2000,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             print(`acc-model-status: confirmed-close rejected: ${error.message}`);
             Main.notifyError('Could not mark task Done', error.message);
         }
-        print(undefined);
     }
 
     /**
@@ -2115,7 +2008,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _syncPanelPulseTimer() {
-        print(`this=${this}`);
         const active = [...this._panelProgressBars.values()].some(bar =>
             (bar._amsUnderway || bar._amsReady || bar._amsResetCountdown) && !bar._amsStale);
         if (!active) {
@@ -2129,7 +2021,6 @@ class AccModelStatusButton extends PanelMenu.Button {
                 return GLib.SOURCE_CONTINUE;
             });
         }
-        print(undefined);
     }
 
     /**
@@ -2138,7 +2029,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _applyPanelProgressPulse(now = Date.now()) {
-        print(`this=${this} now=${now}`);
         for (const bar of this._panelProgressBars.values()) {
             if (bar._amsRuntimeLabel && (bar._amsUnderway || bar._amsReady || bar._amsResetCountdown) && !bar._amsStale) {
                 bar._amsRuntimeLabel.text = panelAgentRuntimeText(bar._amsRuntimeAgent, now);
@@ -2153,7 +2043,6 @@ class AccModelStatusButton extends PanelMenu.Button {
                 }
             }
         }
-        print(undefined);
     }
 
     /**
@@ -2162,7 +2051,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _syncMuteIndicator(muted) {
-        print(`this=${this}, muted=${muted}`);
         const iconName = muted
             ? 'notifications-disabled-symbolic' : 'preferences-system-notifications-symbolic';
         if (!this._muteIcon) {
@@ -2188,7 +2076,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             ? 'Unmute ACC announcements' : 'Mute ACC announcements';
         this._muteIcon.visible = true;
         this._muteButton.visible = true;
-        print(undefined);
     }
 
     /**
@@ -2197,7 +2084,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _toggleAnnouncements() {
-        print(`this=${this}`);
         const dispatcher = GLib.build_filenamev([
             GLib.get_home_dir(), '.local', 'bin', 'agent-command-center',
         ]);
@@ -2214,7 +2100,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         } catch (error) {
             logError(error, 'acc-model-status: could not toggle announcements');
         }
-        print(undefined);
     }
 
     /**
@@ -2371,7 +2256,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      *     {@link workspaceAttentionCounts}, repeated as badges in the headings.
      */
     _renderMenu(payload, stale, attention) {
-        print(`this=${this} payload=${payload} stale=${stale} attention=${attention}`);
         const workspaceEntries = [];
         for (const provider of payload.providers) {
             const agents = Array.isArray(provider.agents) ? provider.agents : [];
@@ -2429,7 +2313,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             ? `Stale — last update ${payload.updatedAt || 'unknown'}`
             : `${payload.totalRunning} running / ${payload.totalLive} live`;
         this.menu.addMenuItem(new PopupMenu.PopupMenuItem(footer, {reactive: false}));
-        print(undefined);
     }
 
     /** Build the colored detail row for the menu or a noninteractive hover preview.
@@ -2438,7 +2321,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: the task menu item with its colored detail row.
      */
     _agentMenuItem(agent, provider, codexInstanceCount, track = true) {
-        print(`this=${this} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount} track=${track}`);
         const noteId = String(agent.note_id || '').trim();
         const actionable = Boolean(noteId);
         const item = new PopupMenu.PopupBaseMenuItem({
@@ -2544,7 +2426,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         const key = String(agent.session_id || agent.tmux_name || agent.key || '');
         if (track && key)
             this._taskRows.set(key, widgets);
-        print(item);
         return item;
     }
 
@@ -2554,7 +2435,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined; vanished panel targets remain unarmed.
      */
     _armMenuTaskConfirmation(agent, provider, codexInstanceCount) {
-        print(`this=${this} agent=${JSON.stringify(agent)} provider=${JSON.stringify(provider)} codexInstanceCount=${codexInstanceCount}`);
         const key = String(agent.session_id || agent.tmux_name || agent.key || '');
         const bar = this._panelProgressBars?.get(key);
         if (bar) {
@@ -2562,7 +2442,6 @@ class AccModelStatusButton extends PanelMenu.Button {
             this._showTaskConfirmation(bar.get_parent(), bar._amsAgent || agent,
                 bar._amsProvider || provider, bar._amsInstanceCount || codexInstanceCount);
         }
-        print(undefined);
     }
 
     /** Activate one agent terminal through ACC's shared focus-and-pointer selector. */
@@ -2598,7 +2477,6 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     destroy() {
-        print(`this=${this}`);
         this._hideTaskHover();
         this._hideTaskConfirmation();
         if (this._panelPulseId) {
@@ -2632,7 +2510,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         this._windowSignals.clear();
         super.destroy();
-        print(undefined);
     }
 });
 
