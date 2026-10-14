@@ -1131,6 +1131,8 @@ fn live_agent_badge_is_elapsed_clock_not_running() {
         extract_const_block(&source, "PHASE_COLORS"),
         extract_function(&source, "phaseColor"),
         extract_function(&source, "formatRunTimer"),
+        extract_function(&source, "taskMarkedDone"),
+        extract_function(&source, "displayedPhase"),
         extract_function(&source, "agentPhaseBadgeText"),
         extract_function(&source, "agentPhaseBadgeColor"),
     ];
@@ -1805,7 +1807,8 @@ print(JSON.stringify({initial, resize, changed, shrunk,
 #[test]
 fn model_status_compact_workflow_count_precedes_timer() {
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
-    let snippets = [extract_function(&source, "formatRunTimer"), extract_function(&source, "agentPhaseBadgeText")];
+    let snippets = [extract_function(&source, "formatRunTimer"), extract_function(&source, "taskMarkedDone"),
+        extract_function(&source, "displayedPhase"), extract_function(&source, "agentPhaseBadgeText")];
     let js = run_gjs(&snippets, r#"
 const now = Date.parse('2026-10-07T12:02:05Z');
 const agent = {phase: 'RUNNING', run_active: true, run_started_at: '2026-10-07T12:00:00Z',
@@ -1822,12 +1825,16 @@ const queued = agentPhaseBadgeText({...agent, phase: 'WAITING', queued_reset_at:
 const waiting = agentPhaseBadgeText({...agent, phase: 'WAITING', run_active: false}, now);
 const done = agentPhaseBadgeText({...agent, phase: 'DONE', ready_completed_at: 'finished'}, now);
 const unread = agentPhaseBadgeText({...agent, phase: 'DONE', unread_completion: true}, now);
-print(JSON.stringify({text, tick, bad, zero, full, queued, waiting, done, unread}));
+const finishedRate = agentPhaseBadgeText({phase: 'RATE', workflow: {phase_completed: 6, phase_total: 6},
+    queued_reset_at: '2026-10-07T18:00:00Z'}, now);
+const waitingRate = agentPhaseBadgeText({phase: 'RATE', workflow: {phase_completed: 1, phase_total: 6}}, now);
+print(JSON.stringify({text, tick, bad, zero, full, queued, waiting, done, unread, finishedRate, waitingRate}));
 "#);
     assert_eq!(js, serde_json::json!({"text": "[1/4] 2:05", "tick": "[1/4] 2:06",
         "bad": ["2:05", "2:05", "2:05", "2:05", "2:05", "2:05", "2:05"],
         "zero": "[0/4] 2:05", "full": "[4/4] 2:05", "queued": "[1/4] -1:00",
-        "waiting": "[1/4] WAITING", "done": "DONE", "unread": "DONE"}));
+        "waiting": "[1/4] WAITING", "done": "DONE", "unread": "DONE",
+        "finishedRate": "DONE", "waitingRate": "[1/6] RATE"}));
 }
 
 #[test]
