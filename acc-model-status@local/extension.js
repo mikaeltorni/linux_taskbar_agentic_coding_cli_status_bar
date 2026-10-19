@@ -1,6 +1,6 @@
 /* extension.js — acc-model-status@local
  *
- * Optional GNOME Shell taskbar indicator for Agent Command Center. It renders
+ * GNOME Shell taskbar indicator for Agent Command Center and independent Harbor runs. It renders
  * one running-agent amount to the left of each provider icon (Claude, Codex,
  * Grok, Qwen, …), with a compact tok/s chip on the right when that harness is
  * producing tokens.
@@ -20,7 +20,7 @@
  *   readPayload()         parses/validates the document, tolerating partial writes
  */
 
-import {attachHarborStatus} from './harbor.js';
+import {attachHarborStatus, harborCountText, formatHarborEstimate} from './harbor.js';
 import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -1066,19 +1066,21 @@ function panelLaunchWaitSeconds(agent, now) {
 }
 
 /**
- * Format the published forecast only for an actively running agent.
+ * Format a common cell forecast, including retained Harbor terminal status.
  * A future launch countdown replaces this lower label, so time left stays off the bottom.
- * Parameters: agent - scoped open-window agent with an optional ACC estimate.
- * Returns: compact duration through its minute/hour unit, with no trailing text, or empty text.
+ * Parameters: agent - common panel task with an ACC estimate or independent Harbor forecast.
+ * Returns: compact agent duration or Harbor forecast/status text, or empty text.
  */
-function panelAgentEstimateText(agent) {
+const panelAgentEstimateText = (agent) => {
+    if (agent.harbor)
+        return formatHarborEstimate(agent.harbor);
     const label = panelLaunchWaitSeconds(agent, Date.now()) === null &&
         panelProgressUnderway(agent) && agent.task_time_estimate?.status === 'estimated'
         ? taskEstimateText(agent) : '';
     const duration = label.match(/^[~<>≤≥]?\s*(?:\d+h(?:\s*\d+m)?|\d+m)/)?.[0] || '';
     const text = duration.replace(/\s+/g, '');
     return text;
-}
+};
 
 /**
  * Format a known nonnegative runtime in hours and whole minutes.
@@ -1110,13 +1112,15 @@ function panelRuntimeObservation(agent, previous) {
 }
 
 /**
- * Read the live runtime or frozen duration while a finished task remains unread.
+ * Read the upper cell label: measured Harbor count or live/frozen agent runtime.
  * A future queued reset uses the same upper HH:MM slot, prefixed so it counts down to launch.
- * Parameters: agent - scoped agent with run timestamps and optional measured duration;
+ * Parameters: agent - common panel task with timestamps, measured duration or Harbor counts;
  * now - reference epoch milliseconds, defaulting to the current clock.
- * Returns: HH:MM runtime while running or unread, a negative launch countdown, or empty text.
+ * Returns: Harbor completed/total, agent runtime, negative launch countdown, or empty text.
  */
-function panelAgentRuntimeText(agent, now = Date.now()) {
+const panelAgentRuntimeText = (agent, now = Date.now()) => {
+    if (agent.harbor)
+        return harborCountText(agent.harbor);
     const remaining = panelLaunchWaitSeconds(agent, now);
     if (remaining !== null) {
         const countdown = `-${formatPanelRunDuration(remaining < 60 ? 60 : remaining)}`;
@@ -1138,15 +1142,17 @@ function panelAgentRuntimeText(agent, now = Date.now()) {
     }
     const text = formatPanelRunDuration(seconds);
     return text;
-}
+};
 
 /**
- * Color the runtime with the same completion wave as its taskbar bar.
+ * Color the upper label, retaining pink Harbor counts and the normal agent completion wave.
  * Parameters: agent - scoped task state; now - animation epoch milliseconds;
  * stale - whether the published task state is too old to animate.
- * Returns: completion RGB, goal purple, queued-reset green, interruption red, or running yellow CSS color.
+ * Returns: pink Harbor count, completion RGB, goal purple, queued-reset green, interruption red, or running yellow.
  */
-function panelAgentRuntimeColor(agent, now = Date.now(), stale = false) {
+const panelAgentRuntimeColor = (agent, now = Date.now(), stale = false) => {
+    if (agent.harbor)
+        return '#f472b6';
     let color = panelProgressGoalActive(agent) ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING;
     if (panelLaunchWaitSeconds(agent, now) !== null) {
         const phase = String(agent?.phase || '').trim().toUpperCase();
@@ -1156,7 +1162,7 @@ function panelAgentRuntimeColor(agent, now = Date.now(), stale = false) {
         color = `rgb(${rgb.join(', ')})`;
     }
     return color;
-}
+};
 
 /**
  * Stack runtime, a retained progress bar and a forecast in the allocated panel height.
@@ -1741,126 +1747,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         this._updatePanelProgress(payload, stale);
         this._renderMenu(payload, stale, attention);
         this._syncRunClockTimer();
-    }
-
-    /**
-     * Refresh progress bars, runtime clocks and running forecasts while retaining stable actors.
-     * Parameters: this - status button; payload - scoped snapshot or null;
-     * stale - whether the snapshot is older than the publication threshold.
-     * Returns: undefined.
-     */
-    _updatePanelProgress(payload, stale) {
-        if (!this._panelProgress) {
-            this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
-            this._panelProgressBars = new Map();
-            this._panelProgressKey = '';
-        }
-        if (this._panelProgress.get_parent() !== this._box)
-            this._box.add_child(this._panelProgress);
-        else if (this._box.get_children().at(-1) !== this._panelProgress) {
-            // Move inert summaries around the pointer target, never restack it.
-            for (const child of this._box.get_children()) {
-                if (child !== this._panelProgress)
-                    this._box.set_child_below_sibling(child, this._panelProgress);
-            }
-        }
-        if (!this._panelRuntimeStates)
-            this._panelRuntimeStates = new Map();
-        const entries = (payload?.providers || []).flatMap(provider =>
-            (provider.agents || []).map((agent, index) => ({provider, agent,
-                key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)})));
-        const groups = groupWorkspaceEntries(entries);
-        const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry => [entry.key, monitorSortValue(entry.agent.monitor)])]));
-        if (key !== this._panelProgressKey) {
-            this._hideTaskHover();
-            this._panelProgress.destroy_all_children();
-            this._panelProgressBars.clear();
-            for (const [index, group] of groups.entries()) {
-                if (index > 0)
-                    this._panelProgress.add_child(buildPanelWorkspaceSeparator());
-                const groupActor = new St.BoxLayout({
-                    style_class: 'ams-panel-workspace-group',
-                    reactive: false,
-                });
-                groupActor._amsWorkspace = group.workspace;
-                const box = new St.BoxLayout({style_class: 'ams-panel-workspace',
-                    y_expand: true, y_align: Clutter.ActorAlign.FILL});
-                let previousMonitor = null;
-                for (const entry of group.entries) {
-                    const monitor = monitorSortValue(entry.agent.monitor);
-                    if (previousMonitor !== null && monitor !== previousMonitor)
-                        box.add_child(buildPanelMonitorSeparator());
-                    previousMonitor = monitor;
-                    const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId),
-                        (target, agent, provider, count) => this._showTaskConfirmation(target, agent, provider, count));
-                    const bar = cell.get_children()[0];
-                    cell.connect('notify::hover', () => this._syncTaskHover(
-                        cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
-                    cell.connect('destroy', () => {
-                        if (this._taskHoverCell === cell)
-                            this._hideTaskHover();
-                        if (this._taskConfirmation?.cell === cell)
-                            this._hideTaskConfirmation();
-                    });
-                    this._panelProgressBars.set(entry.key, bar);
-                    box.add_child(cell);
-                }
-                const label = new St.Label({
-                    style_class: 'ams-panel-workspace-label',
-                    style: `color: ${panelWorkspaceColor(group.workspace)};`,
-                    text: group.workspace > 0 ? `W${group.workspace}` : 'W?',
-                    x_align: Clutter.ActorAlign.START,
-                    y_align: Clutter.ActorAlign.CENTER,
-                    reactive: false,
-                });
-                groupActor.add_child(label);
-                groupActor.add_child(box);
-                this._panelProgress.add_child(groupActor);
-            }
-            this._panelProgressKey = key;
-        }
-        for (const entry of entries) {
-            const bar = this._panelProgressBars.get(entry.key);
-            bar._amsAgent = entry.agent;
-            bar._amsProvider = entry.provider;
-            bar._amsInstanceCount = payload.codexInstanceCount;
-            const cell = bar.get_parent();
-            cell.reactive = Boolean(String(entry.agent.note_id || '').trim());
-            cell.can_focus = cell.reactive;
-            cell.track_hover = cell.reactive;
-            const estimate = bar._amsEstimateLabel;
-            estimate.text = panelAgentEstimateText(entry.agent);
-            estimate.visible = Boolean(estimate.text);
-            estimate.opacity = stale ? 128 : 255;
-            const now = Date.now();
-            const publishedAt = Date.parse(payload?.updatedAt || '');
-            const runtimeAt = stale ? (Number.isFinite(publishedAt) ? publishedAt : bar._amsRuntimeAt ?? now) : now;
-            bar._amsRuntimeAt = runtimeAt;
-            const runtimeAgent = panelRuntimeObservation(entry.agent, this._panelRuntimeStates.get(entry.key));
-            this._panelRuntimeStates.set(entry.key, runtimeAgent);
-            bar._amsRuntimeAgent = runtimeAgent;
-            bar._amsResetCountdown = panelLaunchWaitSeconds(runtimeAgent, runtimeAt) !== null;
-            const runtime = bar._amsRuntimeLabel;
-            runtime.text = panelAgentRuntimeText(runtimeAgent, runtimeAt);
-            runtime.style = `color: ${panelAgentRuntimeColor(entry.agent, now, stale)};`;
-            runtime.visible = Boolean(runtime.text);
-            runtime.opacity = stale ? 128 : 255;
-            bar._amsUnderway = panelProgressUnderway(entry.agent);
-            bar._amsReady = entry.agent.unread_completion === true;
-            bar._amsStale = stale;
-            bar._amsPulseAt = now;
-            bar.opacity = panelProgressHostOpacity(entry.agent, bar._amsPulseAt, stale, bar._amsReady);
-            bar.queue_repaint();
-            if (cell.hover)
-                this._syncTaskHover(cell, entry.agent, entry.provider, payload.codexInstanceCount);
-        }
-        const liveKeys = new Set(entries.map(entry => entry.key));
-        for (const key of this._panelRuntimeStates.keys()) {
-            if (!liveKeys.has(key))
-                this._panelRuntimeStates.delete(key);
-        }
-        this._panelProgress.visible = entries.length > 0;
-        this._syncPanelPulseTimer();
     }
 
     /** Show the colored task row in a box anchored above its panel cell.
@@ -2524,6 +2410,129 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 });
 
+// Install the callback before GObject invokes _init; class fields initialize too late.
+/**
+ * Refresh progress bars, runtime clocks and running forecasts while retaining stable actors.
+ * Parameters: this - status button with independent Harbor entries; payload - scoped agent snapshot or null;
+ * stale - whether ACC metadata is old; fresh Harbor entries retain their own liveness.
+ * Returns: undefined after refreshing all tasks in their shared workspace groups.
+ */
+AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) {
+    if (!this._panelProgress) {
+        this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
+        this._panelProgressBars = new Map();
+        this._panelProgressKey = '';
+    }
+    if (this._panelProgress.get_parent() !== this._box)
+        this._box.add_child(this._panelProgress);
+    else if (this._box.get_children().at(-1) !== this._panelProgress) {
+        // Move inert summaries around the pointer target, never restack it.
+        for (const child of this._box.get_children()) {
+            if (child !== this._panelProgress)
+                this._box.set_child_below_sibling(child, this._panelProgress);
+        }
+    }
+    if (!this._panelRuntimeStates)
+        this._panelRuntimeStates = new Map();
+    const entries = (payload?.providers || []).flatMap(provider =>
+        (provider.agents || []).map((agent, index) => ({provider, agent,
+            key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)}))).concat(this._harborEntries || []);
+    const groups = groupWorkspaceEntries(entries);
+    const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry => [entry.key, monitorSortValue(entry.agent.monitor)])]));
+    if (key !== this._panelProgressKey) {
+        this._hideTaskHover();
+        this._panelProgress.destroy_all_children();
+        this._panelProgressBars.clear();
+        for (const [index, group] of groups.entries()) {
+            if (index > 0)
+                this._panelProgress.add_child(buildPanelWorkspaceSeparator());
+            const groupActor = new St.BoxLayout({
+                style_class: 'ams-panel-workspace-group',
+                reactive: false,
+            });
+            groupActor._amsWorkspace = group.workspace;
+            const box = new St.BoxLayout({style_class: 'ams-panel-workspace',
+                y_expand: true, y_align: Clutter.ActorAlign.FILL});
+            let previousMonitor = null;
+            for (const entry of group.entries) {
+                const monitor = monitorSortValue(entry.agent.monitor);
+                if (previousMonitor !== null && monitor !== previousMonitor)
+                    box.add_child(buildPanelMonitorSeparator());
+                previousMonitor = monitor;
+                const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId),
+                    (target, agent, provider, count) => this._showTaskConfirmation(target, agent, provider, count));
+                const bar = cell.get_children()[0];
+                cell.connect('notify::hover', () => this._syncTaskHover(
+                    cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
+                cell.connect('destroy', () => {
+                    if (this._taskHoverCell === cell)
+                        this._hideTaskHover();
+                    if (this._taskConfirmation?.cell === cell)
+                        this._hideTaskConfirmation();
+                });
+                this._panelProgressBars.set(entry.key, bar);
+                box.add_child(cell);
+            }
+            const label = new St.Label({
+                style_class: 'ams-panel-workspace-label',
+                style: `color: ${panelWorkspaceColor(group.workspace)};`,
+                text: group.workspace > 0 ? `W${group.workspace}` : 'W?',
+                x_align: Clutter.ActorAlign.START,
+                y_align: Clutter.ActorAlign.CENTER,
+                reactive: false,
+            });
+            groupActor.add_child(label);
+            groupActor.add_child(box);
+            this._panelProgress.add_child(groupActor);
+        }
+        this._panelProgressKey = key;
+    }
+    for (const entry of entries) {
+        const entryStale = entry.agent.harbor ? false : stale;
+        const bar = this._panelProgressBars.get(entry.key);
+        bar._amsAgent = entry.agent;
+        bar._amsProvider = entry.provider;
+        bar._amsInstanceCount = payload?.codexInstanceCount;
+        const cell = bar.get_parent();
+        cell.reactive = Boolean(String(entry.agent.note_id || '').trim());
+        cell.can_focus = cell.reactive;
+        cell.track_hover = cell.reactive;
+        const estimate = bar._amsEstimateLabel;
+        estimate.text = panelAgentEstimateText(entry.agent);
+        estimate.visible = Boolean(estimate.text);
+        estimate.opacity = entryStale ? 128 : 255;
+        const now = Date.now();
+        const publishedAt = Date.parse(payload?.updatedAt || '');
+        const runtimeAt = entryStale ? (Number.isFinite(publishedAt) ? publishedAt : bar._amsRuntimeAt ?? now) : now;
+        bar._amsRuntimeAt = runtimeAt;
+        const runtimeAgent = panelRuntimeObservation(entry.agent, this._panelRuntimeStates.get(entry.key));
+        this._panelRuntimeStates.set(entry.key, runtimeAgent);
+        bar._amsRuntimeAgent = runtimeAgent;
+        bar._amsResetCountdown = panelLaunchWaitSeconds(runtimeAgent, runtimeAt) !== null;
+        const runtime = bar._amsRuntimeLabel;
+        runtime.text = panelAgentRuntimeText(runtimeAgent, runtimeAt);
+        runtime.style = `color: ${panelAgentRuntimeColor(entry.agent, now, entryStale)};`;
+        runtime.visible = Boolean(runtime.text);
+        runtime.opacity = entryStale ? 128 : 255;
+        bar._amsUnderway = panelProgressUnderway(entry.agent);
+        bar._amsReady = entry.agent.unread_completion === true;
+        bar._amsStale = entryStale;
+        bar._amsPulseAt = now;
+        bar.opacity = panelProgressHostOpacity(entry.agent, bar._amsPulseAt, entryStale, bar._amsReady);
+        bar.queue_repaint();
+        if (cell.hover)
+            this._syncTaskHover(cell, entry.agent, entry.provider, payload?.codexInstanceCount);
+    }
+    const liveKeys = new Set(entries.map(entry => entry.key));
+    for (const key of this._panelRuntimeStates.keys()) {
+        if (!liveKeys.has(key))
+            this._panelRuntimeStates.delete(key);
+    }
+    this._panelProgress.visible = entries.length > 0;
+    this._syncPanelPulseTimer();
+};
+
+
 export default class AccModelStatusExtension extends Extension {
     /** Add agent and independent Harbor indicators to the panel.
      * Parameters: this - owning extension.
@@ -2531,9 +2540,9 @@ export default class AccModelStatusExtension extends Extension {
      */
     enable() {
         print(`this=${this}`);
-        this._harborStop = attachHarborStatus(Main.panel);
         this._button = new AccModelStatusButton(this);
         Main.panel.addToStatusArea('acc-model-status', this._button, 0, 'right');
+        this._harborStop = attachHarborStatus(this._button);
         try {
             this._switchGroupSettings = new Gio.Settings({schema_id: SWITCH_GROUP_SCHEMA});
             this._shortcutBackupFile = Gio.File.new_for_path(GLib.build_filenamev([
