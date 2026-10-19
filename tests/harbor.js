@@ -1,74 +1,70 @@
-// Exercise the actual Harbor taskbar renderer without a desktop session.
+// Exercise Harbor's shared-panel adaptation and speech placement without a desktop.
 const Gio = imports.gi.Gio;
 const [, bytes] = Gio.File.new_for_path(`${ARGV[0]}/acc-model-status@local/harbor.js`).load_contents(null);
 const source = new TextDecoder().decode(bytes).replace(/^import .*;$/gm, '').replaceAll('export function', 'function').replaceAll('export const', 'const');
-const Clutter = {ActorAlign: {CENTER: 1, START: 2, END: 3, FILL: 4}, BinLayout: class {}, FixedLayout: class {}};
-class Actor {
-    /** Preserve actor properties and children for actual renderer execution.
-     * Parameters: this - mock actor; options - construction properties.
-     * Returns: undefined.
-     */
-    constructor(options = {}) {
-        print(`this=${this} options=${JSON.stringify(options)}`);
-        Object.assign(this, options);
-        this.children = [];
-        print(undefined);
-    }
-    add_child = row => { row.parent = this; this.children.push(row); };
-    destroy_all_children = () => { this.children = []; };
-    destroy = () => { this.parent.children = this.parent.children.filter(child => child !== this); };
-    connect = (signal, callback) => { this[signal] = callback; };
-    queue_repaint = () => { this.repaints = (this.repaints || 0) + 1; };
-}
-const St = {Label: Actor, BoxLayout: Actor, Widget: Actor, DrawingArea: Actor};
 const traces = [];
-const api = new Function('St', 'Clutter', 'print', 'Gio', `${source}; return {renderHarborJobs, formatHarborEstimate, paintHarborBar, workspaceForHarbor, publishHarborPlacements};`)(St, Clutter, (...values) => traces.push(values), Gio);
-const box = new Actor();
+const api = new Function('Gio', 'print', `${source}; return {harborPanelEntries, harborCountText, formatHarborEstimate, workspaceForHarbor, publishHarborPlacements};`)(Gio, (...values) => traces.push(values));
 const job = {id: 'demo', name: 'demo', status: 'running', completed: 1, total: 4, fraction: 0.25, owner_pids: [42]};
-api.renderHarborJobs(box, [job], [{pid: 42, workspace: 5}]);
-const group = box.children[0];
-if (!group.y_expand || group.y_align !== Clutter.ActorAlign.FILL)
-    throw Error('Harbor workspace group must allocate full panel height for three distinct rows');
-const cell = group.children[1];
-if (!(cell.layout_manager instanceof Clutter.FixedLayout)) throw Error('Harbor rows need explicit non-overlapping allocations');
-const [count, bar, eta] = cell.children;
-if (count.y !== 0 || bar.y !== 13 || eta.y !== 20) throw Error('Harbor count, bar and ETA need distinct vertical positions');
-if (!count.y_expand || !eta.y_expand)
-    throw Error('Bin-layout labels must expand vertically for START/END to take effect');
-if (!box.visible || count.text !== '1/4' || !count.style.includes('#f472b6') || count.y_align !== Clutter.ActorAlign.START)
-    throw Error('Pink instance count must replace the upper timer');
-if (eta.text !== '~?' || eta.y_align !== Clutter.ActorAlign.END || bar.text)
-    throw Error('ETA must remain below the bar; no text inside the fill');
-if (group.children[0].text !== 'H W5')
-    throw Error('Workspace must come from the actual owner window');
-const rectangles = [];
-const area = {get_surface_size: () => [52, 8], get_context: () => ({
-    setSourceRGBA: () => {}, rectangle: (...args) => rectangles.push(args), fill: () => {}, $dispose: () => {},
-})};
-api.paintHarborBar(area, job);
-if (rectangles[1][2] !== 13)
-    throw Error('One of four trials must fill one quarter of the bar');
-api.renderHarborJobs(box, [{...job, completed: 3, fraction: 0.75, estimate: {remaining_seconds: 301}}], [{pid: 42, workspace: 5}]);
-if (box.children[0] !== group || count.text !== '3/4' || eta.text !== '~6m')
-    throw Error('Retain actors while updating progress and ETA');
-rectangles.length = 0;
-api.paintHarborBar(area, {...job, completed: 3, fraction: 0.75});
-if (rectangles[1][2] !== 39)
-    throw Error('Progress fill must update with completed instances');
+const windows = [{pid: 42, workspace: 5, monitor: 1, focused: true}];
+const rows = api.harborPanelEntries([job], windows);
+if (rows.length !== 1 || rows[0].agent.workspace !== 5 || rows[0].agent.monitor !== 1 || !rows[0].agent.focused)
+    throw Error('Harbor must join its actual terminal workspace/monitor');
+if (rows[0].agent.workflow.fraction !== 0.25 || rows[0].agent.note_id)
+    throw Error('Shared panel entries must preserve counts without pretending to be interactive agent notes');
+if (api.harborCountText(job) !== '1/4' || api.harborCountText({...job, completed: 5}) !== '?/?')
+    throw Error('Upper count must retain measured instance completion and reject inconsistent values');
+const finished = api.harborPanelEntries([{...job, completed: 4, status: 'complete', finished_at: '2026-10-20T00:00:00Z'}], windows)[0].agent;
+if (finished.phase !== 'DONE' || finished.run_active || finished.unread_completion)
+    throw Error('Completed Harbor jobs must finish without inventing unread agent turns');
+if (api.harborPanelEntries([{...job, status: 'interrupted'}], windows)[0].agent.phase !== 'INTERRUPTED')
+    throw Error('Interrupted Harbor state must use the shared interrupted styling');
 if (api.workspaceForHarbor(job, [{pid: 42, workspace: 3}, {pid: 42, workspace: 5}]) !== 0)
     throw Error('Ambiguous terminals must not borrow the focused workspace');
-api.renderHarborJobs(box, []);
-if (box.visible || box.children.length)
-    throw Error('No jobs must leave no empty indicator');
-if (api.formatHarborEstimate({status: 'running', estimate: {remaining_seconds: 0}}) !== '~overdue' ||
+if (api.harborPanelEntries([], windows).length !== 0)
+    throw Error('No Harbor jobs must leave no panel entries');
+if (api.formatHarborEstimate({status: 'running', estimate: {remaining_seconds: 301}}) !== '~6m' ||
+    api.formatHarborEstimate({status: 'running', estimate: {remaining_seconds: 0}}) !== '~overdue' ||
     api.formatHarborEstimate({status: 'running'}) !== '~?')
-    throw Error('Forecasts must preserve overdue and unknown states');
-print('Harbor rendering checks passed');
-
-if (traces.length !== 0) throw Error('Routine Harbor rendering must stay silent in the Shell journal');
-
+    throw Error('Forecasts must preserve approximate, overdue and unknown states');
 let placement;
 api.publishHarborPlacements({replace_contents: bytes => { placement = JSON.parse(new TextDecoder().decode(bytes)); }},
     [job], [{pid: 42, workspace: 7}]);
 if (placement.jobs.demo !== 7 || !Number.isFinite(Date.parse(placement.updated_at)))
-    throw Error('Speech handoff must publish actual one-based workspace with a fresh timestamp');
+    throw Error('Speech handoff must retain the actual one-based workspace and fresh timestamp');
+if (traces.length !== 0) throw Error('Routine Harbor adaptation must stay silent in the Shell journal');
+print('Harbor shared-panel and speech placement checks passed');
+
+// The public attach path feeds the existing owner and releases its polling timer.
+let nativeWorkspace = 4;
+let nativeJobs = [job];
+let refreshes = 0;
+let timerCallback;
+let timerRemoved = false;
+let publishedPlacement;
+const window = {get_pid: () => 42, get_monitor: () => 1, is_on_all_workspaces: () => false,
+    get_workspace: () => ({index: () => nativeWorkspace})};
+const files = {new_for_path: path => ({
+    get_parent: () => ({make_directory_with_parents: () => {}}),
+    load_contents: () => [true, new TextEncoder().encode(JSON.stringify({updated_at: new Date().toISOString(), jobs: nativeJobs}))],
+    replace_contents: bytes => { publishedPlacement = JSON.parse(new TextDecoder().decode(bytes)); },
+})};
+const attach = new Function('Gio', 'GLib', 'global', 'print', `${source}; return attachHarborStatus;`)(
+    {File: files, FileCreateFlags: Gio.FileCreateFlags},
+    {get_user_state_dir: () => '/sandbox', build_filenamev: parts => parts.join('/'), PRIORITY_DEFAULT: 0,
+     SOURCE_CONTINUE: true, timeout_add_seconds: (_priority, seconds, callback) => { timerCallback = callback; return 7; },
+     source_remove: id => { timerRemoved = id === 7; }},
+    {get_window_actors: () => [{meta_window: window}], display: {focus_window: window}}, () => {});
+const owner = {_queueRefresh: () => { refreshes++; }};
+const cleanup = attach(owner);
+if (owner._harborEntries[0].agent.workspace !== 5 || !refreshes || publishedPlacement.jobs.demo !== 5)
+    throw Error('Attach must feed the common owner and preserve speech placement without creating another panel button');
+nativeWorkspace = 1;
+timerCallback();
+if (owner._harborEntries[0].agent.workspace !== 2 || publishedPlacement.jobs.demo !== 2)
+    throw Error('The attached observer must update actual workspace membership after terminal movement');
+nativeJobs = [];
+timerCallback();
+if (owner._harborEntries.length !== 0) throw Error('Finished Harbor membership must clear from the common owner');
+cleanup();
+if (!timerRemoved || owner._harborEntries.length !== 0) throw Error('Detach must release the timer and its entries');
+print('Harbor common-owner lifecycle checks passed');

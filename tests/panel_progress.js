@@ -6,19 +6,24 @@ const source = new TextDecoder().decode(bytes);
 
 /** Extract a JavaScript owner for isolated execution.
  * Parameters: name - function or method name; method - whether it is a class method.
- * Returns: the complete declaration text.
+ * Returns: the declaration, adapting prototype callbacks for the isolated fixture object.
  */
 function declaration(name, method = false) {
     print(`name=${name} method=${method}`);
     const marker = method ? `\n    ${name}(` : `\nfunction ${name}(`;
-    const start = source.indexOf(marker);
+    const callbackMarker = method ? `\nAccModelStatusButton.prototype.${name} = function (` : `\nconst ${name} = (`;
+    const callback = source.indexOf(marker) < 0;
+    const start = source.indexOf(callback ? callbackMarker : marker);
     if (start < 0)
         throw Error(`Missing public rendering owner ${name}`);
     let depth = 0;
     for (let i = source.indexOf('{', start); i < source.length; i++) {
         if (source[i] === '{') depth++;
         if (source[i] === '}' && --depth === 0) {
-            const result = source.slice(start + 1, i + 1);
+            let result = source.slice(start + 1, i + 1);
+            // The fixture object calls extracted class callbacks as dynamic methods.
+            if (method && callback)
+                result = result.replace(`AccModelStatusButton.prototype.${name} = function (`, `${name}(`);
             print(result);
             return result;
         }
@@ -109,12 +114,16 @@ const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'pa
     ...(source.includes('function taskMarkedDone(') ? ['taskMarkedDone'] : []),
     ...(source.includes('function displayedPhase(') ? ['displayedPhase'] : []),
     ...(source.includes('function panelLaunchWaitSeconds(') ? ['panelLaunchWaitSeconds'] : []),
-    ...(source.includes('function panelAgentRuntimeText(') ? ['formatPanelRunDuration', 'panelAgentRuntimeText'] : []),
-    ...(source.includes('function panelAgentRuntimeColor(') ? ['panelAgentRuntimeColor'] : []),
+    ...((source.includes('function panelAgentRuntimeText(') || source.includes('const panelAgentRuntimeText = (')) ? ['formatPanelRunDuration', 'panelAgentRuntimeText'] : []),
+    ...((source.includes('function panelAgentRuntimeColor(') || source.includes('const panelAgentRuntimeColor = (')) ? ['panelAgentRuntimeColor'] : []),
     ...(source.includes('function panelRuntimeObservation(') ? ['panelRuntimeObservation'] : []),
     ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
     ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
+const [, harborBytes] = Gio.File.new_for_path(`${root}/acc-model-status@local/harbor.js`).load_contents(null);
+const harborSource = new TextDecoder().decode(harborBytes).replace(/^import .*;$/gm, '')
+    .replaceAll('export function', 'function').replaceAll('export const', 'const');
+const Harbor = new Function(`${harborSource}; return {harborPanelEntries, harborCountText, formatHarborEstimate};`)();
 const timers = new Map();
 let nextTimer = 1;
 const GLib = {PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true,
@@ -127,8 +136,9 @@ const services = {readPayload: () => snapshot, scopePayloadToWindows: value => v
     ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
     saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [{workspace: 5, count: 1, current: false, label: 'W5:1'}], panelHarnessRateRows: () => [],
 };
-const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
+const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', 'Harbor', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
 ${snippets.join('\n')}
+    const {harborCountText, formatHarborEstimate} = Harbor;
     const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
         ageSeconds, STALE_SECONDS,
         unreadCompletionCount, saveUnreadStates, log, workspaceAttentionCounts, panelHarnessRateRows} = services;
@@ -138,7 +148,7 @@ ${snippets.join('\n')}
         updater: {${['_hideTaskHover', '_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _updatePanelTaskEstimate(') ? ['_updatePanelTaskEstimate'] : []),
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
-const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo);
+const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
     child.style_class === 'ams-panel-workspace-group' ? child.children[1].children.filter(cell => cell.style_class === 'ams-panel-task-cell').map(cell => cell.children[0]) : []);
@@ -1356,3 +1366,57 @@ check([...button._panelProgressBars.values()].every(bar => !bar._amsRuntimeLabel
 button._updatePanelProgress(null, false);
 Date.now = savedDateNow;
 print('PASS: acknowledgement hides only its own timer; unread sessions, new tasks and restored state retain correct timing.');
+
+// Harbor uses the actual existing workspace grouping and cell/fill owners.
+button._updatePanelProgress(null, false);
+const harborJob = {id: 'shared-run', name: 'shared-run', status: 'running', completed: 0,
+    total: 20, owner_pids: [42], estimate: {remaining_seconds: 120}};
+const harborWindows = [{pid: 42, workspace: 2, monitor: 0, focused: false}];
+button._harborEntries = Harbor.harborPanelEntries([harborJob], harborWindows);
+const sharedAgents = [{session_id: 'same-space', workspace: 2, monitor: 0, phase: 'RUNNING',
+    run_active: true, workflow: {available: true, fraction: 0}},
+    {session_id: 'other-space', workspace: 5, monitor: 0, phase: 'RUNNING', run_active: true,
+    workflow: {available: true, fraction: 0.5}}];
+const sharedPayload = {providers: [{kind: 'codex', label: 'Codex', agents: sharedAgents}]};
+button._updatePanelProgress(sharedPayload, false);
+let sharedGroups = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group');
+check(sharedGroups.length === 2, 'Harbor joins existing workspace groups without an extra H W2 group');
+const w2 = sharedGroups.find(group => group._amsWorkspace === 2);
+check(w2.children[0].text === 'W2' && visibleBars({children: [w2]}).length === 2,
+    'workspace 2 has one heading with both the agent and Harbor bar');
+const sharedBars = visibleBars(button._panelProgress);
+const harborBar = sharedBars.find(bar => bar._amsAgent.harbor);
+const normalBar = sharedBars.find(bar => bar._amsAgent.session_id === 'same-space');
+check(harborBar && normalBar, 'the common panel renderer creates both bar types');
+check(harborBar.get_parent().width === normalBar.get_parent().width && harborBar.width === normalBar.width && harborBar.height === normalBar.height,
+    'Harbor cell and fill geometry exactly match existing agent bars');
+check(harborBar._amsRuntimeLabel.style_class === normalBar._amsRuntimeLabel.style_class &&
+    harborBar._amsEstimateLabel.style_class === normalBar._amsEstimateLabel.style_class,
+    'Harbor upper count and lower ETA use the existing typography');
+check(harborBar._amsRuntimeLabel.text === '0/20' && harborBar._amsRuntimeLabel.style.includes('#f472b6'),
+    'only the Harbor upper count uses the requested pink');
+check(harborBar._amsEstimateLabel.text === '~2m', 'the normal lower ETA remains visible');
+harborBar.queue_repaint(); normalBar.queue_repaint();
+check(JSON.stringify(harborBar.draws) === JSON.stringify(normalBar.draws),
+    'zero progress paints exactly like the normal agent bar, not pink');
+button._harborEntries = Harbor.harborPanelEntries([{...harborJob, completed: 10}], harborWindows);
+button._updatePanelProgress(sharedPayload, true);
+check(button._panelProgressBars.get('harbor:shared-run') === harborBar && harborBar._amsRuntimeLabel.text === '10/20',
+    'count updates retain the same shared bar actor');
+check(!harborBar._amsStale && normalBar._amsStale, 'fresh independent Harbor progress survives stale ACC metadata');
+button._applyPanelProgressPulse(Date.now() + 1000);
+check(harborBar._amsRuntimeLabel.text === '10/20' && harborBar._amsRuntimeLabel.style.includes('#f472b6'),
+    'shared clock animation must not overwrite Harbor counts or their color');
+button._harborEntries = Harbor.harborPanelEntries([harborJob], [{...harborWindows[0], workspace: 5}]);
+button._updatePanelProgress(sharedPayload, false);
+sharedGroups = button._panelProgress.children.filter(child => child.style_class === 'ams-panel-workspace-group');
+check(visibleBars({children: [sharedGroups.find(group => group._amsWorkspace === 5)]}).length === 2 &&
+    visibleBars({children: [sharedGroups.find(group => group._amsWorkspace === 2)]}).length === 1,
+    'moving the Harbor terminal moves only its bar to the actual workspace group');
+button._updatePanelProgress(null, false);
+check(visibleBars(button._panelProgress).length === 1 && visibleBars(button._panelProgress)[0]._amsRuntimeLabel.text === '0/20',
+    'independent Harbor bars remain visible with no ACC payload');
+button._harborEntries = [];
+button._updatePanelProgress(null, false);
+check(visibleBars(button._panelProgress).length === 0, 'ended Harbor membership leaves no separate panel strip');
+print('PASS: Harbor shares workspace headings, normal cell/fill typography and geometry; only its count is pink.');

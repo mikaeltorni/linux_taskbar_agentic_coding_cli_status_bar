@@ -1,9 +1,6 @@
 /* Independent Harbor status, published by harbor-taskbar.service. */
-import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import St from 'gi://St';
-import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 /** Read the independent watcher's atomically published snapshot.
  * Parameters: none.
@@ -22,56 +19,32 @@ export const readHarborJobs = () => {
     return result;
 };
 
-/** Refresh compact pink Harbor cells, retaining their actors across polling cycles.
- * Parameters: box - Harbor container; jobs - normalized jobs; windows - terminal window descriptors.
- * Returns: undefined.
+/** Adapt independent Harbor runs to the common workspace panel renderer.
+ * Parameters: jobs - normalized Harbor jobs; windows - actual terminal window descriptors.
+ * Returns: panel-only task/provider pairs with measured progress and original Harbor counts.
  */
-export const renderHarborJobs = (box, jobs, windows = []) => {
-    box._harborCells ??= new Map();
-    const alive = new Set();
-    for (const job of jobs) {
-        alive.add(job.id);
-        let widgets = box._harborCells.get(job.id);
-        if (!widgets) {
-            const group = new St.BoxLayout({style: 'spacing: 3px; margin-left: 4px;',
-                y_expand: true, y_align: Clutter.ActorAlign.FILL});
-            const workspace = new St.Label({style: 'color: #f472b6; font-size: 10px;', y_align: Clutter.ActorAlign.CENTER});
-            const cell = new St.Widget({layout_manager: new Clutter.FixedLayout(), width: 64, height: 32,
-                y_expand: true, y_align: Clutter.ActorAlign.FILL});
-            const count = new St.Label({style: 'color: #f472b6; font-family: monospace; font-size: 11px;', y: 0,
-                x_expand: true, y_expand: true,
-                x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.START});
-            const bar = new St.DrawingArea({width: 60, height: 6, x: 2, y: 13,
-                x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER});
-            const estimate = new St.Label({style: 'color: #c0bfbc; font-family: monospace; font-size: 10px;', y: 20,
-                x_expand: true, y_expand: true,
-                x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.END});
-            cell.add_child(count);
-            cell.add_child(bar);
-            cell.add_child(estimate);
-            group.add_child(workspace);
-            group.add_child(cell);
-            box.add_child(group);
-            widgets = {group, workspace, count, bar, estimate};
-            bar.connect('repaint', area => paintHarborBar(area, widgets.job));
-            box._harborCells.set(job.id, widgets);
-        }
-        widgets.job = job;
-        const workspace = workspaceForHarbor(job, windows);
-        widgets.workspace.text = workspace > 0 ? `H W${workspace}` : 'H W?';
-        const fraction = harborProgress(job);
-        widgets.count.text = fraction === null ? '?/?' : `${job.completed}/${job.total}`;
-        widgets.estimate.text = formatHarborEstimate(job);
-        widgets.count.x = Math.max(0, Math.floor((64 - widgets.count.text.length * 7) / 2));
-        widgets.estimate.x = Math.max(0, Math.floor((64 - widgets.estimate.text.length * 6) / 2));
-        widgets.group.accessible_name = `Harbor ${job.name}: ${widgets.count.text}, ${job.status}, ${widgets.estimate.text}`;
-        widgets.bar.queue_repaint();
-    }
-    for (const [id, widgets] of box._harborCells) {
-        if (!alive.has(id)) { widgets.group.destroy(); box._harborCells.delete(id); }
-    }
-    box.visible = jobs.length > 0;
-};
+export const harborPanelEntries = (jobs, windows) => jobs.map(job => {
+    const workspace = workspaceForHarbor(job, windows);
+    const matches = matchingHarborWindows(job, windows).filter(window => window.workspace === workspace);
+    const monitors = new Set(matches.map(window => window.monitor));
+    const key = `harbor:${job.id}`;
+    const phase = {running: 'RUNNING', complete: 'DONE', interrupted: 'INTERRUPTED'}[job.status] || 'UNKNOWN';
+    const fraction = harborProgress(job);
+    return {key, provider: {kind: 'harbor', label: 'Harbor'}, agent: {
+        key, session_id: key, note_id: '', title: `Harbor ${job.name}`, workspace,
+        monitor: monitors.size === 1 ? [...monitors][0] : null,
+        focused: matches.some(window => window.focused === true),
+        phase, run_active: phase === 'RUNNING', unread_completion: false,
+        ready_completed_at: phase === 'DONE' ? job.finished_at : '',
+        workflow: {available: fraction !== null, fraction}, harbor: job,
+    }};
+});
+
+/** Format the measured instance count for the common cell's upper timing slot.
+ * Parameters: job - normalized Harbor trial counts.
+ * Returns: completed/total text or ?/? when progress is unavailable.
+ */
+export const harborCountText = job => harborProgress(job) === null ? '?/?' : `${job.completed}/${job.total}`;
 
 /** Validate published counts before calculating the painted progress fraction.
  * Parameters: job - normalized job progress.
@@ -84,67 +57,47 @@ export const harborProgress = (job) => {
     return result;
 };
 
-/** Paint Harbor's measured progress without placing text inside the bar.
- * Parameters: area - allocated drawing area; job - current job counts and state.
- * Returns: undefined.
+/** Select only windows owned by the observed Harbor terminal/client ancestry.
+ * Parameters: job - terminal owner pids; windows - actual Shell window descriptors.
+ * Returns: windows matching that independent process identity.
  */
-export const paintHarborBar = (area, job) => {
-    const [width, height] = area.get_surface_size();
-    const context = area.get_context();
-    context.setSourceRGBA(0.28, 0.27, 0.29, 1);
-    context.rectangle(0, 0, width, height);
-    context.fill();
-    const fraction = harborProgress(job);
-    if (fraction !== null) {
-        if (job.status === 'interrupted')
-            context.setSourceRGBA(0.94, 0.27, 0.27, 1);
-        else
-            context.setSourceRGBA(0.957, 0.447, 0.714, 1);
-        context.rectangle(0, 0, Math.round(width * fraction), height);
-        context.fill();
-    }
-    context.$dispose();
-};
+export const matchingHarborWindows = (job, windows) => windows.filter(window => job.owner_pids?.includes(window.pid));
 
 /** Match actual owner windows without borrowing desktop focus or ambiguous clients.
  * Parameters: job - terminal owner pids; windows - actual one-based workspace descriptors.
  * Returns: unique workspace number or zero when unknown, sticky or ambiguous.
  */
 export const workspaceForHarbor = (job, windows) => {
-    const matches = windows.filter(window => job.owner_pids?.includes(window.pid));
+    const matches = matchingHarborWindows(job, windows);
     const workspaces = new Set(matches.map(window => window.workspace));
     const workspace = [...workspaces][0];
     const result = workspaces.size === 1 && Number.isInteger(workspace) && workspace > 0 ? workspace : 0;
     return result;
 };
 
-/** Attach the Harbor indicator beside the current agent taskbar.
- * Parameters: panel - GNOME panel owning status indicators.
- * Returns: cleanup callback for every actor and timer.
+/** Feed independent Harbor tasks into the existing agent workspace groups.
+ * Parameters: owner - existing common taskbar button.
+ * Returns: cleanup callback for the independent refresh timer and panel entries.
  */
-export function attachHarborStatus(panel) {
-    print(`panel=${panel}`);
-    const button = new PanelMenu.Button(0.5, 'Harbor runs', true);
-    const box = new St.BoxLayout({style_class: 'ams-box panel-status-menu-box',
-        y_expand: true, y_align: Clutter.ActorAlign.FILL});
-    button.add_child(box);
-    panel.addToStatusArea('harbor-runs', button, 0, 'right');
+export function attachHarborStatus(owner) {
+    print(`owner=${owner}`);
     const placementsFile = harborStateFile('placements.json');
     try { placementsFile.get_parent().make_directory_with_parents(null); } catch (_error) { /* Already exists. */ }
     const refresh = () => {
         const windows = global.get_window_actors().filter(actor => actor.meta_window).map(actor => {
             const window = actor.meta_window;
-            return {pid: window.get_pid(), workspace: window.is_on_all_workspaces() ? 0 : (window.get_workspace()?.index() ?? -1) + 1};
+            return {pid: window.get_pid(), monitor: window.get_monitor(), focused: window === global.display.focus_window,
+                workspace: window.is_on_all_workspaces() ? 0 : (window.get_workspace()?.index() ?? -1) + 1};
         });
         const jobs = readHarborJobs();
-        renderHarborJobs(box, jobs, windows);
+        owner._harborEntries = harborPanelEntries(jobs, windows);
         publishHarborPlacements(placementsFile, jobs, windows);
-        button.visible = box.visible;
+        owner._queueRefresh();
         return GLib.SOURCE_CONTINUE;
     };
     refresh();
     const timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, refresh);
-    const result = () => { GLib.source_remove(timer); button.destroy(); };
+    const result = () => { GLib.source_remove(timer); owner._harborEntries = []; };
     print(result);
     return result;
 }

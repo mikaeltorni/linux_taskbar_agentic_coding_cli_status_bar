@@ -413,6 +413,8 @@ fn single_observer() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("another Harbor observer"));
     assert!(!root.join("state/status.json").exists());
+    // Release the shared open-file-description lock even if a parallel test is between fork and exec.
+    assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_UN) }, 0);
     drop(held);
     assert_eq!(poll(root, &[])["jobs"], json!([]));
     println!("None");
