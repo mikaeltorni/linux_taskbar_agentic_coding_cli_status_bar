@@ -12,8 +12,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 export const readHarborJobs = () => {
     let result = [];
     try {
-        const path = GLib.build_filenamev([GLib.get_user_state_dir(), 'harbor-taskbar', 'status.json']);
-        const [ok, bytes] = Gio.File.new_for_path(path).load_contents(null);
+        const [ok, bytes] = harborStateFile('status.json').load_contents(null);
         const data = ok ? JSON.parse(new TextDecoder().decode(bytes)) : null;
         if (Array.isArray(data?.jobs) && Date.now() - Date.parse(data.updated_at) < 30000)
             result = data.jobs;
@@ -130,12 +129,16 @@ export function attachHarborStatus(panel) {
         y_expand: true, y_align: Clutter.ActorAlign.FILL});
     button.add_child(box);
     panel.addToStatusArea('harbor-runs', button, 0, 'right');
+    const placementsFile = harborStateFile('placements.json');
+    try { placementsFile.get_parent().make_directory_with_parents(null); } catch (_error) { /* Already exists. */ }
     const refresh = () => {
         const windows = global.get_window_actors().filter(actor => actor.meta_window).map(actor => {
             const window = actor.meta_window;
             return {pid: window.get_pid(), workspace: window.is_on_all_workspaces() ? 0 : (window.get_workspace()?.index() ?? -1) + 1};
         });
-        renderHarborJobs(box, readHarborJobs(), windows);
+        const jobs = readHarborJobs();
+        renderHarborJobs(box, jobs, windows);
+        publishHarborPlacements(placementsFile, jobs, windows);
         button.visible = box.visible;
         return GLib.SOURCE_CONTINUE;
     };
@@ -156,4 +159,24 @@ export const formatHarborEstimate = (job) => {
     if (job.status === 'running' && Number.isFinite(seconds))
         result = seconds > 0 ? `~${Math.max(1, Math.ceil(seconds / 60))}m` : '~overdue';
     return result;
+};
+
+/** Resolve one independent Harbor state document.
+ * Parameters: name - observer-owned JSON filename.
+ * Returns: the file beneath the user's XDG state home.
+ */
+export const harborStateFile = name => Gio.File.new_for_path(
+    GLib.build_filenamev([GLib.get_user_state_dir(), 'harbor-taskbar', name]));
+
+/** Publish actual window placement for headless completion speech.
+ * Parameters: file - placement destination; jobs - current jobs; windows - live Shell windows.
+ * Returns: undefined; unavailable files never break panel updates.
+ */
+export const publishHarborPlacements = (file, jobs, windows) => {
+    const placements = Object.fromEntries(jobs.map(job => [job.id, workspaceForHarbor(job, windows)]));
+    const data = {updated_at: new Date().toISOString(), jobs: placements};
+    try {
+        file.replace_contents(new TextEncoder().encode(JSON.stringify(data)), null, false,
+            Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+    } catch (_error) { /* Read-only homes must not break the Shell. */ }
 };

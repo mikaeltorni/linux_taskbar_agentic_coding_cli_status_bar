@@ -35,5 +35,5 @@ ISC_COMPONENTS=(
   "polling_rate|Polling rate in seconds (how often limits are checked)|on|acs_apply_polling_rate|||Poller||acs_configure_polling_rate|acs_polling_rate_status"
   "tmux_console|Background tmux debug console (slash-command refresh)|on|acs_install_tmux_console|acs_detect_tmux_console|acs_uninstall_tmux_console|Poller"
   "startup_service|Start poller at login (systemd user service)|on|acs_install_startup_service|acs_detect_startup_service|acs_uninstall_startup_service|Poller"
-  "model_status_bar|ACC model status bar (opt-in; provider icons + running agent counts)|off|acs_install_model_status_bar|acs_detect_model_status_bar|acs_uninstall_model_status_bar|Taskbar extensions"
+  "model_status_bar|ACC + Harbor taskbar (opt-in; agent counts + independent Harbor progress/ETA/speech)|off|acs_install_model_status_bar|acs_detect_model_status_bar|acs_uninstall_model_status_bar|Taskbar extensions"
 )

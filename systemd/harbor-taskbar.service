@@ -5,6 +5,7 @@ Description=Independent Harbor run taskbar observer
 ExecStart=%h/.local/bin/harbor-taskbar
 Restart=on-failure
 RestartSec=5
+UMask=0077
 # Function tracing is useful at the CLI; keep recurring service output silent.
 StandardOutput=null
 StandardError=journal

@@ -1,6 +1,6 @@
 //! Public standalone Harbor observer and taskbar checks.
-use std::{fs, path::Path, process::Command};
 use serde_json::{json, Value};
+use std::{fs, path::Path, process::Command};
 
 /// Run the public observer with isolated artifact and output directories.
 /// Parameters: root - sandbox; extra - additional CLI tokens.
@@ -8,12 +8,25 @@ use serde_json::{json, Value};
 fn poll(root: &Path, extra: &[&str]) -> Value {
     println!("root={root:?} extra={extra:?}");
     let mut command = Command::new(env!("CARGO_BIN_EXE_harbor-taskbar"));
-    command.args(["--once", "--jobs-dir"]).arg(root.join("jobs"))
-        .arg("--state-dir").arg(root.join("state"));
-    if !extra.contains(&"--proc-root") { command.arg("--proc-root").arg(root.join("proc")); }
+    command
+        .args(["--once", "--jobs-dir"])
+        .arg(root.join("jobs"))
+        .arg("--state-dir")
+        .arg(root.join("state"));
+    if !extra.contains(&"--proc-root") {
+        command.arg("--proc-root").arg(root.join("proc"));
+    }
+    if !extra.contains(&"--tts-command") {
+        command.arg("--tts-command").arg(root.join("no-engine"));
+    }
     let output = command.args(extra).output().unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let result = serde_json::from_str(&fs::read_to_string(root.join("state/status.json")).unwrap()).unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result =
+        serde_json::from_str(&fs::read_to_string(root.join("state/status.json")).unwrap()).unwrap();
     println!("{result}");
     result
 }
@@ -25,7 +38,11 @@ fn job(root: &Path, name: &str, data: Value) -> std::path::PathBuf {
     println!("root={root:?} name={name} data={data}");
     let path = root.join("jobs").join(name);
     fs::create_dir_all(&path).unwrap();
-    fs::write(path.join("config.json"), json!({"job_name": name, "tasks": [{"path": "addition"}], "n_attempts": 4}).to_string()).unwrap();
+    fs::write(
+        path.join("config.json"),
+        json!({"job_name": name, "tasks": [{"path": "addition"}], "n_attempts": 4}).to_string(),
+    )
+    .unwrap();
     fs::write(path.join("result.json"), data.to_string()).unwrap();
     println!("{path:?}");
     path
@@ -51,8 +68,17 @@ fn artifact_tracking() {
     assert_eq!(poll(root, &[])["jobs"][0]["status"], "complete");
     fs::write(path.join("result.json"), "{").unwrap();
     assert_eq!(poll(root, &[])["jobs"], json!([]));
-    for args in [vec!["--unknown"], vec!["--jobs-dir"], vec!["--interval", "bad"], vec!["--interval", "0"], vec!["--interval", "NaN"]] {
-        let output = Command::new(env!("CARGO_BIN_EXE_harbor-taskbar")).args(&args).output().unwrap();
+    for args in [
+        vec!["--unknown"],
+        vec!["--jobs-dir"],
+        vec!["--interval", "bad"],
+        vec!["--interval", "0"],
+        vec!["--interval", "NaN"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_harbor-taskbar"))
+            .args(&args)
+            .output()
+            .unwrap();
         assert!(!output.status.success(), "{args:?}");
     }
     println!("None");
@@ -65,8 +91,17 @@ fn artifact_tracking() {
 fn taskbar_rendering() {
     println!("parameters=none");
     let root = env!("CARGO_MANIFEST_DIR");
-    let output = Command::new("gjs").args(["tests/harbor.js", root]).current_dir(root).output().unwrap();
-    assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let output = Command::new("gjs")
+        .args(["tests/harbor.js", root])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     println!("None");
 }
 
@@ -88,11 +123,29 @@ fn independent_discovery() {
     let process = proc_root.join("123");
     fs::create_dir_all(&process).unwrap();
     symlink(root, process.join("cwd")).unwrap();
-    fs::write(process.join("stat"), "123 (harbor) S 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 998").unwrap();
+    fs::write(
+        process.join("stat"),
+        "123 (harbor) S 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 998",
+    )
+    .unwrap();
     // Python-script and native invocation; equals flags and relative output paths.
     for args in [
-        vec!["/venv/python", "/bin/harbor", "run", "--jobs-dir=elsewhere", "--job-name=external"],
-        vec!["harbor", "jobs", "start", "-o", "elsewhere", "--job-name", "external"],
+        vec![
+            "/venv/python",
+            "/bin/harbor",
+            "run",
+            "--jobs-dir=elsewhere",
+            "--job-name=external",
+        ],
+        vec![
+            "harbor",
+            "jobs",
+            "start",
+            "-o",
+            "elsewhere",
+            "--job-name",
+            "external",
+        ],
     ] {
         fs::write(process.join("cmdline"), args.join("\0") + "\0").unwrap();
         let rows = poll(root, &["--proc-root", proc_root.to_str().unwrap()]);
@@ -102,15 +155,29 @@ fn independent_discovery() {
         assert_eq!(rows["jobs"][0]["status"], "running");
     }
     // Configuration-only launch, with an arbitrary jobs directory in YAML.
-    fs::write(root.join("run.yaml"), "job_name: external\njobs_dir: elsewhere\n").unwrap();
+    fs::write(
+        root.join("run.yaml"),
+        "job_name: external\njobs_dir: elsewhere\n",
+    )
+    .unwrap();
     fs::write(process.join("cmdline"), b"harbor\0run\0-c\0run.yaml\0").unwrap();
-    assert_eq!(poll(root, &["--proc-root", proc_root.to_str().unwrap()])["jobs"][0]["status"], "running");
+    assert_eq!(
+        poll(root, &["--proc-root", proc_root.to_str().unwrap()])["jobs"][0]["status"],
+        "running"
+    );
     fs::remove_dir_all(&process).unwrap();
-    assert_eq!(poll(root, &["--proc-root", proc_root.to_str().unwrap()])["jobs"][0]["status"], "interrupted");
+    assert_eq!(
+        poll(root, &["--proc-root", proc_root.to_str().unwrap()])["jobs"][0]["status"],
+        "interrupted"
+    );
     // A shell command containing the word harbor must never register as a run.
     fs::create_dir_all(&process).unwrap();
     symlink(root, process.join("cwd")).unwrap();
-    fs::write(process.join("cmdline"), b"bash\0-c\0harbor run --job-name fake\0").unwrap();
+    fs::write(
+        process.join("cmdline"),
+        b"bash\0-c\0harbor run --job-name fake\0",
+    )
+    .unwrap();
     let rows = poll(root, &["--proc-root", proc_root.to_str().unwrap()]);
     assert_eq!(rows["jobs"].as_array().unwrap().len(), 1);
     assert!(!path.exists());
@@ -125,28 +192,55 @@ fn historical_estimates() {
     println!("parameters=none");
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
-    for (name, finish) in [("old1", "2026-10-19T00:10:00"), ("old2", "2026-10-19T00:20:00")] {
-        let path = job(root, name, json!({"started_at": "2026-10-19T00:00:00", "finished_at": finish,
-            "n_total_trials": 4, "stats": {"n_completed_trials": 4}}));
-        let mut config: Value = serde_json::from_str(&fs::read_to_string(path.join("config.json")).unwrap()).unwrap();
+    for (name, finish) in [
+        ("old1", "2026-10-19T00:10:00"),
+        ("old2", "2026-10-19T00:20:00"),
+    ] {
+        let path = job(
+            root,
+            name,
+            json!({"started_at": "2026-10-19T00:00:00", "finished_at": finish,
+            "n_total_trials": 4, "stats": {"n_completed_trials": 4}}),
+        );
+        let mut config: Value =
+            serde_json::from_str(&fs::read_to_string(path.join("config.json")).unwrap()).unwrap();
         config["n_concurrent_trials"] = json!(2);
         fs::write(path.join("config.json"), config.to_string()).unwrap();
     }
-    job(root, "incomplete", json!({"started_at": "2026-10-19T00:00:00Z", "finished_at": "2026-10-19T00:01:00Z",
-        "n_total_trials": 4, "stats": {"n_completed_trials": 1}}));
-    let mismatch = job(root, "different-model", json!({"started_at": "2026-10-19T00:00:00Z", "finished_at": "2026-10-19T00:01:00Z",
-        "n_total_trials": 4, "stats": {"n_completed_trials": 4}}));
-    let mut other: Value = serde_json::from_str(&fs::read_to_string(mismatch.join("config.json")).unwrap()).unwrap();
+    job(
+        root,
+        "incomplete",
+        json!({"started_at": "2026-10-19T00:00:00Z", "finished_at": "2026-10-19T00:01:00Z",
+        "n_total_trials": 4, "stats": {"n_completed_trials": 1}}),
+    );
+    let mismatch = job(
+        root,
+        "different-model",
+        json!({"started_at": "2026-10-19T00:00:00Z", "finished_at": "2026-10-19T00:01:00Z",
+        "n_total_trials": 4, "stats": {"n_completed_trials": 4}}),
+    );
+    let mut other: Value =
+        serde_json::from_str(&fs::read_to_string(mismatch.join("config.json")).unwrap()).unwrap();
     other["agents"] = json!([{"model_name": "different-model"}]);
     fs::write(mismatch.join("config.json"), other.to_string()).unwrap();
     let start = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
-    let path = job(root, "current", json!({"started_at": start, "finished_at": null,
-        "n_total_trials": 8, "stats": {"n_completed_trials": 1}}));
-    let mut config: Value = serde_json::from_str(&fs::read_to_string(path.join("config.json")).unwrap()).unwrap();
+    let path = job(
+        root,
+        "current",
+        json!({"started_at": start, "finished_at": null,
+        "n_total_trials": 8, "stats": {"n_completed_trials": 1}}),
+    );
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(path.join("config.json")).unwrap()).unwrap();
     config["n_concurrent_trials"] = json!(2);
     fs::write(path.join("config.json"), config.to_string()).unwrap();
     let data = poll(root, &[]);
-    let current = data["jobs"].as_array().unwrap().iter().find(|row| row["name"] == "current").unwrap();
+    let current = data["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "current")
+        .unwrap();
     assert_eq!(current["estimate"]["samples"], 2);
     // Prior jobs took 600 and 1200 seconds for two waves; four waves take median 1800.
     assert_eq!(current["estimate"]["total_seconds"], 1800.0);
@@ -155,7 +249,12 @@ fn historical_estimates() {
     config["tasks"] = json!([{"path": "different-task"}]);
     fs::write(path.join("config.json"), config.to_string()).unwrap();
     let data = poll(root, &[]);
-    let current = data["jobs"].as_array().unwrap().iter().find(|row| row["name"] == "current").unwrap();
+    let current = data["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "current")
+        .unwrap();
     assert!(current["estimate"].is_null());
     println!("None");
 }
@@ -190,5 +289,131 @@ fn trial_progress() {
     data["stats"]["n_completed_trials"] = json!(5);
     fs::write(path.join("result.json"), data.to_string()).unwrap();
     assert!(poll(root, &[])["jobs"][0]["fraction"].is_null());
+    println!("None");
+}
+
+/// Read asynchronous mock speech calls without touching the real sound device.
+/// Parameters: root - isolated mock executable directory; expected - minimum line to await.
+/// Returns: captured speech arguments.
+fn speech_calls(root: &Path, expected: &str) -> String {
+    println!("root={root:?} expected={expected}");
+    let mut result = String::new();
+    for _ in 0..100 {
+        result = fs::read_to_string(root.join("tts-calls")).unwrap_or_default();
+        if result.contains(expected) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    println!("{result}");
+    result
+}
+
+/// Announce a genuine running-to-complete transition once using a distinct female voice.
+/// Parameters: none.
+/// Returns: None after workspace, deduplication and cancellation assertions pass.
+#[test]
+fn completion_speech() {
+    println!("parameters=none");
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let engine = root.join("agent-tts");
+    fs::write(&engine, "#!/bin/sh\nprintf '%s\\n' \"$ATTS_ANNOUNCE_WORKSPACE\" \"$@\" >> \"$(dirname \"$0\")/tts-calls\"\n").unwrap();
+    fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
+    let extra = ["--tts-command", engine.to_str().unwrap()];
+    let mut data = json!({"started_at": "2026-10-20T00:00:00Z", "finished_at": null,
+        "n_total_trials": 4, "stats": {"n_completed_trials": 1}});
+    let path = job(root, "speech", data.clone());
+    poll(root, &extra); // First observed running arms this job.
+    let old_placement =
+        json!({"updated_at": chrono::Utc::now().to_rfc3339(), "jobs": {path.to_str().unwrap(): 3}});
+    fs::write(
+        root.join("state/placements.json"),
+        old_placement.to_string(),
+    )
+    .unwrap();
+    poll(root, &extra);
+    let placement = json!({"updated_at": chrono::Utc::now().to_rfc3339(),
+        "jobs": {path.to_str().unwrap(): 5}});
+    fs::write(root.join("state/placements.json"), placement.to_string()).unwrap();
+    data["finished_at"] = json!(chrono::Utc::now().to_rfc3339());
+    data["stats"]["n_completed_trials"] = json!(4);
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    poll(root, &extra);
+    let calls = speech_calls(root, "af_nicole");
+    assert!(
+        calls.contains("Harbor run on workspace 5 is done."),
+        "{calls}"
+    );
+    assert!(calls.contains("--voice\naf_nicole"), "{calls}");
+    assert!(
+        calls.starts_with("0\nannounce\n--event\nfinish\n"),
+        "{calls}"
+    );
+    poll(root, &extra); // Every call is a fresh process: restart must not replay.
+    assert_eq!(speech_calls(root, "af_nicole"), calls);
+    // Completed runs first encountered at startup are history, never replayed speech.
+    job(root, "already-done", data.clone());
+    poll(root, &extra);
+    assert_eq!(speech_calls(root, "af_nicole"), calls);
+    data["finished_at"] = Value::Null;
+    data["stats"]["n_completed_trials"] = json!(1);
+    let cancelled = job(root, "cancelled", data.clone());
+    poll(root, &extra);
+    data["finished_at"] = json!(chrono::Utc::now().to_rfc3339());
+    fs::write(cancelled.join("result.json"), data.to_string()).unwrap();
+    poll(root, &extra);
+    assert_eq!(speech_calls(root, "af_nicole"), calls);
+    // A stale placement must explicitly announce an unknown workspace.
+    data["finished_at"] = Value::Null;
+    data["stats"]["n_completed_trials"] = json!(1);
+    let unknown = job(root, "unknown", data.clone());
+    poll(root, &extra);
+    fs::write(
+        root.join("state/placements.json"),
+        json!({"updated_at": "2000-01-01T00:00:00Z", "jobs": {unknown.to_str().unwrap(): 9}})
+            .to_string(),
+    )
+    .unwrap();
+    data["finished_at"] = json!(chrono::Utc::now().to_rfc3339());
+    data["stats"]["n_completed_trials"] = json!(4);
+    fs::write(unknown.join("result.json"), data.to_string()).unwrap();
+    poll(root, &extra);
+    let all = speech_calls(root, "Harbor run on an unknown workspace is done.");
+    assert!(
+        all.contains("Harbor run on an unknown workspace is done."),
+        "{all}"
+    );
+    assert_eq!(all.matches("af_nicole").count(), 2);
+    println!("None");
+}
+
+/// Reject concurrent observers before they can race snapshot or speech claims.
+/// Parameters: none.
+/// Returns: None after lock rejection and recovery checks pass.
+#[test]
+fn single_observer() {
+    println!("parameters=none");
+    use std::os::fd::AsRawFd;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir_all(root.join("state")).unwrap();
+    let held = fs::File::create(root.join("state/observer.lock")).unwrap();
+    assert_eq!(
+        unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_harbor-taskbar"))
+        .arg("--once")
+        .arg("--state-dir")
+        .arg(root.join("state"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("another Harbor observer"));
+    assert!(!root.join("state/status.json").exists());
+    drop(held);
+    assert_eq!(poll(root, &[])["jobs"], json!([]));
     println!("None");
 }

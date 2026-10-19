@@ -1,9 +1,16 @@
 //! Standalone Harbor job observer; no ACC runtime or launch hooks required.
-use clap::Parser;
 use chrono::TimeZone;
+use clap::Parser;
 use serde_json::{json, Value};
-use std::{fs, path::{Path, PathBuf}, process::ExitCode, time::Duration, collections::BTreeMap};
-use std::os::unix::fs::MetadataExt;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    time::Duration,
+};
 
 #[derive(Parser, Debug)]
 #[command(about = "Independently track Harbor jobs in the taskbar")]
@@ -17,6 +24,9 @@ struct Options {
     /// Process filesystem (default /proc; override for isolated diagnostics).
     #[arg(long, default_value = "/proc")]
     proc_root: PathBuf,
+    /// Speech engine (default ~/.local/bin/agent-tts; missing engine keeps monitoring silent).
+    #[arg(long, default_value_os_t = default_tts_command())]
+    tts_command: PathBuf,
     /// Polling delay in seconds.
     #[arg(long, default_value_t = 2.0)]
     interval: f64,
@@ -30,8 +40,11 @@ struct Options {
 /// Returns: the XDG state home plus harbor-taskbar.
 fn default_state_dir() -> PathBuf {
     println!("parameters=none");
-    let base = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state"));
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state")
+        });
     let result = base.join("harbor-taskbar");
     println!("{result:?}");
     result
@@ -42,8 +55,11 @@ fn default_state_dir() -> PathBuf {
 /// Returns: parsed object or null when unavailable.
 fn read_object(path: &Path) -> Value {
     println!("path={path:?}");
-    let result = fs::read(path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .filter(Value::is_object).unwrap_or(Value::Null);
+    let result = fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(Value::is_object)
+        .unwrap_or(Value::Null);
     println!("{result}");
     result
 }
@@ -55,14 +71,23 @@ fn read_job(path: &Path) -> Option<(Value, Value, Value)> {
     println!("path={path:?}");
     let config = read_object(&path.join("config.json"));
     let data = read_object(&path.join("result.json"));
-    let result = if config["job_name"].is_string() && data["started_at"].is_string() && data["stats"].is_object() {
+    let result = if config["job_name"].is_string()
+        && data["started_at"].is_string()
+        && data["stats"].is_object()
+    {
         let counts = trial_counts(&data);
-        Some((json!({"id": path.canonicalize().unwrap_or_else(|_| path.to_path_buf()), "name": config["job_name"],
+        Some((
+            json!({"id": path.canonicalize().unwrap_or_else(|_| path.to_path_buf()), "name": config["job_name"],
             "status": job_status(&data, counts),
             "completed": counts.map(|(completed,_)| completed), "total": counts.map(|(_,total)| total),
             "fraction": counts.map(|(completed,total)| completed as f64 / total as f64),
-            "started_at": data["started_at"], "finished_at": data["finished_at"]}), config, data))
-    } else { None };
+            "started_at": data["started_at"], "finished_at": data["finished_at"]}),
+            config,
+            data,
+        ))
+    } else {
+        None
+    };
     println!("{result:?}");
     result
 }
@@ -85,51 +110,89 @@ fn write_object(path: &Path, data: &Value) -> std::io::Result<()> {
 /// Returns: accepted duration or an invalid-input error.
 fn require_interval(interval: f64) -> std::io::Result<Duration> {
     println!("interval={interval}");
-    let result = Duration::try_from_secs_f64(interval).ok().filter(|value| !value.is_zero())
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "interval must be finite and positive"));
+    let result = Duration::try_from_secs_f64(interval)
+        .ok()
+        .filter(|value| !value.is_zero())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "interval must be finite and positive",
+            )
+        });
     println!("{result:?}");
     result
 }
 
 /// Collect current Harbor jobs and publish the taskbar snapshot.
-/// Parameters: jobs_dirs - artifact containers; state_dir - output state directory; proc_root - process filesystem.
+/// Parameters: jobs_dirs - artifact containers; state_dir - output state directory; proc_root - process filesystem; tts_command - speech engine path.
 /// Returns: filesystem success or error.
-fn poll(jobs_dirs: &[PathBuf], state_dir: &Path, proc_root: &Path) -> std::io::Result<()> {
-    println!("jobs_dirs={jobs_dirs:?} state_dir={state_dir:?} proc_root={proc_root:?}");
+fn poll(
+    jobs_dirs: &[PathBuf],
+    state_dir: &Path,
+    proc_root: &Path,
+    tts_command: &Path,
+) -> std::io::Result<()> {
+    println!("jobs_dirs={jobs_dirs:?} state_dir={state_dir:?} proc_root={proc_root:?} tts_command={tts_command:?}");
     let live = discover_processes(proc_root);
     let saved = read_object(&state_dir.join("watched.json"));
-    let mut watched: BTreeMap<String, Value> = saved.as_object().map(|rows| rows.iter().map(|(k,v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
-    for (path, metadata) in &live { watched.insert(path.clone(), metadata.clone()); }
+    let mut watched: BTreeMap<String, Value> = saved
+        .as_object()
+        .map(|rows| rows.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default();
+    for (path, metadata) in &live {
+        watched.insert(path.clone(), metadata.clone());
+    }
     let mut paths: BTreeMap<String, Value> = watched.clone();
     for root in jobs_dirs {
         if let Ok(entries) = fs::read_dir(root) {
             for path in entries.flatten() {
                 if path.path().join("config.json").is_file() {
-                    paths.entry(path.path().canonicalize().unwrap_or(path.path()).to_string_lossy().into_owned()).or_insert(Value::Null);
+                    paths
+                        .entry(
+                            path.path()
+                                .canonicalize()
+                                .unwrap_or(path.path())
+                                .to_string_lossy()
+                                .into_owned(),
+                        )
+                        .or_insert(Value::Null);
                 }
             }
         }
     }
     let mut history_roots = jobs_dirs.to_vec();
     for metadata in live.values() {
-        if let Some(cwd) = metadata["cwd"].as_str() { history_roots.push(PathBuf::from(cwd)); }
+        if let Some(cwd) = metadata["cwd"].as_str() {
+            history_roots.push(PathBuf::from(cwd));
+        }
     }
     let history = load_history(&history_roots, state_dir)?;
     let mut jobs = Vec::new();
     for (path, metadata) in paths {
         if let Some((mut row, config, data)) = read_job(Path::new(&path)) {
             if let Some(object) = metadata.as_object() {
-                for (key, value) in object { row[key] = value.clone(); }
-                if !live.contains_key(&path) && row["status"] == "running" { row["status"] = json!("interrupted"); }
+                for (key, value) in object {
+                    row[key] = value.clone();
+                }
+                if !live.contains_key(&path) && row["status"] == "running" {
+                    row["status"] = json!("interrupted");
+                }
             }
             row["estimate"] = estimate_job(&path, &row, &config, &data, &history);
-            let finished_age = timestamp(&row["finished_at"]).map(|at| chrono::Utc::now().timestamp() as f64 - at);
-            if finished_age.is_none_or(|age| age < 300.0) { jobs.push(row); }
+            let finished_age =
+                timestamp(&row["finished_at"]).map(|at| chrono::Utc::now().timestamp() as f64 - at);
+            if finished_age.is_none_or(|age| age < 300.0) {
+                jobs.push(row);
+            }
         }
     }
     write_object(&state_dir.join("watched.json"), &json!(watched))?;
     jobs.sort_by_key(|row| row["id"].as_str().unwrap_or_default().to_owned());
-    write_object(&state_dir.join("status.json"), &json!({"updated_at": chrono::Utc::now().to_rfc3339(), "jobs": jobs}))?;
+    write_object(
+        &state_dir.join("status.json"),
+        &json!({"updated_at": chrono::Utc::now().to_rfc3339(), "jobs": jobs}),
+    )?;
+    announce_jobs(&jobs, state_dir, tts_command)?;
     println!("Ok(())");
     Ok(())
 }
@@ -140,12 +203,22 @@ fn poll(jobs_dirs: &[PathBuf], state_dir: &Path, proc_root: &Path) -> std::io::R
 fn watch(options: Options) -> std::io::Result<()> {
     println!("options={options:?}");
     let delay = require_interval(options.interval)?;
+    let _observer_lock = require_observer_lock(&options.state_dir)?;
     let roots = if options.jobs_dirs.is_empty() {
         vec![PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("jobs")]
-    } else { options.jobs_dirs };
+    } else {
+        options.jobs_dirs
+    };
     loop {
-        poll(&roots, &options.state_dir, &options.proc_root)?;
-        if options.once { break; }
+        poll(
+            &roots,
+            &options.state_dir,
+            &options.proc_root,
+            &options.tts_command,
+        )?;
+        if options.once {
+            break;
+        }
         std::thread::sleep(delay);
     }
     println!("Ok(())");
@@ -159,7 +232,10 @@ fn main() -> ExitCode {
     println!("parameters=none");
     let result = match watch(Options::parse()) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => { eprintln!("Harbor watcher: {error}"); ExitCode::FAILURE }
+        Err(error) => {
+            eprintln!("Harbor watcher: {error}");
+            ExitCode::FAILURE
+        }
     };
     println!("{result:?}");
     result
@@ -171,27 +247,80 @@ fn main() -> ExitCode {
 fn parse_launch(args: &[String], cwd: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
     println!("args_count={} cwd={cwd:?}", args.len());
     // Print no raw argv: unrelated flags can contain provider credentials.
-    let base = |arg: &str| Path::new(arg).file_name().unwrap_or_default().to_string_lossy().into_owned();
-    let offset = if args.first().is_some_and(|arg| base(arg) == "harbor") { 1 }
-        else if args.first().is_some_and(|arg| base(arg).starts_with("python")) && args.get(1).is_some_and(|arg| base(arg) == "harbor") { 2 }
-        else if args.get(1).is_some_and(|arg| arg == "-m") && args.get(2).is_some_and(|arg| arg == "harbor") { 3 }
-        else { println!("None"); return None; };
-    let tokens: Vec<String> = args[offset..].iter().flat_map(|arg| {
-        if arg.starts_with('-') { arg.splitn(2, '=').map(str::to_owned).collect::<Vec<_>>() } else { vec![arg.clone()] }
-    }).collect();
-    let resume = tokens.starts_with(&["jobs".to_owned(), "resume".to_owned()]);
-    if !resume && tokens.first().is_none_or(|arg| arg != "run") && !tokens.starts_with(&["jobs".to_owned(), "start".to_owned()]) {
-        println!("None"); return None;
-    }
-    let flag = |names: &[&str]| tokens.windows(2).rev().find(|pair| names.contains(&pair[0].as_str())).map(|pair| pair[1].clone());
-    let resolve = |text: &str| { let path = PathBuf::from(text); if path.is_absolute() { path } else { cwd.join(path) } };
-    let result = if resume {
-        flag(&["-p", "--job-path"]).map(|path| { let job = resolve(&path); (job.parent().unwrap_or(cwd).to_path_buf(), Some(job)) })
+    let base = |arg: &str| {
+        Path::new(arg)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    };
+    let offset = if args.first().is_some_and(|arg| base(arg) == "harbor") {
+        1
+    } else if args
+        .first()
+        .is_some_and(|arg| base(arg).starts_with("python"))
+        && args.get(1).is_some_and(|arg| base(arg) == "harbor")
+    {
+        2
+    } else if args.get(1).is_some_and(|arg| arg == "-m")
+        && args.get(2).is_some_and(|arg| arg == "harbor")
+    {
+        3
     } else {
-        let config = flag(&["-c", "--config"]).and_then(|path| fs::read_to_string(resolve(&path)).ok())
-            .and_then(|text| serde_yaml::from_str::<Value>(&text).ok()).unwrap_or(Value::Null);
-        let root = resolve(&flag(&["-o", "--jobs-dir"]).or_else(|| config["jobs_dir"].as_str().map(str::to_owned)).unwrap_or_else(|| "jobs".into()));
-        let job = flag(&["--job-name"]).or_else(|| config["job_name"].as_str().map(str::to_owned)).map(|name| root.join(name));
+        println!("None");
+        return None;
+    };
+    let tokens: Vec<String> = args[offset..]
+        .iter()
+        .flat_map(|arg| {
+            if arg.starts_with('-') {
+                arg.splitn(2, '=').map(str::to_owned).collect::<Vec<_>>()
+            } else {
+                vec![arg.clone()]
+            }
+        })
+        .collect();
+    let resume = tokens.starts_with(&["jobs".to_owned(), "resume".to_owned()]);
+    if !resume
+        && tokens.first().is_none_or(|arg| arg != "run")
+        && !tokens.starts_with(&["jobs".to_owned(), "start".to_owned()])
+    {
+        println!("None");
+        return None;
+    }
+    let flag = |names: &[&str]| {
+        tokens
+            .windows(2)
+            .rev()
+            .find(|pair| names.contains(&pair[0].as_str()))
+            .map(|pair| pair[1].clone())
+    };
+    let resolve = |text: &str| {
+        let path = PathBuf::from(text);
+        if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        }
+    };
+    let result = if resume {
+        flag(&["-p", "--job-path"]).map(|path| {
+            let job = resolve(&path);
+            (job.parent().unwrap_or(cwd).to_path_buf(), Some(job))
+        })
+    } else {
+        let config = flag(&["-c", "--config"])
+            .and_then(|path| fs::read_to_string(resolve(&path)).ok())
+            .and_then(|text| serde_yaml::from_str::<Value>(&text).ok())
+            .unwrap_or(Value::Null);
+        let root = resolve(
+            &flag(&["-o", "--jobs-dir"])
+                .or_else(|| config["jobs_dir"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| "jobs".into()),
+        );
+        let job = flag(&["--job-name"])
+            .or_else(|| config["job_name"].as_str().map(str::to_owned))
+            .map(|name| root.join(name));
         Some((root, job))
     };
     println!("{result:?}");
@@ -207,8 +336,14 @@ fn ancestors(proc_root: &Path, pid: u32) -> Vec<u32> {
     let mut current = pid;
     while current > 1 && result.len() < 64 && !result.contains(&current) {
         result.push(current);
-        current = fs::read_to_string(proc_root.join(current.to_string()).join("stat")).ok()
-            .and_then(|text| text.rsplit_once(") ").and_then(|(_, rest)| rest.split_whitespace().nth(1)).and_then(|value| value.parse().ok())).unwrap_or(0);
+        current = fs::read_to_string(proc_root.join(current.to_string()).join("stat"))
+            .ok()
+            .and_then(|text| {
+                text.rsplit_once(") ")
+                    .and_then(|(_, rest)| rest.split_whitespace().nth(1))
+                    .and_then(|value| value.parse().ok())
+            })
+            .unwrap_or(0);
     }
     println!("{result:?}");
     result
@@ -223,18 +358,54 @@ fn discover_processes(proc_root: &Path) -> BTreeMap<String, Value> {
     if let Ok(entries) = fs::read_dir(proc_root) {
         for entry in entries.flatten() {
             let process = entry.path();
-            let Some(pid) = entry.file_name().to_str().and_then(|text| text.parse::<u32>().ok()) else { continue; };
-            if fs::metadata(&process).ok().is_none_or(|metadata| metadata.uid() != unsafe { libc::geteuid() }) { continue; }
-            let Ok(raw) = fs::read(process.join("cmdline")) else { continue; };
-            let args: Vec<String> = raw.split(|byte| *byte == 0).filter(|arg| !arg.is_empty()).map(|arg| String::from_utf8_lossy(arg).into_owned()).collect();
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|text| text.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if fs::metadata(&process)
+                .ok()
+                .is_none_or(|metadata| metadata.uid() != unsafe { libc::geteuid() })
+            {
+                continue;
+            }
+            let Ok(raw) = fs::read(process.join("cmdline")) else {
+                continue;
+            };
+            let args: Vec<String> = raw
+                .split(|byte| *byte == 0)
+                .filter(|arg| !arg.is_empty())
+                .map(|arg| String::from_utf8_lossy(arg).into_owned())
+                .collect();
             // Filter before parsing so other users' argument data is never traced.
-            if !args.iter().take(3).any(|arg| Path::new(arg).file_name().is_some_and(|name| name == "harbor")) { continue; }
-            let Ok(cwd) = fs::read_link(process.join("cwd")) else { continue; };
-            let Some((root, exact)) = parse_launch(&args, &cwd) else { continue; };
+            if !args.iter().take(3).any(|arg| {
+                Path::new(arg)
+                    .file_name()
+                    .is_some_and(|name| name == "harbor")
+            }) {
+                continue;
+            }
+            let Ok(cwd) = fs::read_link(process.join("cwd")) else {
+                continue;
+            };
+            let Some((root, exact)) = parse_launch(&args, &cwd) else {
+                continue;
+            };
             let paths = exact.map(|path| vec![path]).unwrap_or_else(|| {
-                let mut candidates: Vec<_> = fs::read_dir(root).into_iter().flatten().flatten().map(|entry| entry.path())
-                    .filter(|path| path.join("config.json").is_file()).collect();
-                candidates.sort_by_key(|path| fs::metadata(path.join("config.json")).and_then(|m| m.modified()).ok());
+                let mut candidates: Vec<_> = fs::read_dir(root)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| path.join("config.json").is_file())
+                    .collect();
+                candidates.sort_by_key(|path| {
+                    fs::metadata(path.join("config.json"))
+                        .and_then(|m| m.modified())
+                        .ok()
+                });
                 candidates.into_iter().rev().take(1).collect()
             });
             for path in paths {
@@ -254,10 +425,15 @@ fn discover_processes(proc_root: &Path) -> BTreeMap<String, Value> {
 fn timestamp(value: &Value) -> Option<f64> {
     println!("value={value}");
     let result = value.as_str().and_then(|text| {
-        chrono::DateTime::parse_from_rfc3339(text).ok().map(|date| date.timestamp_millis() as f64 / 1000.0)
-            .or_else(|| chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f").ok()
-                .and_then(|date| chrono::Local.from_local_datetime(&date).single())
-                .map(|date| date.timestamp_millis() as f64 / 1000.0))
+        chrono::DateTime::parse_from_rfc3339(text)
+            .ok()
+            .map(|date| date.timestamp_millis() as f64 / 1000.0)
+            .or_else(|| {
+                chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f")
+                    .ok()
+                    .and_then(|date| chrono::Local.from_local_datetime(&date).single())
+                    .map(|date| date.timestamp_millis() as f64 / 1000.0)
+            })
     });
     println!("{result:?}");
     result
@@ -267,15 +443,43 @@ fn timestamp(value: &Value) -> Option<f64> {
 /// Parameters: config - parsed Harbor job configuration.
 /// Returns: stable workload identity, excluding private provider configuration.
 fn workload_signature(config: &Value) -> Value {
-    println!("config_keys={:?}", config.as_object().map(|value| value.keys().collect::<Vec<_>>()));
-    let mut tasks: Vec<_> = config["tasks"].as_array().into_iter().flatten()
-        .filter_map(|task| task["path"].as_str().and_then(|path| Path::new(path).file_name()).map(|name| name.to_string_lossy().into_owned())).collect();
+    println!(
+        "config_keys={:?}",
+        config
+            .as_object()
+            .map(|value| value.keys().collect::<Vec<_>>())
+    );
+    let mut tasks: Vec<_> = config["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|task| {
+            task["path"]
+                .as_str()
+                .and_then(|path| Path::new(path).file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .collect();
     tasks.sort();
-    let agents: Vec<_> = config["agents"].as_array().into_iter().flatten().map(|agent| json!({
+    let agents: Vec<_> = config["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|agent| {
+            json!({
         "model": agent["model_name"], "name": agent["name"], "import": agent["import_path"],
-        "effort": agent["kwargs"]["reasoning_effort"]})).collect();
-    let datasets: Vec<_> = config["datasets"].as_array().into_iter().flatten().map(|dataset| json!({
-        "name": dataset["name"], "version": dataset["version"], "path": dataset["path"]})).collect();
+        "effort": agent["kwargs"]["reasoning_effort"]})
+        })
+        .collect();
+    let datasets: Vec<_> = config["datasets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|dataset| {
+            json!({
+        "name": dataset["name"], "version": dataset["version"], "path": dataset["path"]})
+        })
+        .collect();
     let result = json!({"tasks": tasks, "datasets": datasets, "agents": agents, "environment": config["environment"]["type"]});
     println!("{result}");
     result
@@ -285,11 +489,17 @@ fn workload_signature(config: &Value) -> Value {
 /// Parameters: config - parsed job configuration; data - Harbor result.
 /// Returns: number of occupied concurrency waves, or None without a trial total.
 fn concurrency_waves(config: &Value, data: &Value) -> Option<f64> {
-    println!("concurrency={} total={}", config["n_concurrent_trials"], data["n_total_trials"]);
-    let result = data["n_total_trials"].as_u64().filter(|total| *total > 0).map(|total| {
-        let capacity = config["n_concurrent_trials"].as_u64().unwrap_or(1).max(1);
-        total.div_ceil(capacity) as f64
-    });
+    println!(
+        "concurrency={} total={}",
+        config["n_concurrent_trials"], data["n_total_trials"]
+    );
+    let result = data["n_total_trials"]
+        .as_u64()
+        .filter(|total| *total > 0)
+        .map(|total| {
+            let capacity = config["n_concurrent_trials"].as_u64().unwrap_or(1).max(1);
+            total.div_ceil(capacity) as f64
+        });
     println!("{result:?}");
     result
 }
@@ -298,11 +508,18 @@ fn concurrency_waves(config: &Value, data: &Value) -> Option<f64> {
 /// Parameters: config - parsed configuration; data - Harbor job result.
 /// Returns: seconds per occupied concurrency wave, or None for incomplete history.
 fn completed_sample(config: &Value, data: &Value) -> Option<f64> {
-    println!("job_name={} started={} finished={}", config["job_name"], data["started_at"], data["finished_at"]);
+    println!(
+        "job_name={} started={} finished={}",
+        config["job_name"], data["started_at"], data["finished_at"]
+    );
     let result = (|| {
-        if job_status(data, trial_counts(data)) != "complete" { return None; }
+        if job_status(data, trial_counts(data)) != "complete" {
+            return None;
+        }
         let duration = timestamp(&data["finished_at"])? - timestamp(&data["started_at"])?;
-        if duration <= 0.0 { return None; }
+        if duration <= 0.0 {
+            return None;
+        }
         Some(duration / concurrency_waves(config, data)?)
     })();
     println!("{result:?}");
@@ -314,7 +531,10 @@ fn completed_sample(config: &Value, data: &Value) -> Option<f64> {
 /// Returns: None after extending the sample list.
 fn scan_history(root: &Path, depth: u8, budget: &mut usize, samples: &mut Vec<Value>) {
     println!("root={root:?} depth={depth} budget={budget} samples={samples:?}");
-    if *budget == 0 { println!("None"); return; }
+    if *budget == 0 {
+        println!("None");
+        return;
+    }
     *budget -= 1;
     if root.join("config.json").is_file() && root.join("result.json").is_file() {
         if let Some((_, config, data)) = read_job(root) {
@@ -324,12 +544,27 @@ fn scan_history(root: &Path, depth: u8, budget: &mut usize, samples: &mut Vec<Va
             }
         }
     } else if depth > 0 {
-        let mut directories: Vec<_> = fs::read_dir(root).into_iter().flatten().flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()) && !entry.file_name().to_string_lossy().starts_with('.')
-                && !["node_modules", "target", "venv", "__pycache__"].contains(&entry.file_name().to_string_lossy().as_ref()))
-            .map(|entry| entry.path()).collect();
-        directories.sort_by_key(|path| std::cmp::Reverse(fs::metadata(path).and_then(|m| m.modified()).ok()));
-        for directory in directories { scan_history(&directory, depth - 1, budget, samples); if *budget == 0 { break; } }
+        let mut directories: Vec<_> = fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_dir())
+                    && !entry.file_name().to_string_lossy().starts_with('.')
+                    && !["node_modules", "target", "venv", "__pycache__"]
+                        .contains(&entry.file_name().to_string_lossy().as_ref())
+            })
+            .map(|entry| entry.path())
+            .collect();
+        directories.sort_by_key(|path| {
+            std::cmp::Reverse(fs::metadata(path).and_then(|m| m.modified()).ok())
+        });
+        for directory in directories {
+            scan_history(&directory, depth - 1, budget, samples);
+            if *budget == 0 {
+                break;
+            }
+        }
     }
     println!("None");
 }
@@ -345,12 +580,17 @@ fn load_history(roots: &[PathBuf], state_dir: &Path) -> std::io::Result<Vec<Valu
     if timestamp(&saved["updated_at"]).is_none_or(|at| now - at > 60.0) {
         samples.clear();
         let mut budget = 20000;
-        for root in roots { scan_history(root, 5, &mut budget, &mut samples); }
-        samples.sort_by(|a,b| b["finished_at"].as_str().cmp(&a["finished_at"].as_str()));
+        for root in roots {
+            scan_history(root, 5, &mut budget, &mut samples);
+        }
+        samples.sort_by(|a, b| b["finished_at"].as_str().cmp(&a["finished_at"].as_str()));
         let mut seen = std::collections::BTreeSet::new();
         samples.retain(|sample| seen.insert(sample["path"].to_string()));
         samples.truncate(1000);
-        write_object(&state_dir.join("history.json"), &json!({"updated_at": chrono::Utc::now().to_rfc3339(), "samples": samples}))?;
+        write_object(
+            &state_dir.join("history.json"),
+            &json!({"updated_at": chrono::Utc::now().to_rfc3339(), "samples": samples}),
+        )?;
     }
     println!("{samples:?}");
     Ok(samples)
@@ -360,23 +600,43 @@ fn load_history(roots: &[PathBuf], state_dir: &Path) -> std::io::Result<Vec<Valu
 /// Parameters: path - current job identity; row - normalized job state; config - parsed configuration; data - parsed result; history - completed samples.
 /// Returns: total/remaining seconds and sample count, or null when no estimate is supported.
 fn estimate_job(path: &str, row: &Value, config: &Value, data: &Value, history: &[Value]) -> Value {
-    println!("path={path} row={row} job_name={} total={} history_count={}", config["job_name"], data["n_total_trials"], history.len());
+    println!(
+        "path={path} row={row} job_name={} total={} history_count={}",
+        config["job_name"],
+        data["n_total_trials"],
+        history.len()
+    );
     let signature = workload_signature(config);
-    let mut samples: Vec<f64> = history.iter().filter(|sample| sample["path"] != path && sample["signature"] == signature)
-        .take(20).filter_map(|sample| sample["seconds_per_wave"].as_f64()).filter(|seconds| seconds.is_finite() && *seconds > 0.0).collect();
+    let mut samples: Vec<f64> = history
+        .iter()
+        .filter(|sample| sample["path"] != path && sample["signature"] == signature)
+        .take(20)
+        .filter_map(|sample| sample["seconds_per_wave"].as_f64())
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .collect();
     samples.sort_by(f64::total_cmp);
     let result = if row["status"] == "running" && !samples.is_empty() {
-        match (concurrency_waves(config, data), timestamp(&data["started_at"])) {
+        match (
+            concurrency_waves(config, data),
+            timestamp(&data["started_at"]),
+        ) {
             (Some(waves), Some(start)) => {
                 let middle = samples.len() / 2;
-                let median = if samples.len() % 2 == 0 { (samples[middle - 1] + samples[middle]) / 2.0 } else { samples[middle] };
+                let median = if samples.len() % 2 == 0 {
+                    (samples[middle - 1] + samples[middle]) / 2.0
+                } else {
+                    samples[middle]
+                };
                 let total = median * waves;
-                let elapsed = (chrono::Utc::now().timestamp_millis() as f64 / 1000.0 - start).max(0.0);
+                let elapsed =
+                    (chrono::Utc::now().timestamp_millis() as f64 / 1000.0 - start).max(0.0);
                 json!({"total_seconds": total, "remaining_seconds": (total - elapsed).max(0.0), "samples": samples.len()})
             }
             _ => Value::Null,
         }
-    } else { Value::Null };
+    } else {
+        Value::Null
+    };
     println!("{result}");
     result
 }
@@ -388,8 +648,12 @@ fn trial_counts(data: &Value) -> Option<(u64, u64)> {
     println!("data={data}");
     let result = (|| {
         let total = data["n_total_trials"].as_u64()?;
-        let completed = data["stats"]["n_completed_trials"].as_u64().or_else(|| data["stats"]["n_trials"].as_u64())?;
-        if total == 0 || completed > total { return None; }
+        let completed = data["stats"]["n_completed_trials"]
+            .as_u64()
+            .or_else(|| data["stats"]["n_trials"].as_u64())?;
+        if total == 0 || completed > total {
+            return None;
+        }
         Some((completed, total))
     })();
     println!("{result:?}");
@@ -401,9 +665,15 @@ fn trial_counts(data: &Value) -> Option<(u64, u64)> {
 /// Returns: running, complete or interrupted.
 fn job_status(data: &Value, counts: Option<(u64, u64)>) -> &'static str {
     println!("data={data} counts={counts:?}");
-    let result = if !data["finished_at"].is_string() { "running" }
-        else if counts.is_some_and(|(done,total)| done == total) && data["stats"]["n_cancelled_trials"].as_u64().unwrap_or(0) == 0 { "complete" }
-        else { "interrupted" };
+    let result = if !data["finished_at"].is_string() {
+        "running"
+    } else if counts.is_some_and(|(done, total)| done == total)
+        && data["stats"]["n_cancelled_trials"].as_u64().unwrap_or(0) == 0
+    {
+        "complete"
+    } else {
+        "interrupted"
+    };
     println!("{result}");
     result
 }
@@ -413,20 +683,184 @@ fn job_status(data: &Value, counts: Option<(u64, u64)>) -> &'static str {
 /// Returns: terminal/client ancestry, or direct ancestry outside tmux; empty for detached tmux.
 fn terminal_owners(proc_root: &Path, pid: u32, parents: &[u32]) -> Vec<u32> {
     println!("proc_root={proc_root:?} pid={pid} parents={parents:?}");
-    let socket = fs::read(proc_root.join(pid.to_string()).join("environ")).ok().and_then(|bytes| {
-        bytes.split(|byte| *byte == 0).find_map(|part| part.strip_prefix(b"TMUX=")
-            .and_then(|value| String::from_utf8(value.to_vec()).ok())).map(|value| value.split(',').next().unwrap_or_default().to_owned())
-    });
+    let socket = fs::read(proc_root.join(pid.to_string()).join("environ"))
+        .ok()
+        .and_then(|bytes| {
+            bytes
+                .split(|byte| *byte == 0)
+                .find_map(|part| {
+                    part.strip_prefix(b"TMUX=")
+                        .and_then(|value| String::from_utf8(value.to_vec()).ok())
+                })
+                .map(|value| value.split(',').next().unwrap_or_default().to_owned())
+        });
     let result = if let Some(socket) = socket {
-        let query = |args: &[&str]| std::process::Command::new("timeout").args(["1", "tmux", "-S", &socket]).args(args)
-            .output().ok().filter(|output| output.status.success()).map(|output| String::from_utf8_lossy(&output.stdout).into_owned()).unwrap_or_default();
+        let query = |args: &[&str]| {
+            std::process::Command::new("timeout")
+                .args(["1", "tmux", "-S", &socket])
+                .args(args)
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default()
+        };
         let panes = query(&["list-panes", "-a", "-F", "#{pane_pid}\t#{session_id}"]);
-        let session = panes.lines().filter_map(|line| line.split_once('\t'))
-            .find(|(pane,_)| pane.parse::<u32>().is_ok_and(|pid| parents.contains(&pid))).map(|(_,session)| session.to_owned());
+        let session = panes
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .find(|(pane, _)| pane.parse::<u32>().is_ok_and(|pid| parents.contains(&pid)))
+            .map(|(_, session)| session.to_owned());
         let clients = query(&["list-clients", "-F", "#{session_id}\t#{client_pid}"]);
-        clients.lines().filter_map(|line| line.split_once('\t')).filter(|(candidate,_)| session.as_deref() == Some(candidate))
-            .filter_map(|(_,pid)| pid.parse::<u32>().ok()).flat_map(|pid| ancestors(proc_root, pid)).collect()
-    } else { parents.to_vec() };
+        clients
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .filter(|(candidate, _)| session.as_deref() == Some(candidate))
+            .filter_map(|(_, pid)| pid.parse::<u32>().ok())
+            .flat_map(|pid| ancestors(proc_root, pid))
+            .collect()
+    } else {
+        parents.to_vec()
+    };
     println!("{result:?}");
     result
+}
+
+/// Resolve the native speech engine without depending on ACC launch wrappers.
+/// Parameters: none.
+/// Returns: the per-user agent-tts command path.
+fn default_tts_command() -> PathBuf {
+    println!("parameters=none");
+    let result =
+        PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/bin/agent-tts");
+    println!("{result:?}");
+    result
+}
+
+/// Accept only fresh, one-based workspace identities from the Shell handoff.
+/// Parameters: id - job identity; placements - current Shell placement document.
+/// Returns: workspace number or zero when unavailable, stale or ambiguous.
+fn fresh_workspace(id: &str, placements: &Value) -> u64 {
+    println!("id={id} placements={placements}");
+    let age = timestamp(&placements["updated_at"])
+        .map(|at| chrono::Utc::now().timestamp_millis() as f64 / 1000.0 - at);
+    let result = if age.is_some_and(|age| (0.0..15.0).contains(&age)) {
+        placements["jobs"][id].as_u64().unwrap_or(0)
+    } else {
+        0
+    };
+    println!("{result}");
+    result
+}
+
+/// Check whether the optional installed speech engine exists.
+/// Parameters: command - speech executable path.
+/// Returns: whether the file can be submitted to the process launcher.
+fn available_engine(command: &Path) -> bool {
+    println!("command={command:?}");
+    let result = command.is_file();
+    println!("{result}");
+    result
+}
+
+/// Queue the native finish announcement without blocking Harbor polling.
+/// Parameters: command - speech engine; workspace - resolved one-based workspace or zero.
+/// Returns: whether the announcement process was launched.
+fn queue_completion(command: &Path, workspace: u64) -> bool {
+    println!("command={command:?} workspace={workspace}");
+    let location = if workspace > 0 {
+        format!("workspace {workspace}")
+    } else {
+        "an unknown workspace".to_owned()
+    };
+    let message = format!("Harbor run on {location} is done.");
+    let result = match std::process::Command::new(command)
+        .args([
+            "announce",
+            "--event",
+            "finish",
+            "--completion-message",
+            &message,
+            "--voice",
+            "af_nicole",
+        ])
+        .env("ATTS_ANNOUNCE_WORKSPACE", "0")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            true
+        }
+        Err(error) => {
+            eprintln!("Harbor completion announcement could not start: {error}");
+            false
+        }
+    };
+    println!("{result}");
+    result
+}
+
+/// Persist once-only completion claims and suppress old jobs at initial discovery.
+/// Parameters: jobs - current measured job states; state_dir - observer state; tts_command - optional speech executable.
+/// Returns: ledger persistence success or error.
+fn announce_jobs(jobs: &[Value], state_dir: &Path, tts_command: &Path) -> std::io::Result<()> {
+    println!("jobs={jobs:?} state_dir={state_dir:?} tts_command={tts_command:?}");
+    let placements = read_object(&state_dir.join("placements.json"));
+    let mut ledger = read_object(&state_dir.join("announcements.json"));
+    if !ledger.is_object() {
+        ledger = json!({});
+    }
+    for job in jobs {
+        let Some(id) = job["id"].as_str() else {
+            continue;
+        };
+        let previous = ledger[id].clone();
+        if job["status"] == "running" {
+            ledger[id] = json!({"armed": true, "announced": previous["announced"]});
+        } else if job["status"] == "complete" {
+            if previous["armed"] == true
+                && previous["announced"] != job["finished_at"]
+                && available_engine(tts_command)
+            {
+                // Claim before dispatch: restarting the service cannot replay an enqueued finish.
+                ledger[id] = json!({"armed": false, "announced": job["finished_at"]});
+                write_object(&state_dir.join("announcements.json"), &ledger)?;
+                if !queue_completion(tts_command, fresh_workspace(id, &placements)) {
+                    ledger[id] = previous;
+                }
+            } else if previous.is_null() {
+                ledger[id] = json!({"armed": false, "announced": job["finished_at"]});
+            }
+        }
+    }
+    write_object(&state_dir.join("announcements.json"), &ledger)?;
+    println!("Ok(())");
+    Ok(())
+}
+
+/// Require sole ownership of the observer state before publishing or claiming speech.
+/// Parameters: state_dir - watcher-owned state directory.
+/// Returns: a held advisory-lock file, or an error while another observer owns it.
+fn require_observer_lock(state_dir: &Path) -> std::io::Result<fs::File> {
+    println!("state_dir={state_dir:?}");
+    fs::create_dir_all(state_dir)?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(state_dir.join("observer.lock"))?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "another Harbor observer already owns this state directory",
+        ));
+    }
+    println!("{file:?}");
+    Ok(file)
 }
