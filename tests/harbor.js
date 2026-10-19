@@ -27,6 +27,8 @@ const box = new Actor();
 const job = {id: 'demo', name: 'demo', status: 'running', completed: 1, total: 4, fraction: 0.25, owner_pids: [42]};
 api.renderHarborJobs(box, [job], [{pid: 42, workspace: 5}]);
 const group = box.children[0];
+if (!group.y_expand || group.y_align !== Clutter.ActorAlign.FILL)
+    throw Error('Harbor workspace group must allocate full panel height for three distinct rows');
 const cell = group.children[1];
 const [count, bar, eta] = cell.children;
 if (!box.visible || count.text !== '1/4' || !count.style.includes('#f472b6') || count.y_align !== Clutter.ActorAlign.START)
