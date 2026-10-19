@@ -492,3 +492,51 @@ fn generated_job_discovery() {
         .all(|row| row["id"] != expected[0].0.to_str().unwrap()));
     println!("None");
 }
+
+/// Keep optional Harbor provider credentials out of observer traces and state.
+/// Parameters: none.
+/// Returns: None after canary exclusion and retained estimate checks pass.
+#[test]
+fn private_config_fields() {
+    println!("parameters=none");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let path = job(
+        root,
+        "private",
+        json!({"started_at": "2026-10-20T00:00:00Z", "finished_at": null,
+        "n_total_trials": 4, "stats": {"n_completed_trials": 1}}),
+    );
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(path.join("config.json")).unwrap()).unwrap();
+    let canary = "harbor-credential-canary-12345";
+    config["agents"] = json!([{"model_name": "demo", "kwargs": {"api_key": canary, "reasoning_effort": "low"}, "env": {"API_KEY": canary}}]);
+    config["environment"] = json!({"type": "docker", "env": {"TOKEN": canary}});
+    fs::write(path.join("config.json"), config.to_string()).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_harbor-taskbar"))
+        .arg("--once")
+        .arg("--jobs-dir")
+        .arg(root.join("jobs"))
+        .arg("--state-dir")
+        .arg(root.join("state"))
+        .arg("--proc-root")
+        .arg(root.join("proc"))
+        .arg("--tts-command")
+        .arg(root.join("no-engine"))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains(canary),
+        "provider fields leaked in CLI tracing"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(canary));
+    for entry in fs::read_dir(root.join("state")).unwrap().flatten() {
+        assert!(
+            !fs::read_to_string(entry.path()).unwrap().contains(canary),
+            "{:?}",
+            entry.path()
+        );
+    }
+    println!("None");
+}
