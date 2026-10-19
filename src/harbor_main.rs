@@ -62,10 +62,20 @@ fn read_object(path: &Path) -> Value {
         .unwrap_or(Value::Null);
     let result = if path.file_name().is_some_and(|name| name == "config.json") && raw.is_object() {
         json!({"job_name": raw["job_name"], "n_concurrent_trials": raw["n_concurrent_trials"],
-            "signature": workload_signature(&raw)})
+            "signature": workload_signature(&raw), "quiet": raw["quiet"]})
     } else {
         raw
     };
+    println!("{result}");
+    result
+}
+
+/// Accept runs whose persisted Harbor configuration allows desktop status and speech.
+/// Parameters: config - normalized public Harbor configuration.
+/// Returns: whether the run can enter the taskbar and announcement snapshot.
+fn desktop_run(config: &Value) -> bool {
+    println!("config={config}");
+    let result = config["quiet"] != true;
     println!("{result}");
     result
 }
@@ -190,7 +200,7 @@ fn poll(
                 }
             }
             row["estimate"] = estimate_job(&path, &row, &config, &data, &history);
-            if current_job(&row, &metadata) {
+            if desktop_run(&config) && current_job(&row, &metadata) {
                 jobs.push(row);
             }
         }

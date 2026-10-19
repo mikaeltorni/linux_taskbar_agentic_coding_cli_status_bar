@@ -632,3 +632,66 @@ fn adaptive_estimates() {
     assert!(current["estimate"].is_null());
     println!("None");
 }
+
+/// Hide explicitly quiet jobs through live progress, restart and completion without speech.
+/// Parameters: none.
+/// Returns: None after quiet jobs stay absent and ordinary jobs remain visible.
+#[test]
+fn quiet_runs() {
+    println!("parameters=none");
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let engine = root.join("agent-tts");
+    fs::write(
+        &engine,
+        "#!/bin/sh\necho called >> \"$(dirname \"$0\")/tts-calls\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
+    let extra = ["--tts-command", engine.to_str().unwrap()];
+    let mut data = json!({"started_at": chrono::Utc::now().to_rfc3339(), "finished_at": null,
+        "n_total_trials": 4, "stats": {"n_completed_trials": 1}});
+    let hidden = job(root, "hidden", data.clone());
+    let normal = job(root, "normal", data.clone());
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(hidden.join("config.json")).unwrap()).unwrap();
+    config["quiet"] = json!(true);
+    fs::write(hidden.join("config.json"), config.to_string()).unwrap();
+    // An artifact-only quiet run must stay hidden even without a discovered process.
+    assert_eq!(poll(root, &extra)["jobs"].as_array().unwrap().len(), 1);
+    let process = root.join("proc/123");
+    fs::create_dir_all(&process).unwrap();
+    symlink(root, process.join("cwd")).unwrap();
+    fs::write(process.join("stat"), "123 (harbor) S 1").unwrap();
+    fs::write(
+        process.join("cmdline"),
+        b"harbor\0jobs\0resume\0--job-path\0"
+            .iter()
+            .copied()
+            .chain(hidden.to_str().unwrap().bytes())
+            .chain([0])
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let snapshot = poll(root, &extra);
+        assert_eq!(snapshot["jobs"].as_array().unwrap().len(), 1);
+        assert_eq!(snapshot["jobs"][0]["id"], normal.to_str().unwrap());
+    }
+    data["finished_at"] = json!(chrono::Utc::now().to_rfc3339());
+    data["stats"]["n_completed_trials"] = json!(4);
+    fs::write(hidden.join("result.json"), data.to_string()).unwrap();
+    fs::remove_dir_all(process).unwrap();
+    for _ in 0..2 {
+        let snapshot = poll(root, &extra);
+        assert_eq!(snapshot["jobs"].as_array().unwrap().len(), 1);
+        assert_eq!(snapshot["jobs"][0]["id"], normal.to_str().unwrap());
+    }
+    assert!(!root.join("tts-calls").exists());
+    let ledger: Value =
+        serde_json::from_str(&fs::read_to_string(root.join("state/announcements.json")).unwrap())
+            .unwrap();
+    assert!(ledger[hidden.to_str().unwrap()].is_null());
+    println!("None");
+}
