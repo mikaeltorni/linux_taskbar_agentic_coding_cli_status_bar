@@ -7,9 +7,11 @@ use serde_json::{json, Value};
 /// Returns: the independently published taskbar snapshot.
 fn poll(root: &Path, extra: &[&str]) -> Value {
     println!("root={root:?} extra={extra:?}");
-    let output = Command::new(env!("CARGO_BIN_EXE_harbor-taskbar"))
-        .args(["--once", "--jobs-dir"]).arg(root.join("jobs"))
-        .arg("--state-dir").arg(root.join("state")).args(extra).output().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_harbor-taskbar"));
+    command.args(["--once", "--jobs-dir"]).arg(root.join("jobs"))
+        .arg("--state-dir").arg(root.join("state"));
+    if !extra.contains(&"--proc-root") { command.arg("--proc-root").arg(root.join("proc")); }
+    let output = command.args(extra).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let result = serde_json::from_str(&fs::read_to_string(root.join("state/status.json")).unwrap()).unwrap();
     println!("{result}");
@@ -65,5 +67,52 @@ fn taskbar_rendering() {
     let root = env!("CARGO_MANIFEST_DIR");
     let output = Command::new("gjs").args(["tests/harbor.js", root]).current_dir(root).output().unwrap();
     assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    println!("None");
+}
+
+/// Detect externally launched Harbor jobs and retain their status across observer restarts.
+/// Parameters: none.
+/// Returns: None after discovery and process-disappearance assertions pass.
+#[test]
+fn independent_discovery() {
+    println!("parameters=none");
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let data = json!({"started_at": "2026-10-20T00:00:00Z", "finished_at": null,
+        "n_total_trials": 4, "stats": {"n_completed_trials": 1}});
+    let path = job(root, "external", data);
+    fs::rename(root.join("jobs"), root.join("elsewhere")).unwrap();
+    let external = root.join("elsewhere/external");
+    let proc_root = root.join("proc");
+    let process = proc_root.join("123");
+    fs::create_dir_all(&process).unwrap();
+    symlink(root, process.join("cwd")).unwrap();
+    fs::write(process.join("stat"), "123 (harbor) S 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 998").unwrap();
+    // Python-script and native invocation; equals flags and relative output paths.
+    for args in [
+        vec!["/venv/python", "/bin/harbor", "run", "--jobs-dir=elsewhere", "--job-name=external"],
+        vec!["harbor", "jobs", "start", "-o", "elsewhere", "--job-name", "external"],
+    ] {
+        fs::write(process.join("cmdline"), args.join("\0") + "\0").unwrap();
+        let rows = poll(root, &["--proc-root", proc_root.to_str().unwrap()]);
+        assert_eq!(rows["jobs"].as_array().unwrap().len(), 1, "{args:?}");
+        assert_eq!(rows["jobs"][0]["id"], external.to_str().unwrap());
+        assert_eq!(rows["jobs"][0]["pid"], 123);
+        assert_eq!(rows["jobs"][0]["status"], "running");
+    }
+    // Configuration-only launch, with an arbitrary jobs directory in YAML.
+    fs::write(root.join("run.yaml"), "job_name: external\njobs_dir: elsewhere\n").unwrap();
+    fs::write(process.join("cmdline"), b"harbor\0run\0-c\0run.yaml\0").unwrap();
+    assert_eq!(poll(root, &["--proc-root", proc_root.to_str().unwrap()])["jobs"][0]["status"], "running");
+    fs::remove_dir_all(&process).unwrap();
+    assert_eq!(poll(root, &["--proc-root", proc_root.to_str().unwrap()])["jobs"][0]["status"], "interrupted");
+    // A shell command containing the word harbor must never register as a run.
+    fs::create_dir_all(&process).unwrap();
+    symlink(root, process.join("cwd")).unwrap();
+    fs::write(process.join("cmdline"), b"bash\0-c\0harbor run --job-name fake\0").unwrap();
+    let rows = poll(root, &["--proc-root", proc_root.to_str().unwrap()]);
+    assert_eq!(rows["jobs"].as_array().unwrap().len(), 1);
+    assert!(!path.exists());
     println!("None");
 }
