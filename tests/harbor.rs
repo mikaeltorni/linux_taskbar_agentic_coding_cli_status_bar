@@ -695,3 +695,118 @@ fn quiet_runs() {
     assert!(ledger[hidden.to_str().unwrap()].is_null());
     println!("None");
 }
+
+/// Save a process fixture with realistic parent identity and raw argv.
+/// Parameters: root - sandbox; pid - process id; parent - parent id; args - argv; cwd - working directory.
+/// Returns: process directory.
+fn process_fixture(
+    root: &Path,
+    pid: u32,
+    parent: u32,
+    args: &[&str],
+    cwd: &Path,
+) -> std::path::PathBuf {
+    println!("root={root:?} pid={pid} parent={parent} args={args:?} cwd={cwd:?}");
+    use std::os::unix::fs::symlink;
+    let path = root.join("proc").join(pid.to_string());
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join("stat"), format!("{pid} (process) S {parent}")).unwrap();
+    fs::write(path.join("cmdline"), args.join("\0") + "\0").unwrap();
+    symlink(cwd, path.join("cwd")).unwrap();
+    println!("{path:?}");
+    path
+}
+
+/// Suppress agent descendants by default and retain that origin after reparenting or restart.
+/// Parameters: none.
+/// Returns: None after agent runs stay silent and ordinary terminal launches announce normally.
+#[test]
+fn agent_origin() {
+    println!("parameters=none");
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let mut data = json!({"started_at": chrono::Utc::now().to_rfc3339(), "finished_at": null,
+        "n_total_trials": 4, "stats": {"n_completed_trials": 1}});
+    let automatic = job(root, "automatic", data.clone());
+    let manual = job(root, "manual", data.clone());
+    let engine = root.join("agent-tts");
+    fs::write(
+        &engine,
+        "#!/bin/sh\necho called >> \"$(dirname \"$0\")/tts-calls\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
+    let extra = ["--tts-command", engine.to_str().unwrap()];
+    process_fixture(
+        root,
+        501,
+        500,
+        &["harbor", "run", "--job-name", "automatic"],
+        root,
+    );
+    process_fixture(root, 500, 499, &["bash", "run_benchmark.sh"], root);
+    let agent = process_fixture(root, 499, 1, &["/opt/codex", "--yolo"], root);
+    process_fixture(
+        root,
+        601,
+        600,
+        &["harbor", "run", "--job-name", "manual"],
+        root,
+    );
+    // Mentioning an agent as shell data must not turn this manual terminal into an agent.
+    process_fixture(root, 600, 1, &["bash", "-c", "echo codex"], root);
+    let snapshot = poll(root, &extra);
+    assert_eq!(snapshot["jobs"].as_array().unwrap().len(), 1, "{snapshot}");
+    assert_eq!(snapshot["jobs"][0]["id"], manual.to_str().unwrap());
+    fs::remove_dir_all(agent).unwrap();
+    fs::write(root.join("proc/501/stat"), "501 (harbor) S 1").unwrap();
+    assert_eq!(poll(root, &extra)["jobs"].as_array().unwrap().len(), 1);
+    data["finished_at"] = json!(chrono::Utc::now().to_rfc3339());
+    data["stats"]["n_completed_trials"] = json!(4);
+    fs::write(automatic.join("result.json"), data.to_string()).unwrap();
+    fs::remove_dir_all(root.join("proc/501")).unwrap();
+    assert_eq!(poll(root, &extra)["jobs"].as_array().unwrap().len(), 1);
+    assert!(!root.join("tts-calls").exists());
+    fs::write(manual.join("result.json"), data.to_string()).unwrap();
+    poll(root, &extra);
+    assert_eq!(speech_calls(root, "called").matches("called").count(), 1);
+    println!("None");
+}
+
+/// Recognize supported native agent executables and Node CLI entrypoints without arbitrary token matching.
+/// Parameters: none.
+/// Returns: None after all agent ancestries are omitted and innocuous script names remain visible.
+#[test]
+fn agent_runtime_variants() {
+    println!("parameters=none");
+    for (args, hidden) in [
+        (vec!["claude", "--print"], true),
+        (vec!["grok"], true),
+        (vec!["qwen"], true),
+        (vec!["opencode", "run"], true),
+        (vec!["cline"], true),
+        (vec!["node", "/opt/@anthropic-ai/claude-code/cli.js"], true),
+        (vec!["node", "/opt/@openai/codex/bin/codex.js"], true),
+        (vec!["node", "/opt/@qwen-code/qwen-code/dist/cli.js"], true),
+        (vec!["python3", "codex-report.py"], false),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        job(
+            root,
+            "run",
+            json!({"started_at": chrono::Utc::now().to_rfc3339(), "finished_at": null,
+            "n_total_trials": 4, "stats": {"n_completed_trials": 1}}),
+        );
+        process_fixture(root, 100, 99, &["harbor", "run", "--job-name", "run"], root);
+        process_fixture(root, 99, 1, &args, root);
+        let snapshot = poll(root, &[]);
+        assert_eq!(
+            snapshot["jobs"].as_array().unwrap().is_empty(),
+            hidden,
+            "{args:?}: {snapshot}"
+        );
+    }
+    println!("None");
+}
