@@ -102,15 +102,15 @@ export function attachHarborStatus(owner) {
     return result;
 }
 
-/** Format a historical estimate without inventing a countdown when history is missing.
- * Parameters: job - normalized Harbor run and historical estimate.
- * Returns: approximate remaining minutes, overdue, unknown, or terminal status.
+/** Format the observer's adaptive forecast with a provisional minute during snapshot transitions.
+ * Parameters: job - normalized Harbor run and adaptive estimate.
+ * Returns: approximate positive remaining minutes or terminal status.
  */
 export const formatHarborEstimate = (job) => {
-    let result = job.status === 'running' ? '~?' : job.status;
     const seconds = job.estimate?.remaining_seconds;
-    if (job.status === 'running' && Number.isFinite(seconds))
-        result = seconds > 0 ? `~${Math.max(1, Math.ceil(seconds / 60))}m` : '~overdue';
+    const remaining = Number.isFinite(seconds) ? seconds : 60;
+    const result = job.status === 'running'
+        ? `~${Math.max(1, Math.ceil(remaining / 60))}m` : job.status;
     return result;
 };
 

@@ -23,9 +23,17 @@ if (api.workspaceForHarbor(job, [{pid: 42, workspace: 3}, {pid: 42, workspace: 5
 if (api.harborPanelEntries([], windows).length !== 0)
     throw Error('No Harbor jobs must leave no panel entries');
 if (api.formatHarborEstimate({status: 'running', estimate: {remaining_seconds: 301}}) !== '~6m' ||
-    api.formatHarborEstimate({status: 'running', estimate: {remaining_seconds: 0}}) !== '~overdue' ||
-    api.formatHarborEstimate({status: 'running'}) !== '~?')
-    throw Error('Forecasts must preserve approximate, overdue and unknown states');
+    api.formatHarborEstimate({status: 'running', estimate: {remaining_seconds: 0}}) !== '~1m' ||
+    api.formatHarborEstimate({status: 'running'}) !== '~1m')
+    throw Error('Forecasts must show approximate minutes without overdue text');
+for (const seconds of [-30, NaN, Infinity, null]) {
+    if (api.formatHarborEstimate({status: 'running', estimate: {remaining_seconds: seconds}}) !== '~1m')
+        throw Error(`Forecast must remain a positive provisional estimate for ${seconds}`);
+}
+for (const status of ['complete', 'interrupted']) {
+    if (api.formatHarborEstimate({status}) !== status)
+        throw Error(`Terminal state must remain ${status}`);
+}
 let placement;
 api.publishHarborPlacements({replace_contents: bytes => { placement = JSON.parse(new TextDecoder().decode(bytes)); }},
     [job], [{pid: 42, workspace: 7}]);

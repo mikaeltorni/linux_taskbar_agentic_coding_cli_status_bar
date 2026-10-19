@@ -605,16 +605,11 @@ fn load_history(roots: &[PathBuf], state_dir: &Path) -> std::io::Result<Vec<Valu
     Ok(samples)
 }
 
-/// Forecast a running job using the median of comparable completed runs.
+/// Forecast a running job from comparable history and its observed completion pace.
 /// Parameters: path - current job identity; row - normalized job state; config - parsed configuration; data - parsed result; history - completed samples.
-/// Returns: total/remaining seconds and sample count, or null when no estimate is supported.
+/// Returns: positive remaining seconds, projected total and historical sample count for running jobs; null for terminal jobs.
 fn estimate_job(path: &str, row: &Value, config: &Value, data: &Value, history: &[Value]) -> Value {
-    println!(
-        "path={path} row={row} job_name={} total={} history_count={}",
-        config["job_name"],
-        data["n_total_trials"],
-        history.len()
-    );
+    println!("path={path} row={row} config={config} data={data} history={history:?}");
     let signature = config["signature"].clone();
     let mut samples: Vec<f64> = history
         .iter()
@@ -624,25 +619,35 @@ fn estimate_job(path: &str, row: &Value, config: &Value, data: &Value, history: 
         .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
         .collect();
     samples.sort_by(f64::total_cmp);
-    let result = if row["status"] == "running" && !samples.is_empty() {
-        match (
-            concurrency_waves(config, data),
-            timestamp(&data["started_at"]),
-        ) {
-            (Some(waves), Some(start)) => {
-                let middle = samples.len() / 2;
-                let median = if samples.len() % 2 == 0 {
-                    (samples[middle - 1] + samples[middle]) / 2.0
-                } else {
-                    samples[middle]
-                };
-                let total = median * waves;
-                let elapsed =
-                    (chrono::Utc::now().timestamp_millis() as f64 / 1000.0 - start).max(0.0);
-                json!({"total_seconds": total, "remaining_seconds": (total - elapsed).max(0.0), "samples": samples.len()})
-            }
-            _ => Value::Null,
-        }
+    let result = if row["status"] == "running" {
+        let elapsed = timestamp(&data["started_at"])
+            .map(|start| (chrono::Utc::now().timestamp_millis() as f64 / 1000.0 - start).max(0.0))
+            .unwrap_or(0.0);
+        let waves = concurrency_waves(config, data).unwrap_or(1.0);
+        let median = if samples.is_empty() {
+            None
+        } else {
+            let middle = samples.len() / 2;
+            Some(if samples.len() % 2 == 0 {
+                (samples[middle - 1] + samples[middle]) / 2.0
+            } else {
+                samples[middle]
+            })
+        };
+        let historical_total = median.map(|seconds| seconds * waves).unwrap_or(0.0);
+        let total = match trial_counts(data) {
+            // Extrapolate wall-clock throughput; it already includes concurrent execution.
+            Some((completed, total)) if completed > 0 && completed < total => historical_total
+                .max(elapsed * total as f64 / completed as f64)
+                .max(elapsed + 1.0),
+            // All instances finished, but Harbor is still publishing its final job result.
+            Some((completed, total)) if completed == total => elapsed + 1.0,
+            _ if historical_total > elapsed => historical_total,
+            // No completed instances yet: the first wave is taking at least this long.
+            // Use a provisional minute per wave at startup until evidence replaces it.
+            _ => elapsed + elapsed.max(median.unwrap_or(60.0)) * waves,
+        };
+        json!({"total_seconds": total, "remaining_seconds": total - elapsed, "samples": samples.len()})
     } else {
         Value::Null
     };

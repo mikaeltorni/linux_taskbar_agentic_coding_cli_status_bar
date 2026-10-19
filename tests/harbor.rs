@@ -186,7 +186,7 @@ fn independent_discovery() {
 
 /// Estimate a current run using independently timed, matching historical jobs.
 /// Parameters: none.
-/// Returns: None after historical estimate and unknown-history checks pass.
+/// Returns: None after historical forecast and live fallback checks pass.
 #[test]
 fn historical_estimates() {
     println!("parameters=none");
@@ -255,7 +255,9 @@ fn historical_estimates() {
         .iter()
         .find(|row| row["name"] == "current")
         .unwrap();
-    assert!(current["estimate"].is_null());
+    assert_eq!(current["estimate"]["samples"], 0);
+    let remaining = current["estimate"]["remaining_seconds"].as_f64().unwrap();
+    assert!((420.0..=490.0).contains(&remaining), "{remaining}");
     println!("None");
 }
 
@@ -540,5 +542,93 @@ fn private_config_fields() {
             entry.path()
         );
     }
+    println!("None");
+}
+
+/// Keep publishing useful forecasts beyond history and before usable progress.
+/// Parameters: none.
+/// Returns: None after adaptive, startup, finalization and terminal checks pass.
+#[test]
+fn adaptive_estimates() {
+    println!("parameters=none");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    job(
+        root,
+        "short-history",
+        json!({"started_at": "2026-10-19T00:00:00Z",
+        "finished_at": "2026-10-19T00:01:00Z", "n_total_trials": 4,
+        "stats": {"n_completed_trials": 4}}),
+    );
+    let mut data = json!({"started_at": (chrono::Utc::now() - chrono::Duration::seconds(600)).to_rfc3339(),
+        "finished_at": null, "n_total_trials": 4, "stats": {"n_completed_trials": 2}});
+    let path = job(root, "current", data.clone());
+    let snapshot = poll(root, &[]);
+    let current = snapshot["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "current")
+        .unwrap();
+    let estimate = &current["estimate"];
+    assert_eq!(estimate["samples"], 1);
+    let remaining = estimate["remaining_seconds"].as_f64().unwrap();
+    assert!((600.0..=610.0).contains(&remaining), "{estimate}");
+    // More observed completions revise the same run's remaining estimate.
+    data["stats"]["n_completed_trials"] = json!(3);
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    let snapshot = poll(root, &[]);
+    let current = snapshot["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "current")
+        .unwrap();
+    let remaining = current["estimate"]["remaining_seconds"].as_f64().unwrap();
+    assert!((200.0..=205.0).contains(&remaining), "{current}");
+    // No history and no completed trials still gets a provisional positive forecast.
+    let config =
+        json!({"job_name": "current", "tasks": [{"path": "new-task"}], "n_concurrent_trials": 2});
+    fs::write(path.join("config.json"), config.to_string()).unwrap();
+    for completed in [0, 4] {
+        data["stats"]["n_completed_trials"] = json!(completed);
+        fs::write(path.join("result.json"), data.to_string()).unwrap();
+        let snapshot = poll(root, &[]);
+        let current = snapshot["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == "current")
+            .unwrap();
+        assert_eq!(current["estimate"]["samples"], 0);
+        let remaining = current["estimate"]["remaining_seconds"].as_f64().unwrap();
+        assert!(remaining.is_finite() && remaining > 0.0, "{current}");
+    }
+    data["started_at"] = json!(chrono::Utc::now().to_rfc3339());
+    data["stats"]["n_completed_trials"] = json!(0);
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    let snapshot = poll(root, &[]);
+    let current = snapshot["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "current")
+        .unwrap();
+    assert!(
+        current["estimate"]["remaining_seconds"].as_f64().unwrap() >= 120.0,
+        "{current}"
+    );
+    data["finished_at"] = json!(chrono::Utc::now().to_rfc3339());
+    data["stats"]["n_completed_trials"] = json!(4);
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    let snapshot = poll(root, &[]);
+    let current = snapshot["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "current")
+        .unwrap();
+    assert_eq!(current["status"], "complete");
+    assert!(current["estimate"].is_null());
     println!("None");
 }
