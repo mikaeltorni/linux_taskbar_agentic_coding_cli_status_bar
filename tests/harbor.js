@@ -30,6 +30,7 @@ const group = box.children[0];
 if (!group.y_expand || group.y_align !== Clutter.ActorAlign.FILL)
     throw Error('Harbor workspace group must allocate full panel height for three distinct rows');
 const cell = group.children[1];
+if (cell.vertical !== true) throw Error('Three Harbor rows must use sequential vertical allocation');
 const [count, bar, eta] = cell.children;
 if (!count.y_expand || !eta.y_expand)
     throw Error('Bin-layout labels must expand vertically for START/END to take effect');

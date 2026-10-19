@@ -37,12 +37,12 @@ export const renderHarborJobs = (box, jobs, windows = []) => {
             const group = new St.BoxLayout({style: 'spacing: 3px; margin-left: 4px;',
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
             const workspace = new St.Label({style: 'color: #f472b6; font-size: 10px;', y_align: Clutter.ActorAlign.CENTER});
-            const cell = new St.Widget({layout_manager: new Clutter.BinLayout(), width: 64, height: 32,
+            const cell = new St.BoxLayout({vertical: true, width: 64, height: 32,
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
             const count = new St.Label({style: 'color: #f472b6; font-size: 11px;',
                 x_expand: true, y_expand: true,
                 x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.START});
-            const bar = new St.DrawingArea({width: 60, height: 8,
+            const bar = new St.DrawingArea({width: 60, height: 6,
                 x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER});
             const estimate = new St.Label({style: 'color: #c0bfbc; font-size: 10px;',
                 x_expand: true, y_expand: true,
