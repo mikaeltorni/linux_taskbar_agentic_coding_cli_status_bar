@@ -598,10 +598,21 @@ runs with the same task set, agent models/reasoning effort and environment type.
 The observer scans known job roots and live Harbor working directories for
 history, bounded to five directory levels and 20,000 directory visits, caches
 up to 1,000 samples for 60 seconds, and scales the estimate by the current
-trial/concurrency wave count. `~?` means no comparable history; `~overdue` means
-the run has exceeded its historical estimate. Forecasts are approximate and do
-not increase the measured progress fill. Harbor's naive timestamps are read in
-the machine's local timezone.
+trial/concurrency wave count. As instances finish, elapsed wall time per
+completed instance also projects the remaining work; the estimate uses the
+larger of that projection and the historical countdown, so slow runs keep a
+positive forecast after exceeding history. Without history, the live completion
+pace supplies the forecast. Before the first completion, the observer uses
+history when available, otherwise a provisional minute per concurrency wave,
+increasing that duration if the first wave takes longer. While Harbor finalizes
+its result, the display stays at `~1m` until the terminal status arrives. A
+briefly missing estimate also displays a provisional `~1m`.
+
+The bar always shows approximate remaining minutes for running jobs rather
+than an overdue label. Early forecasts and runs with slow final instances can
+be inaccurate; the observer recalculates every poll. Forecasts never increase
+the measured progress fill. Harbor's naive timestamps are read in the machine's
+local timezone.
 
 A run observed running and then fully completed queues one announcement:
 **“Harbor run on workspace 2 is done.”** Harbor uses the distinct female Kokoro
