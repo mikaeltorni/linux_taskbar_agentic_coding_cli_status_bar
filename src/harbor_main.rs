@@ -50,16 +50,22 @@ fn default_state_dir() -> PathBuf {
     result
 }
 
-/// Read a JSON object while tolerating partial or absent artifact writes.
+/// Read JSON, normalizing Harbor configs before they can enter tracing.
 /// Parameters: path - artifact file.
-/// Returns: parsed object or null when unavailable.
+/// Returns: parsed state or normalized public job config, or null when unavailable.
 fn read_object(path: &Path) -> Value {
     println!("path={path:?}");
-    let result = fs::read(path)
+    let raw = fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .filter(Value::is_object)
         .unwrap_or(Value::Null);
+    let result = if path.file_name().is_some_and(|name| name == "config.json") && raw.is_object() {
+        json!({"job_name": raw["job_name"], "n_concurrent_trials": raw["n_concurrent_trials"],
+            "signature": workload_signature(&raw)})
+    } else {
+        raw
+    };
     println!("{result}");
     result
 }
@@ -543,7 +549,7 @@ fn scan_history(root: &Path, depth: u8, budget: &mut usize, samples: &mut Vec<Va
         if let Some((_, config, data)) = read_job(root) {
             if let Some(seconds) = completed_sample(&config, &data) {
                 samples.push(json!({"path": root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-                    "signature": workload_signature(&config), "seconds_per_wave": seconds, "finished_at": data["finished_at"]}));
+                    "signature": config["signature"], "seconds_per_wave": seconds, "finished_at": data["finished_at"]}));
             }
         }
     } else if depth > 0 {
@@ -609,7 +615,7 @@ fn estimate_job(path: &str, row: &Value, config: &Value, data: &Value, history: 
         data["n_total_trials"],
         history.len()
     );
-    let signature = workload_signature(config);
+    let signature = config["signature"].clone();
     let mut samples: Vec<f64> = history
         .iter()
         .filter(|sample| sample["path"] != path && sample["signature"] == signature)
