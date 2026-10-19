@@ -142,6 +142,11 @@ fn poll(
     for (path, metadata) in &live {
         watched.insert(path.clone(), metadata.clone());
     }
+    for metadata in watched.values_mut() {
+        if metadata["last_seen_at"].is_null() {
+            metadata["last_seen_at"] = json!(chrono::Utc::now().to_rfc3339());
+        }
+    }
     let mut paths: BTreeMap<String, Value> = watched.clone();
     for root in jobs_dirs {
         if let Ok(entries) = fs::read_dir(root) {
@@ -179,9 +184,7 @@ fn poll(
                 }
             }
             row["estimate"] = estimate_job(&path, &row, &config, &data, &history);
-            let finished_age =
-                timestamp(&row["finished_at"]).map(|at| chrono::Utc::now().timestamp() as f64 - at);
-            if finished_age.is_none_or(|age| age < 300.0) {
+            if current_job(&row, &metadata) {
                 jobs.push(row);
             }
         }
@@ -356,7 +359,15 @@ fn discover_processes(proc_root: &Path) -> BTreeMap<String, Value> {
     println!("proc_root={proc_root:?}");
     let mut result = BTreeMap::new();
     if let Ok(entries) = fs::read_dir(proc_root) {
-        for entry in entries.flatten() {
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+                .unwrap_or(u32::MAX)
+        });
+        for entry in entries {
             let process = entry.path();
             let Some(pid) = entry
                 .file_name()
@@ -394,23 +405,14 @@ fn discover_processes(proc_root: &Path) -> BTreeMap<String, Value> {
                 continue;
             };
             let paths = exact.map(|path| vec![path]).unwrap_or_else(|| {
-                let mut candidates: Vec<_> = fs::read_dir(root)
+                process_start(proc_root, &process)
+                    .and_then(|started| select_generated_job(&root, started, &result))
                     .into_iter()
-                    .flatten()
-                    .flatten()
-                    .map(|entry| entry.path())
-                    .filter(|path| path.join("config.json").is_file())
-                    .collect();
-                candidates.sort_by_key(|path| {
-                    fs::metadata(path.join("config.json"))
-                        .and_then(|m| m.modified())
-                        .ok()
-                });
-                candidates.into_iter().rev().take(1).collect()
+                    .collect()
             });
             for path in paths {
                 if let Ok(canonical) = path.canonicalize() {
-                    result.insert(canonical.to_string_lossy().into_owned(), json!({"pid": pid, "owner_pids": terminal_owners(proc_root, pid, &ancestors(proc_root, pid)), "cwd": cwd}));
+                    result.insert(canonical.to_string_lossy().into_owned(), json!({"pid": pid, "owner_pids": terminal_owners(proc_root, pid, &ancestors(proc_root, pid)), "cwd": cwd, "last_seen_at": chrono::Utc::now().to_rfc3339()}));
                 }
             }
         }
@@ -430,6 +432,7 @@ fn timestamp(value: &Value) -> Option<f64> {
             .map(|date| date.timestamp_millis() as f64 / 1000.0)
             .or_else(|| {
                 chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f")
+                    .or_else(|_| chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d__%H-%M-%S"))
                     .ok()
                     .and_then(|date| chrono::Local.from_local_datetime(&date).single())
                     .map(|date| date.timestamp_millis() as f64 / 1000.0)
@@ -863,4 +866,98 @@ fn require_observer_lock(state_dir: &Path) -> std::io::Result<fs::File> {
     }
     println!("{file:?}");
     Ok(file)
+}
+
+/// Read a process's actual start clock from Linux boot time and scheduler ticks.
+/// Parameters: proc_root - process filesystem; process - pid directory.
+/// Returns: Unix process start seconds or None when unavailable.
+fn process_start(proc_root: &Path, process: &Path) -> Option<f64> {
+    println!("proc_root={proc_root:?} process={process:?}");
+    let result = (|| {
+        let system = fs::read_to_string(proc_root.join("stat")).ok()?;
+        let boot = system.lines().find_map(|line| {
+            line.strip_prefix("btime ")
+                .and_then(|value| value.parse::<f64>().ok())
+        })?;
+        let stat = fs::read_to_string(process.join("stat")).ok()?;
+        let start = stat
+            .rsplit_once(") ")?
+            .1
+            .split_whitespace()
+            .nth(19)?
+            .parse::<f64>()
+            .ok()?;
+        let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if ticks <= 0 {
+            return None;
+        }
+        Some(boot + start / ticks as f64)
+    })();
+    println!("{result:?}");
+    result
+}
+
+/// Accept artifact creation times compatible with the owning process lifetime.
+/// Parameters: created - generated job creation seconds; started - process start seconds.
+/// Returns: whether this job can belong to this live process.
+fn compatible_launch_time(created: f64, started: f64) -> bool {
+    println!("created={created} started={started}");
+    let result = created >= started - 2.0 && created <= chrono::Utc::now().timestamp() as f64 + 2.0;
+    println!("{result}");
+    result
+}
+
+/// Match an unnamed launch to its own generated job rather than the newest sibling.
+/// Parameters: root - job container; started - process creation time; assigned - already identified jobs.
+/// Returns: the closest compatible unassigned job directory, or None before artifact creation.
+fn select_generated_job(
+    root: &Path,
+    started: f64,
+    assigned: &BTreeMap<String, Value>,
+) -> Option<PathBuf> {
+    println!("root={root:?} started={started} assigned={assigned:?}");
+    let mut candidates = Vec::new();
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.join("config.json").is_file() {
+                continue;
+            }
+            let Ok(canonical) = path.canonicalize() else {
+                continue;
+            };
+            if assigned.contains_key(canonical.to_string_lossy().as_ref()) {
+                continue;
+            }
+            let data = read_object(&path.join("result.json"));
+            let created = timestamp(&json!(entry.file_name().to_string_lossy()))
+                .or_else(|| timestamp(&data["started_at"]));
+            if let Some(created) = created {
+                if compatible_launch_time(created, started) {
+                    candidates.push(((created - started).abs(), canonical));
+                }
+            }
+        }
+    }
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let result = candidates.into_iter().next().map(|(_, path)| path);
+    println!("{result:?}");
+    result
+}
+
+/// Keep active runs and a five-minute tail for finished or vanished owners.
+/// Parameters: row - normalized job state; metadata - last observed owner metadata.
+/// Returns: whether the taskbar should retain this job.
+fn current_job(row: &Value, metadata: &Value) -> bool {
+    println!("row={row} metadata={metadata}");
+    let ended = timestamp(&row["finished_at"]).or_else(|| {
+        if row["status"] == "interrupted" {
+            timestamp(&metadata["last_seen_at"])
+        } else {
+            None
+        }
+    });
+    let result = ended.is_none_or(|at| chrono::Utc::now().timestamp() as f64 - at < 300.0);
+    println!("{result}");
+    result
 }
