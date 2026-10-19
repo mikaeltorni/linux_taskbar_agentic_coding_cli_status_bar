@@ -34,9 +34,10 @@ export const renderHarborJobs = (box, jobs, windows = []) => {
         alive.add(job.id);
         let widgets = box._harborCells.get(job.id);
         if (!widgets) {
-            const group = new St.BoxLayout({style: 'spacing: 3px; margin-left: 4px;'});
+            const group = new St.BoxLayout({style: 'spacing: 3px; margin-left: 4px;',
+                y_expand: true, y_align: Clutter.ActorAlign.FILL});
             const workspace = new St.Label({style: 'color: #f472b6; font-size: 10px;', y_align: Clutter.ActorAlign.CENTER});
-            const cell = new St.Widget({layout_manager: new Clutter.BinLayout(), width: 64,
+            const cell = new St.Widget({layout_manager: new Clutter.BinLayout(), width: 64, height: 32,
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
             const count = new St.Label({style: 'color: #f472b6; font-size: 11px;',
                 x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.START});
@@ -121,7 +122,8 @@ export const workspaceForHarbor = (job, windows) => {
 export function attachHarborStatus(panel) {
     print(`panel=${panel}`);
     const button = new PanelMenu.Button(0.5, 'Harbor runs', true);
-    const box = new St.BoxLayout({style_class: 'ams-box panel-status-menu-box'});
+    const box = new St.BoxLayout({style_class: 'ams-box panel-status-menu-box',
+        y_expand: true, y_align: Clutter.ActorAlign.FILL});
     button.add_child(box);
     panel.addToStatusArea('harbor-runs', button, 0, 'right');
     const refresh = () => {
