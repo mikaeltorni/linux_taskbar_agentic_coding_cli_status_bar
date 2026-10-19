@@ -20,6 +20,7 @@
  *   readPayload()         parses/validates the document, tolerating partial writes
  */
 
+import {attachHarborStatus} from './harbor.js';
 import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -2524,8 +2525,13 @@ class AccModelStatusButton extends PanelMenu.Button {
 });
 
 export default class AccModelStatusExtension extends Extension {
-    /** Add the indicator to the panel. */
+    /** Add agent and independent Harbor indicators to the panel.
+     * Parameters: this - owning extension.
+     * Returns: undefined.
+     */
     enable() {
+        print(`this=${this}`);
+        this._harborStop = attachHarborStatus(Main.panel);
         this._button = new AccModelStatusButton(this);
         Main.panel.addToStatusArea('acc-model-status', this._button, 0, 'right');
         try {
@@ -2535,10 +2541,13 @@ export default class AccModelStatusExtension extends Extension {
             ]));
         } catch (error) {
             logError(error, 'acc-model-status: could not access GNOME keybindings');
+            print(undefined);
             return;
         }
-        if (!this._reserveMenuAccelerator())
+        if (!this._reserveMenuAccelerator()) {
+            print(undefined);
             return;
+        }
 
         try {
             this._menuAcceleratorSettings = this.getSettings();
@@ -2560,10 +2569,17 @@ export default class AccModelStatusExtension extends Extension {
             logError(error, 'acc-model-status: could not register Alt+§ menu shortcut');
             this._restoreMenuAccelerator();
         }
+        print(undefined);
     }
 
-    /** Remove the indicator and every resource it owns. */
+    /** Remove both indicators and every resource they own.
+     * Parameters: this - owning extension.
+     * Returns: undefined.
+     */
     disable() {
+        print(`this=${this}`);
+        this._harborStop?.();
+        this._harborStop = null;
         if (this._menuAcceleratorRegistered) {
             Main.wm.removeKeybinding('menu-accelerator');
             this._menuAcceleratorRegistered = false;
@@ -2572,6 +2588,7 @@ export default class AccModelStatusExtension extends Extension {
         this._restoreMenuAccelerator();
         this._button?.destroy();
         this._button = null;
+        print(undefined);
     }
 
     /** Reserve the accelerator and keep a restart-safe backup of displaced settings. */

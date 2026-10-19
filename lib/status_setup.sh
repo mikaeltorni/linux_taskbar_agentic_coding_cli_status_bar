@@ -888,6 +888,7 @@ acs_detect_startup_service() {
 # icon must be listed: tests/deploy.rs asserts this array matches the files
 # on disk, so a new provider mark can never ship half-installed.
 ACS_MODEL_STATUS_FILES=(
+  "harbor.js"
   "extension.js"
   "metadata.json"
   "schemas/org.gnome.shell.extensions.acc-model-status.gschema.xml"
@@ -913,7 +914,11 @@ acs_model_status_dir() {
 # acs_install_model_status_bar - Deploy and enable the model status bar
 # extension. Idempotent: re-running refreshes the installed copies. Missing
 # source files abort the component instead of installing a broken extension.
+# Parameters: none.
+# Returns: successful deployment status.
 acs_install_model_status_bar() {
+  printf 'parameters=none\n'
+  acs_install_harbor_watch
   local ext_dst file
   ext_dst="$(acs_model_status_dir)"
   msg "Deploying model status bar extension $MODEL_STATUS_UUID"
@@ -941,21 +946,46 @@ acs_install_model_status_bar() {
     msg "Could not enable $MODEL_STATUS_UUID now (no Shell session?); it activates on next login."
   fi
   msg "Model status bar deployed. New extension code loads after the next Shell reload/login."
+  printf 'None\n'
 }
 
 # acs_uninstall_model_status_bar - Disable and remove the extension, leaving the
 # Agent Command Center payload and the rate-limit indicator untouched.
+# Parameters: none.
+# Returns: successful removal status.
 acs_uninstall_model_status_bar() {
+  printf 'parameters=none\n'
+  acs_systemctl_user disable --now harbor-taskbar.service
+  run_as_target rm -f "$TARGET_HOME/.config/systemd/user/harbor-taskbar.service"
+  run_as_target rm -f "$TARGET_HOME/.local/bin/harbor-taskbar"
+  acs_systemctl_user daemon-reload
   run_as_target env XDG_RUNTIME_DIR="$RUNTIME_DIR" \
     DBUS_SESSION_BUS_ADDRESS="$USER_BUS" DISPLAY="$DISPLAY_VAL" \
     gnome-extensions disable "$MODEL_STATUS_UUID" 2>/dev/null || true
   run_as_target rm -rf "$(acs_model_status_dir)"
   acs_log INFO "removed $MODEL_STATUS_UUID"
   msg "Model status bar removed (takes effect after the next Shell reload/login)."
+  printf 'None\n'
 }
 
 # acs_detect_model_status_bar - Installed when the extension's entry point is
 # deployed in the target home.
 acs_detect_model_status_bar() {
   [ -f "$(acs_model_status_dir)/extension.js" ]
+}
+
+# Install the independent Harbor watcher with the optional progress taskbar.
+# Parameters: none.
+# Returns: successful deployment status.
+acs_install_harbor_watch() {
+  printf 'parameters=none\n'
+  local harbor_bin
+  harbor_bin="$(bash "$SCRIPT_DIR/scripts/build_agentic_cli_status.sh" --bin harbor-taskbar --print)" || return 1
+  run_as_target mkdir -p "$TARGET_HOME/.local/bin" "$TARGET_HOME/.config/systemd/user"
+  run_as_target install -m 0755 "$harbor_bin" "$TARGET_HOME/.local/bin/harbor-taskbar"
+  run_as_target install -m 0644 "$SCRIPT_DIR/systemd/harbor-taskbar.service" "$TARGET_HOME/.config/systemd/user/harbor-taskbar.service"
+  acs_systemctl_user daemon-reload
+  acs_systemctl_user enable --now harbor-taskbar.service
+  acs_systemctl_user restart harbor-taskbar.service
+  printf 'None\n'
 }
