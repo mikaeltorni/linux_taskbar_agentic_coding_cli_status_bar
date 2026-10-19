@@ -2,7 +2,7 @@
 const Gio = imports.gi.Gio;
 const [, bytes] = Gio.File.new_for_path(`${ARGV[0]}/acc-model-status@local/harbor.js`).load_contents(null);
 const source = new TextDecoder().decode(bytes).replace(/^import .*;$/gm, '').replaceAll('export function', 'function').replaceAll('export const', 'const');
-const Clutter = {ActorAlign: {CENTER: 1, START: 2, END: 3, FILL: 4}, BinLayout: class {}};
+const Clutter = {ActorAlign: {CENTER: 1, START: 2, END: 3, FILL: 4}, BinLayout: class {}, FixedLayout: class {}};
 class Actor {
     /** Preserve actor properties and children for actual renderer execution.
      * Parameters: this - mock actor; options - construction properties.
@@ -30,8 +30,9 @@ const group = box.children[0];
 if (!group.y_expand || group.y_align !== Clutter.ActorAlign.FILL)
     throw Error('Harbor workspace group must allocate full panel height for three distinct rows');
 const cell = group.children[1];
-if (cell.vertical !== true) throw Error('Three Harbor rows must use sequential vertical allocation');
+if (!(cell.layout_manager instanceof Clutter.FixedLayout)) throw Error('Harbor rows need explicit non-overlapping allocations');
 const [count, bar, eta] = cell.children;
+if (count.y !== 0 || bar.y !== 13 || eta.y !== 20) throw Error('Harbor count, bar and ETA need distinct vertical positions');
 if (!count.y_expand || !eta.y_expand)
     throw Error('Bin-layout labels must expand vertically for START/END to take effect');
 if (!box.visible || count.text !== '1/4' || !count.style.includes('#f472b6') || count.y_align !== Clutter.ActorAlign.START)

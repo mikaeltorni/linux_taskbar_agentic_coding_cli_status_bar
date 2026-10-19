@@ -37,14 +37,14 @@ export const renderHarborJobs = (box, jobs, windows = []) => {
             const group = new St.BoxLayout({style: 'spacing: 3px; margin-left: 4px;',
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
             const workspace = new St.Label({style: 'color: #f472b6; font-size: 10px;', y_align: Clutter.ActorAlign.CENTER});
-            const cell = new St.BoxLayout({vertical: true, width: 64, height: 32,
+            const cell = new St.Widget({layout_manager: new Clutter.FixedLayout(), width: 64, height: 32,
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
-            const count = new St.Label({style: 'color: #f472b6; font-size: 11px;',
+            const count = new St.Label({style: 'color: #f472b6; font-family: monospace; font-size: 11px;', y: 0,
                 x_expand: true, y_expand: true,
                 x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.START});
-            const bar = new St.DrawingArea({width: 60, height: 6,
+            const bar = new St.DrawingArea({width: 60, height: 6, x: 2, y: 13,
                 x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER});
-            const estimate = new St.Label({style: 'color: #c0bfbc; font-size: 10px;',
+            const estimate = new St.Label({style: 'color: #c0bfbc; font-family: monospace; font-size: 10px;', y: 20,
                 x_expand: true, y_expand: true,
                 x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.END});
             cell.add_child(count);
@@ -63,6 +63,8 @@ export const renderHarborJobs = (box, jobs, windows = []) => {
         const fraction = harborProgress(job);
         widgets.count.text = fraction === null ? '?/?' : `${job.completed}/${job.total}`;
         widgets.estimate.text = formatHarborEstimate(job);
+        widgets.count.x = Math.max(0, Math.floor((64 - widgets.count.text.length * 7) / 2));
+        widgets.estimate.x = Math.max(0, Math.floor((64 - widgets.estimate.text.length * 6) / 2));
         widgets.group.accessible_name = `Harbor ${job.name}: ${widgets.count.text}, ${job.status}, ${widgets.estimate.text}`;
         widgets.bar.queue_repaint();
     }
