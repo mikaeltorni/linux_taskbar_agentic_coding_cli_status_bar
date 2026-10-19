@@ -31,6 +31,8 @@ if (!group.y_expand || group.y_align !== Clutter.ActorAlign.FILL)
     throw Error('Harbor workspace group must allocate full panel height for three distinct rows');
 const cell = group.children[1];
 const [count, bar, eta] = cell.children;
+if (!count.y_expand || !eta.y_expand)
+    throw Error('Bin-layout labels must expand vertically for START/END to take effect');
 if (!box.visible || count.text !== '1/4' || !count.style.includes('#f472b6') || count.y_align !== Clutter.ActorAlign.START)
     throw Error('Pink instance count must replace the upper timer');
 if (eta.text !== '~?' || eta.y_align !== Clutter.ActorAlign.END || bar.text)
