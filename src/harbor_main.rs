@@ -71,11 +71,11 @@ fn read_object(path: &Path) -> Value {
 }
 
 /// Accept runs whose persisted Harbor configuration allows desktop status and speech.
-/// Parameters: config - normalized public Harbor configuration.
+/// Parameters: config - normalized public Harbor configuration; metadata - remembered process origin.
 /// Returns: whether the run can enter the taskbar and announcement snapshot.
-fn desktop_run(config: &Value) -> bool {
-    println!("config={config}");
-    let result = config["quiet"] != true;
+fn desktop_run(config: &Value, metadata: &Value) -> bool {
+    println!("config={config} metadata={metadata}");
+    let result = config["quiet"] != true && metadata["agent_initiated"] != true;
     println!("{result}");
     result
 }
@@ -156,7 +156,14 @@ fn poll(
         .map(|rows| rows.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
     for (path, metadata) in &live {
-        watched.insert(path.clone(), metadata.clone());
+        let mut metadata = metadata.clone();
+        metadata["agent_initiated"] = json!(
+            metadata["agent_initiated"] == true
+                || watched
+                    .get(path)
+                    .is_some_and(|saved| saved["agent_initiated"] == true)
+        );
+        watched.insert(path.clone(), metadata);
     }
     for metadata in watched.values_mut() {
         if metadata["last_seen_at"].is_null() {
@@ -200,7 +207,7 @@ fn poll(
                 }
             }
             row["estimate"] = estimate_job(&path, &row, &config, &data, &history);
-            if desktop_run(&config) && current_job(&row, &metadata) {
+            if desktop_run(&config, &metadata) && current_job(&row, &metadata) {
                 jobs.push(row);
             }
         }
@@ -368,6 +375,56 @@ fn ancestors(proc_root: &Path, pid: u32) -> Vec<u32> {
     result
 }
 
+/// Identify native coding agents in a Harbor launch's actual parent chain.
+/// Parameters: proc_root - process filesystem; chain - Harbor and its ancestor ids.
+/// Returns: whether a supported coding runtime launched this process, without inspecting prompt text.
+fn agent_launched(proc_root: &Path, chain: &[u32]) -> bool {
+    println!("proc_root={proc_root:?} chain={chain:?}");
+    let result = chain.iter().any(|pid| {
+        let raw = fs::read(proc_root.join(pid.to_string()).join("cmdline")).unwrap_or_default();
+        let mut argv = raw.split(|byte| *byte == 0).filter(|arg| !arg.is_empty());
+        let executable = argv
+            .next()
+            .and_then(|arg| std::str::from_utf8(arg).ok())
+            .unwrap_or_default();
+        let name = Path::new(executable)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if [
+            "codex",
+            "claude",
+            "grok",
+            "qwen",
+            "cline",
+            "opencode",
+            "openr",
+            "openrouter",
+            "nvidia",
+        ]
+        .contains(&name)
+        {
+            return true;
+        }
+        if name == "node" || name == "nodejs" {
+            let script = argv
+                .next()
+                .and_then(|arg| std::str::from_utf8(arg).ok())
+                .unwrap_or_default();
+            return [
+                "/@openai/codex/",
+                "/@anthropic-ai/claude-code/",
+                "/@qwen-code/qwen-code/",
+            ]
+            .iter()
+            .any(|package| script.contains(package));
+        }
+        false
+    });
+    println!("{result}");
+    result
+}
+
 /// Discover user-owned native Harbor processes and their artifact directories.
 /// Parameters: proc_root - process filesystem.
 /// Returns: canonical job paths mapped to process/terminal metadata only.
@@ -428,7 +485,14 @@ fn discover_processes(proc_root: &Path) -> BTreeMap<String, Value> {
             });
             for path in paths {
                 if let Ok(canonical) = path.canonicalize() {
-                    result.insert(canonical.to_string_lossy().into_owned(), json!({"pid": pid, "owner_pids": terminal_owners(proc_root, pid, &ancestors(proc_root, pid)), "cwd": cwd, "last_seen_at": chrono::Utc::now().to_rfc3339()}));
+                    let chain = ancestors(proc_root, pid);
+                    result.insert(
+                        canonical.to_string_lossy().into_owned(),
+                        json!({"pid": pid,
+                        "owner_pids": terminal_owners(proc_root, pid, &chain),
+                        "agent_initiated": agent_launched(proc_root, &chain),
+                        "cwd": cwd, "last_seen_at": chrono::Utc::now().to_rfc3339()}),
+                    );
                 }
             }
         }
