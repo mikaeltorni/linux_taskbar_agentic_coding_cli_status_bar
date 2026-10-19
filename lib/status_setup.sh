@@ -987,5 +987,8 @@ acs_install_harbor_watch() {
   acs_systemctl_user daemon-reload
   acs_systemctl_user enable --now harbor-taskbar.service
   acs_systemctl_user restart harbor-taskbar.service
+  if [ ! -x "$TARGET_HOME/.local/bin/agent-tts" ]; then
+    msg "Harbor progress is ready. Completion speech requires agent-tts from linux_codex_claude_code_tts_announcements (bash install.sh)."
+  fi
   printf 'None\n'
 }

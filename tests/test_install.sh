@@ -377,6 +377,15 @@ assert_eq "$(cfg_get clis.claude_code.enabled)" "true" \
   "--select claude_code_monitor should enable claude_code"
 assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
 
+# --- Optional taskbar includes an independent native Harbor observer --------
+run_installer --select model_status_bar >"$TMP_DIR/model-status.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --select model_status_bar exited non-zero"; }
+assert_file_exists "$TARGET_HOME/.local/bin/harbor-taskbar" "Harbor observer must be installed"
+assert_file_exists "$TARGET_HOME/.local/share/gnome-shell/extensions/acc-model-status@local/harbor.js" "Harbor taskbar module must deploy"
+assert_file_contains "$TARGET_HOME/.config/systemd/user/harbor-taskbar.service" 'ExecStart=%h/.local/bin/harbor-taskbar' "Harbor observer must be a standalone native service"
+assert_file_contains "$CALL_LOG" "enable --now harbor-taskbar.service" "Harbor service must start independently"
+assert_file_contains "$TARGET_HOME/.config/systemd/user/harbor-taskbar.service" 'StandardOutput=null' "Harbor polling must not flood the journal"
+
 # --- --list-components must be side-effect free ----------------------------
 LIST_HOME="$TMP_DIR/list-home"
 mkdir -p "$LIST_HOME"

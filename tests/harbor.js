@@ -22,7 +22,7 @@ class Actor {
 }
 const St = {Label: Actor, BoxLayout: Actor, Widget: Actor, DrawingArea: Actor};
 const traces = [];
-const api = new Function('St', 'Clutter', 'print', `${source}; return {renderHarborJobs, formatHarborEstimate, paintHarborBar, workspaceForHarbor};`)(St, Clutter, (...values) => traces.push(values));
+const api = new Function('St', 'Clutter', 'print', 'Gio', `${source}; return {renderHarborJobs, formatHarborEstimate, paintHarborBar, workspaceForHarbor, publishHarborPlacements};`)(St, Clutter, (...values) => traces.push(values), Gio);
 const box = new Actor();
 const job = {id: 'demo', name: 'demo', status: 'running', completed: 1, total: 4, fraction: 0.25, owner_pids: [42]};
 api.renderHarborJobs(box, [job], [{pid: 42, workspace: 5}]);
@@ -66,3 +66,9 @@ if (api.formatHarborEstimate({status: 'running', estimate: {remaining_seconds: 0
 print('Harbor rendering checks passed');
 
 if (traces.length !== 0) throw Error('Routine Harbor rendering must stay silent in the Shell journal');
+
+let placement;
+api.publishHarborPlacements({replace_contents: bytes => { placement = JSON.parse(new TextDecoder().decode(bytes)); }},
+    [job], [{pid: 42, workspace: 7}]);
+if (placement.jobs.demo !== 7 || !Number.isFinite(Date.parse(placement.updated_at)))
+    throw Error('Speech handoff must publish actual one-based workspace with a fresh timestamp');
