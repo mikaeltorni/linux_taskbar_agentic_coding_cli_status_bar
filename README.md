@@ -176,7 +176,7 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 | `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |
 | `tmux_console` | on | The background tmux debug console / refresher |
 | `startup_service` | on | Poller starts at login (`systemd --user`) and keeps running |
-| `model_status_bar` | **off (opt-in)** | Separate ACC model status bar extension (provider icons + running counts) |
+| `model_status_bar` | **off (opt-in)** | Agent taskbar plus independent Harbor run counts, progress, ETA and completion speech |
 
 The Codex reset forecast is part of the default Codex monitoring experience:
 a clean install enables its public sources automatically, and disabling
@@ -537,7 +537,7 @@ The Codex mark copied by that install is
 curved segments in six-fold symmetry around an open center, with a single
 recolorable `#2e3436` fill.
 
-It has no poller of its own: it renders
+The agent portion has no poller of its own: it renders
 `~/.local/state/codex-agent-tracker/model_status_bar.json`, which the Agent
 Command Center monitor publishes (honoring `CODEX_AGENT_TRACKER_STATE_DIR`).
 It joins those agent rows to GNOME's live window titles and actual workspace
@@ -565,6 +565,103 @@ An actively pursued `/goal` colors a live agent's elapsed timer purple
 ordinary runs keep their yellow timer, and queued reset clocks keep their
 yellow-green countdown.
 
+### Independent Harbor runs
+
+The same `model_status_bar` component installs `harbor-taskbar`, a separate
+Rust observer and `harbor-taskbar.service` user service. It detects host-side
+Harbor processes owned by your user through `/proc`, reads their job artifacts,
+and adds pink Harbor cells beside the existing agent taskbar. ACC can be
+stopped or absent: no wrapper, ACC registry entry, programming-prompts hook,
+model request or Harbor modification is required.
+
+Each cell shows `H W2` for its terminal's workspace, a pink **completed/total
+count above the bar** (in the agent timer's position), a pink fill proportional
+to that count, and an approximate remaining time underneath. Errors count as
+finished instances once; cancelled or interrupted runs do not become successful
+completions and use a red fill. Finished and interrupted tracked runs remain
+visible for five minutes. A missing/stale observer snapshot hides the Harbor
+indicator rather than leaving an apparently live bar.
+
+Detection supports direct or Python-script `harbor run`, `harbor jobs start`,
+and `harbor jobs resume --job-path DIR` launches. It resolves relative paths
+from the process's own working directory, reads YAML/JSON `-c`/`--config`,
+honors `-o`/`--jobs-dir` and `--job-name`, and distinguishes concurrent default
+timestamp-named jobs. Inaccessible processes or containers outside the host's
+process/filesystem view cannot be discovered. Explicit `--jobs-dir` roots also
+allow artifact-only monitoring; a stopped job without a previously discovered
+process needs Harbor's final result to establish that it has stopped.
+
+Estimates use the median duration per concurrency wave from up to 20 completed
+runs with the same task set, agent models/reasoning effort and environment type.
+The observer scans known job roots and live Harbor working directories for
+history, bounded to five directory levels and 20,000 directory visits, caches
+up to 1,000 samples for 60 seconds, and scales the estimate by the current
+trial/concurrency wave count. `~?` means no comparable history; `~overdue` means
+the run has exceeded its historical estimate. Forecasts are approximate and do
+not increase the measured progress fill. Harbor's naive timestamps are read in
+the machine's local timezone.
+
+A run observed running and then fully completed queues one announcement:
+**“Harbor run on workspace 2 is done.”** Harbor uses the distinct female Kokoro
+voice **`af_nicole`**. The persistent completion ledger prevents repeats after
+service restarts; runs first discovered already finished are silent. Workspace
+identity comes from actual Shell windows, including attached tmux clients;
+moving a terminal updates it. Detached, sticky, ambiguous or stale placement
+says **“an unknown workspace”**, never the focused workspace.
+
+Speech uses the separately installed `agent-tts` engine and honors its existing
+finish-event, silent, speed and volume settings. If the engine is missing,
+progress and estimates keep working. Install the engine independently when
+needed (no ACC installation or agent hooks are necessary):
+
+```bash
+bash ../linux_codex_claude_code_tts_announcements/install.sh --select engine
+bash install.sh --select model_status_bar
+systemctl --user status harbor-taskbar.service
+journalctl --user -u harbor-taskbar.service
+```
+
+The service polls every two seconds. Routine observer traces are discarded by
+its unit and the Shell rendering callbacks stay quiet. State lives under
+`$XDG_STATE_HOME/harbor-taskbar` (default `~/.local/state/harbor-taskbar`):
+`status.json`, remembered run paths in `watched.json`, `history.json`, fresh
+Shell `placements.json`, `announcements.json`, and the singleton `observer.lock`.
+Only one observer can own a state directory. Provider config is normalized to
+public workload fields before tracing; credentials are not published or copied
+into observer state. Uninstalling `model_status_bar` stops/removes the Harbor
+service and executable while preserving this history.
+
+The standalone public CLI accepts:
+
+| Option | Meaning and default |
+| --- | --- |
+| `--once` | Publish one snapshot, process completion transitions and exit; otherwise monitor continuously. |
+| `--jobs-dir DIR` | Additional artifact container, repeatable; default `~/jobs`. Process discovery also runs. |
+| `--state-dir DIR` | Observer output directory; default `$XDG_STATE_HOME/harbor-taskbar`. Use a separate directory for diagnostic runs while the service owns the normal one. |
+| `--proc-root DIR` | Process filesystem; default `/proc`. Useful for isolated fixtures. |
+| `--interval SECONDS` | Finite positive polling interval; default `2`. |
+| `--tts-command FILE` | Speech executable; default `~/.local/bin/agent-tts`. An absent engine leaves monitoring silent. |
+| `-h`, `--help` | Print CLI usage and exit. |
+
+```bash
+harbor-taskbar --help
+# Inspect a separate snapshot without touching the installed service's state:
+harbor-taskbar --once --jobs-dir "$PWD/jobs" \
+  --state-dir /tmp/harbor-inspect --tts-command /nonexistent
+cat /tmp/harbor-inspect/status.json
+# Continuous monitoring of additional roots in a separate diagnostic instance:
+harbor-taskbar --jobs-dir /data/jobs --jobs-dir /other/jobs \
+  --state-dir /tmp/harbor-extra --interval 5 --tts-command /nonexistent
+# Build either native binary through the shared release builder:
+bash scripts/build_agentic_cli_status.sh --bin harbor-taskbar --print
+```
+
+The service's delay and options can be changed with a normal user-unit
+`ExecStart` override followed by `systemctl --user daemon-reload` and
+`systemctl --user restart harbor-taskbar.service`. The GNOME indicator reads
+the normal XDG state directory; custom diagnostic state directories do not
+replace its input.
+
 ## Usage
 
 ```bash
@@ -590,16 +687,19 @@ src/                         Rust poller crate (installed to ~/.local/bin/agenti
   collectors/                Headless collectors (codex/claude_code/grok/opencode_go/openrouter/cursor) + tmux pane parser
   tmux.rs                    Debug console: session/window management, slash-command refresh
   poller.rs                  Aggregating tick loop; writes status.json atomically
+  harbor_main.rs             Independent Harbor process/artifact observer, historical ETA and speech claims
   installer_ops.rs           Installer config/credential helpers (config-get/set, OpenCode, OpenRouter)
   openrouter_client.rs       OpenRouter analytics query + management-key lookup
-scripts/build_agentic_cli_status.sh  Release build into dist/agentic-cli-status
+scripts/build_agentic_cli_status.sh  Shared release builder (--bin agentic-cli-status or harbor-taskbar)
 lib/acs_bin.sh               Installer helper that builds and invokes the poller CLI
 agentic-cli-status@local/    GNOME Shell extension (file-monitor + poll-rate-paced timer + renderer only)
-acc-model-status@local/      Optional ACC model status bar extension (provider icons + running counts)
+acc-model-status@local/      Optional agent and Harbor taskbar extension
+  harbor.js                  Independent pink Harbor cells and workspace handoff
   icons/                     Symbolic provider marks (Claude, Codex, Grok, Qwen, … + generic fallback)
 installer/components.sh      Component manifest (shared installer framework)
 lib/status_setup.sh          Install functions (core deploy, per-CLI config, service, tmux)
-systemd/agentic-cli-status.service  User unit template (WantedBy=default.target)
+systemd/agentic-cli-status.service  Rate-limit user unit (WantedBy=default.target)
+systemd/harbor-taskbar.service      Independent Harbor observer user unit
 tests/                       cargo tests (collectors/config/poller/gjs/deploy) + installer test
 ```
 
@@ -607,6 +707,7 @@ tests/                       cargo tests (collectors/config/poller/gjs/deploy) +
 
 ```bash
 cargo test                   # Rust unit and integration tests
+cargo test --test harbor     # isolated Harbor CLI, ETA, progress, workspace and mocked-speech checks
 bash tests/test_install.sh   # sandboxed installer behavior test (no sudo, no desktop changes)
 bash scripts/check.sh        # fmt, clippy, tests, shell syntax, installer test
 ```
