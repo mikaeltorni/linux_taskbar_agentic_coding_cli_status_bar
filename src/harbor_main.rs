@@ -56,8 +56,11 @@ fn read_job(path: &Path) -> Option<(Value, Value, Value)> {
     let config = read_object(&path.join("config.json"));
     let data = read_object(&path.join("result.json"));
     let result = if config["job_name"].is_string() && data["started_at"].is_string() && data["stats"].is_object() {
+        let counts = trial_counts(&data);
         Some((json!({"id": path.canonicalize().unwrap_or_else(|_| path.to_path_buf()), "name": config["job_name"],
-            "status": if data["finished_at"].is_string() { "complete" } else { "running" },
+            "status": job_status(&data, counts),
+            "completed": counts.map(|(completed,_)| completed), "total": counts.map(|(_,total)| total),
+            "fraction": counts.map(|(completed,total)| completed as f64 / total as f64),
             "started_at": data["started_at"], "finished_at": data["finished_at"]}), config, data))
     } else { None };
     println!("{result:?}");
@@ -120,7 +123,8 @@ fn poll(jobs_dirs: &[PathBuf], state_dir: &Path, proc_root: &Path) -> std::io::R
                 if !live.contains_key(&path) && row["status"] == "running" { row["status"] = json!("interrupted"); }
             }
             row["estimate"] = estimate_job(&path, &row, &config, &data, &history);
-            jobs.push(row);
+            let finished_age = timestamp(&row["finished_at"]).map(|at| chrono::Utc::now().timestamp() as f64 - at);
+            if finished_age.is_none_or(|age| age < 300.0) { jobs.push(row); }
         }
     }
     write_object(&state_dir.join("watched.json"), &json!(watched))?;
@@ -235,7 +239,7 @@ fn discover_processes(proc_root: &Path) -> BTreeMap<String, Value> {
             });
             for path in paths {
                 if let Ok(canonical) = path.canonicalize() {
-                    result.insert(canonical.to_string_lossy().into_owned(), json!({"pid": pid, "owner_pids": ancestors(proc_root, pid), "cwd": cwd}));
+                    result.insert(canonical.to_string_lossy().into_owned(), json!({"pid": pid, "owner_pids": terminal_owners(proc_root, pid, &ancestors(proc_root, pid)), "cwd": cwd}));
                 }
             }
         }
@@ -296,9 +300,7 @@ fn concurrency_waves(config: &Value, data: &Value) -> Option<f64> {
 fn completed_sample(config: &Value, data: &Value) -> Option<f64> {
     println!("job_name={} started={} finished={}", config["job_name"], data["started_at"], data["finished_at"]);
     let result = (|| {
-        let total = data["n_total_trials"].as_u64()?;
-        let completed = data["stats"]["n_completed_trials"].as_u64().or_else(|| data["stats"]["n_trials"].as_u64())?;
-        if total == 0 || completed < total { return None; }
+        if job_status(data, trial_counts(data)) != "complete" { return None; }
         let duration = timestamp(&data["finished_at"])? - timestamp(&data["started_at"])?;
         if duration <= 0.0 { return None; }
         Some(duration / concurrency_waves(config, data)?)
@@ -376,5 +378,55 @@ fn estimate_job(path: &str, row: &Value, config: &Value, data: &Value, history: 
         }
     } else { Value::Null };
     println!("{result}");
+    result
+}
+
+/// Accept consistent nonzero Harbor trial counts, including legacy result names.
+/// Parameters: data - parsed Harbor result.
+/// Returns: completed/total counts or None for unavailable or inconsistent progress.
+fn trial_counts(data: &Value) -> Option<(u64, u64)> {
+    println!("data={data}");
+    let result = (|| {
+        let total = data["n_total_trials"].as_u64()?;
+        let completed = data["stats"]["n_completed_trials"].as_u64().or_else(|| data["stats"]["n_trials"].as_u64())?;
+        if total == 0 || completed > total { return None; }
+        Some((completed, total))
+    })();
+    println!("{result:?}");
+    result
+}
+
+/// Classify finalization without presenting cancelled or incomplete runs as done.
+/// Parameters: data - parsed result; counts - validated completed/total pair.
+/// Returns: running, complete or interrupted.
+fn job_status(data: &Value, counts: Option<(u64, u64)>) -> &'static str {
+    println!("data={data} counts={counts:?}");
+    let result = if !data["finished_at"].is_string() { "running" }
+        else if counts.is_some_and(|(done,total)| done == total) && data["stats"]["n_cancelled_trials"].as_u64().unwrap_or(0) == 0 { "complete" }
+        else { "interrupted" };
+    println!("{result}");
+    result
+}
+
+/// Resolve attached tmux clients rather than a pane's stale original window.
+/// Parameters: proc_root - process filesystem; pid - Harbor pid; parents - direct process ancestors.
+/// Returns: terminal/client ancestry, or direct ancestry outside tmux; empty for detached tmux.
+fn terminal_owners(proc_root: &Path, pid: u32, parents: &[u32]) -> Vec<u32> {
+    println!("proc_root={proc_root:?} pid={pid} parents={parents:?}");
+    let socket = fs::read(proc_root.join(pid.to_string()).join("environ")).ok().and_then(|bytes| {
+        bytes.split(|byte| *byte == 0).find_map(|part| part.strip_prefix(b"TMUX=")
+            .and_then(|value| String::from_utf8(value.to_vec()).ok())).map(|value| value.split(',').next().unwrap_or_default().to_owned())
+    });
+    let result = if let Some(socket) = socket {
+        let query = |args: &[&str]| std::process::Command::new("timeout").args(["1", "tmux", "-S", &socket]).args(args)
+            .output().ok().filter(|output| output.status.success()).map(|output| String::from_utf8_lossy(&output.stdout).into_owned()).unwrap_or_default();
+        let panes = query(&["list-panes", "-a", "-F", "#{pane_pid}\t#{session_id}"]);
+        let session = panes.lines().filter_map(|line| line.split_once('\t'))
+            .find(|(pane,_)| pane.parse::<u32>().is_ok_and(|pid| parents.contains(&pid))).map(|(_,session)| session.to_owned());
+        let clients = query(&["list-clients", "-F", "#{session_id}\t#{client_pid}"]);
+        clients.lines().filter_map(|line| line.split_once('\t')).filter(|(candidate,_)| session.as_deref() == Some(candidate))
+            .filter_map(|(_,pid)| pid.parse::<u32>().ok()).flat_map(|pid| ancestors(proc_root, pid)).collect()
+    } else { parents.to_vec() };
+    println!("{result:?}");
     result
 }

@@ -159,3 +159,36 @@ fn historical_estimates() {
     assert!(current["estimate"].is_null());
     println!("None");
 }
+
+/// Publish exact completed trial counts and distinguish cancellation from completion.
+/// Parameters: none.
+/// Returns: None after progress and terminal-state assertions pass.
+#[test]
+fn trial_progress() {
+    println!("parameters=none");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let mut data = json!({"started_at": "2026-10-20T00:00:00Z", "finished_at": null,
+        "n_total_trials": 4, "stats": {"n_completed_trials": 1, "n_errored_trials": 1, "n_cancelled_trials": 0}});
+    let path = job(root, "progress", data.clone());
+    let first = poll(root, &[]);
+    assert_eq!(first["jobs"][0]["completed"], 1);
+    assert_eq!(first["jobs"][0]["total"], 4);
+    assert_eq!(first["jobs"][0]["fraction"], 0.25);
+    data["stats"]["n_completed_trials"] = json!(3);
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    assert_eq!(poll(root, &[])["jobs"][0]["fraction"], 0.75);
+    data["finished_at"] = json!(chrono::Utc::now().to_rfc3339());
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    assert_eq!(poll(root, &[])["jobs"][0]["status"], "interrupted");
+    data["stats"]["n_completed_trials"] = json!(4);
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    assert_eq!(poll(root, &[])["jobs"][0]["status"], "complete");
+    data["stats"]["n_cancelled_trials"] = json!(1);
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    assert_eq!(poll(root, &[])["jobs"][0]["status"], "interrupted");
+    data["stats"]["n_completed_trials"] = json!(5);
+    fs::write(path.join("result.json"), data.to_string()).unwrap();
+    assert!(poll(root, &[])["jobs"][0]["fraction"].is_null());
+    println!("None");
+}
