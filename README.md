@@ -570,17 +570,19 @@ yellow-green countdown.
 The same `model_status_bar` component installs `harbor-taskbar`, a separate
 Rust observer and `harbor-taskbar.service` user service. It detects host-side
 Harbor processes owned by your user through `/proc`, reads their job artifacts,
-and adds pink Harbor cells beside the existing agent taskbar. ACC can be
+and adds Harbor cells to the existing taskbar workspace groups. ACC can be
 stopped or absent: no wrapper, ACC registry entry, programming-prompts hook,
 model request or Harbor modification is required.
 
-Each cell shows `H W2` for its terminal's workspace, a pink **completed/total
-count above the bar** (in the agent timer's position), a pink fill proportional
-to that count, and an approximate remaining time underneath. Errors count as
-finished instances once; cancelled or interrupted runs do not become successful
-completions and use a red fill. Finished and interrupted tracked runs remain
-visible for five minutes. A missing/stale observer snapshot hides the Harbor
-indicator rather than leaving an apparently live bar.
+Each Harbor cell sits beside agent cells under their shared workspace heading
+(for example, `W2`), using the same dimensions, typography and progress-fill
+colors. Only the **completed/total count above the bar** is pink, replacing the
+agent timer in that position; the fill follows measured instance completion
+and the approximate remaining time appears underneath. There is no separate
+`H W2` label. Errors count as finished instances once; cancelled or interrupted
+runs do not become successful completions. Finished and interrupted tracked
+runs remain visible for five minutes. A missing/stale observer snapshot hides
+the Harbor cells rather than leaving apparently live bars.
 
 Detection supports direct or Python-script `harbor run`, `harbor jobs start`,
 and `harbor jobs resume --job-path DIR` launches. It resolves relative paths
@@ -694,7 +696,7 @@ scripts/build_agentic_cli_status.sh  Shared release builder (--bin agentic-cli-s
 lib/acs_bin.sh               Installer helper that builds and invokes the poller CLI
 agentic-cli-status@local/    GNOME Shell extension (file-monitor + poll-rate-paced timer + renderer only)
 acc-model-status@local/      Optional agent and Harbor taskbar extension
-  harbor.js                  Independent pink Harbor cells and workspace handoff
+  harbor.js                  Harbor entries for shared workspace cells and workspace handoff
   icons/                     Symbolic provider marks (Claude, Codex, Grok, Qwen, … + generic fallback)
 installer/components.sh      Component manifest (shared installer framework)
 lib/status_setup.sh          Install functions (core deploy, per-CLI config, service, tmux)
