@@ -22,29 +22,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$REPO_ROOT/dist"
-DIST_BIN="$DIST_DIR/agentic-cli-status"
-TARGET_BIN="$REPO_ROOT/target/release/agentic-cli-status"
+BUILD_NAME=agentic-cli-status
 PRINT_ONLY=0
 RUST_IMAGE="${ACS_RUST_IMAGE:-rust:1-bookworm}"
 
 log() { printf '[build_agentic_cli_status] %s\n' "$*" >&2; }
 
+# Describe the shared release builder.
+# Parameters: none.
+# Returns: successful help output status.
 usage() {
+  printf 'parameters=none\n' >&2
   cat >&2 <<'EOF'
-Usage: bash scripts/build_agentic_cli_status.sh [--print]
+Usage: bash scripts/build_agentic_cli_status.sh [--print] [--bin agentic-cli-status|harbor-taskbar]
 
 Build the agentic-cli-status release binary into dist/agentic-cli-status.
 With --print, also write the absolute binary path to stdout.
+--bin selects the native binary; default agentic-cli-status.
 EOF
+  printf 'None\n' >&2
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --print) PRINT_ONLY=1; shift ;;
+    --bin)
+      case "${2:-}" in agentic-cli-status|harbor-taskbar) BUILD_NAME="$2";; *) log "Invalid binary"; exit 1;; esac
+      shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) log "Unknown argument: $1"; usage; exit 1 ;;
   esac
 done
+DIST_BIN="$DIST_DIR/$BUILD_NAME"
+TARGET_BIN="$REPO_ROOT/target/release/$BUILD_NAME"
 
 # reclaim_build_artifacts_for_invoker — When this script runs under sudo, cargo
 # writes root-owned dist/ and target/. Hand them back to SUDO_USER so a later
@@ -112,14 +122,18 @@ ensure_cargo_on_path() {
 
 # build_with_cargo — Compile the release binary with the local toolchain and
 # install it into dist/. Cargo skips work when fingerprints are current.
+# Parameters: none.
+# Returns: successful build status.
 build_with_cargo() {
+  printf 'parameters=none\n' >&2
   log "Building with local cargo…"
   (
     cd "$REPO_ROOT"
-    cargo build --release --bin agentic-cli-status
+    cargo build --release --bin "$BUILD_NAME"
   )
   mkdir -p "$DIST_DIR"
   install -m 0755 "$TARGET_BIN" "$DIST_BIN"
+  printf 'None\n' >&2
 }
 
 # container_engine — Prefer docker, then podman.
@@ -134,7 +148,10 @@ container_engine() {
 }
 
 # build_with_container — Compile inside an official Rust container image.
+# Parameters: none.
+# Returns: successful build status.
 build_with_container() {
+  printf 'parameters=none\n' >&2
   local engine
   engine="$(container_engine)" || {
     log "Neither docker nor podman is available for containerized build."
@@ -150,8 +167,9 @@ build_with_container() {
     -v "$REPO_ROOT:/src:rw" \
     -w /src \
     "$RUST_IMAGE" \
-    cargo build --release --bin agentic-cli-status
+    cargo build --release --bin "$BUILD_NAME"
   install -m 0755 "$TARGET_BIN" "$DIST_BIN"
+  printf 'None\n' >&2
 }
 
 main() {

@@ -23,3 +23,7 @@ ureq = "2"
 [dev-dependencies]
 regex = "1"
 tempfile = "3"
+
+[[bin]]
+name = "harbor-taskbar"
+path = "src/harbor_main.rs"
