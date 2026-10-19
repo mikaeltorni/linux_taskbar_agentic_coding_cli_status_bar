@@ -116,3 +116,46 @@ fn independent_discovery() {
     assert!(!path.exists());
     println!("None");
 }
+
+/// Estimate a current run using independently timed, matching historical jobs.
+/// Parameters: none.
+/// Returns: None after historical estimate and unknown-history checks pass.
+#[test]
+fn historical_estimates() {
+    println!("parameters=none");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    for (name, finish) in [("old1", "2026-10-19T00:10:00"), ("old2", "2026-10-19T00:20:00")] {
+        let path = job(root, name, json!({"started_at": "2026-10-19T00:00:00", "finished_at": finish,
+            "n_total_trials": 4, "stats": {"n_completed_trials": 4}}));
+        let mut config: Value = serde_json::from_str(&fs::read_to_string(path.join("config.json")).unwrap()).unwrap();
+        config["n_concurrent_trials"] = json!(2);
+        fs::write(path.join("config.json"), config.to_string()).unwrap();
+    }
+    job(root, "incomplete", json!({"started_at": "2026-10-19T00:00:00Z", "finished_at": "2026-10-19T00:01:00Z",
+        "n_total_trials": 4, "stats": {"n_completed_trials": 1}}));
+    let mismatch = job(root, "different-model", json!({"started_at": "2026-10-19T00:00:00Z", "finished_at": "2026-10-19T00:01:00Z",
+        "n_total_trials": 4, "stats": {"n_completed_trials": 4}}));
+    let mut other: Value = serde_json::from_str(&fs::read_to_string(mismatch.join("config.json")).unwrap()).unwrap();
+    other["agents"] = json!([{"model_name": "different-model"}]);
+    fs::write(mismatch.join("config.json"), other.to_string()).unwrap();
+    let start = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
+    let path = job(root, "current", json!({"started_at": start, "finished_at": null,
+        "n_total_trials": 8, "stats": {"n_completed_trials": 1}}));
+    let mut config: Value = serde_json::from_str(&fs::read_to_string(path.join("config.json")).unwrap()).unwrap();
+    config["n_concurrent_trials"] = json!(2);
+    fs::write(path.join("config.json"), config.to_string()).unwrap();
+    let data = poll(root, &[]);
+    let current = data["jobs"].as_array().unwrap().iter().find(|row| row["name"] == "current").unwrap();
+    assert_eq!(current["estimate"]["samples"], 2);
+    // Prior jobs took 600 and 1200 seconds for two waves; four waves take median 1800.
+    assert_eq!(current["estimate"]["total_seconds"], 1800.0);
+    let remaining = current["estimate"]["remaining_seconds"].as_f64().unwrap();
+    assert!((1730.0..=1740.0).contains(&remaining), "{remaining}");
+    config["tasks"] = json!([{"path": "different-task"}]);
+    fs::write(path.join("config.json"), config.to_string()).unwrap();
+    let data = poll(root, &[]);
+    let current = data["jobs"].as_array().unwrap().iter().find(|row| row["name"] == "current").unwrap();
+    assert!(current["estimate"].is_null());
+    println!("None");
+}

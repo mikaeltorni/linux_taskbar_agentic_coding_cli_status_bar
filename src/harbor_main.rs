@@ -1,5 +1,6 @@
 //! Standalone Harbor job observer; no ACC runtime or launch hooks required.
 use clap::Parser;
+use chrono::TimeZone;
 use serde_json::{json, Value};
 use std::{fs, path::{Path, PathBuf}, process::ExitCode, time::Duration, collections::BTreeMap};
 use std::os::unix::fs::MetadataExt;
@@ -49,15 +50,15 @@ fn read_object(path: &Path) -> Value {
 
 /// Read one Harbor job's current artifact status.
 /// Parameters: path - Harbor job directory.
-/// Returns: normalized job or None for unavailable artifacts.
-fn read_job(path: &Path) -> Option<Value> {
+/// Returns: normalized job and parsed config/result, or None for unavailable artifacts.
+fn read_job(path: &Path) -> Option<(Value, Value, Value)> {
     println!("path={path:?}");
     let config = read_object(&path.join("config.json"));
     let data = read_object(&path.join("result.json"));
     let result = if config["job_name"].is_string() && data["started_at"].is_string() && data["stats"].is_object() {
-        Some(json!({"id": path.canonicalize().unwrap_or_else(|_| path.to_path_buf()), "name": config["job_name"],
+        Some((json!({"id": path.canonicalize().unwrap_or_else(|_| path.to_path_buf()), "name": config["job_name"],
             "status": if data["finished_at"].is_string() { "complete" } else { "running" },
-            "started_at": data["started_at"], "finished_at": data["finished_at"]}))
+            "started_at": data["started_at"], "finished_at": data["finished_at"]}), config, data))
     } else { None };
     println!("{result:?}");
     result
@@ -106,13 +107,19 @@ fn poll(jobs_dirs: &[PathBuf], state_dir: &Path, proc_root: &Path) -> std::io::R
             }
         }
     }
+    let mut history_roots = jobs_dirs.to_vec();
+    for metadata in live.values() {
+        if let Some(cwd) = metadata["cwd"].as_str() { history_roots.push(PathBuf::from(cwd)); }
+    }
+    let history = load_history(&history_roots, state_dir)?;
     let mut jobs = Vec::new();
     for (path, metadata) in paths {
-        if let Some(mut row) = read_job(Path::new(&path)) {
+        if let Some((mut row, config, data)) = read_job(Path::new(&path)) {
             if let Some(object) = metadata.as_object() {
                 for (key, value) in object { row[key] = value.clone(); }
                 if !live.contains_key(&path) && row["status"] == "running" { row["status"] = json!("interrupted"); }
             }
+            row["estimate"] = estimate_job(&path, &row, &config, &data, &history);
             jobs.push(row);
         }
     }
@@ -234,5 +241,140 @@ fn discover_processes(proc_root: &Path) -> BTreeMap<String, Value> {
         }
     }
     println!("{result:?}");
+    result
+}
+
+/// Convert Harbor's offset-aware or local-naive timestamps into Unix seconds.
+/// Parameters: value - timestamp JSON string.
+/// Returns: Unix seconds or None for invalid or ambiguous local times.
+fn timestamp(value: &Value) -> Option<f64> {
+    println!("value={value}");
+    let result = value.as_str().and_then(|text| {
+        chrono::DateTime::parse_from_rfc3339(text).ok().map(|date| date.timestamp_millis() as f64 / 1000.0)
+            .or_else(|| chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f").ok()
+                .and_then(|date| chrono::Local.from_local_datetime(&date).single())
+                .map(|date| date.timestamp_millis() as f64 / 1000.0))
+    });
+    println!("{result:?}");
+    result
+}
+
+/// Match comparable task sets, agent models/efforts and environment types.
+/// Parameters: config - parsed Harbor job configuration.
+/// Returns: stable workload identity, excluding private provider configuration.
+fn workload_signature(config: &Value) -> Value {
+    println!("config_keys={:?}", config.as_object().map(|value| value.keys().collect::<Vec<_>>()));
+    let mut tasks: Vec<_> = config["tasks"].as_array().into_iter().flatten()
+        .filter_map(|task| task["path"].as_str().and_then(|path| Path::new(path).file_name()).map(|name| name.to_string_lossy().into_owned())).collect();
+    tasks.sort();
+    let agents: Vec<_> = config["agents"].as_array().into_iter().flatten().map(|agent| json!({
+        "model": agent["model_name"], "name": agent["name"], "import": agent["import_path"],
+        "effort": agent["kwargs"]["reasoning_effort"]})).collect();
+    let datasets: Vec<_> = config["datasets"].as_array().into_iter().flatten().map(|dataset| json!({
+        "name": dataset["name"], "version": dataset["version"], "path": dataset["path"]})).collect();
+    let result = json!({"tasks": tasks, "datasets": datasets, "agents": agents, "environment": config["environment"]["type"]});
+    println!("{result}");
+    result
+}
+
+/// Calculate scheduler waves from the configured trial capacity.
+/// Parameters: config - parsed job configuration; data - Harbor result.
+/// Returns: number of occupied concurrency waves, or None without a trial total.
+fn concurrency_waves(config: &Value, data: &Value) -> Option<f64> {
+    println!("concurrency={} total={}", config["n_concurrent_trials"], data["n_total_trials"]);
+    let result = data["n_total_trials"].as_u64().filter(|total| *total > 0).map(|total| {
+        let capacity = config["n_concurrent_trials"].as_u64().unwrap_or(1).max(1);
+        total.div_ceil(capacity) as f64
+    });
+    println!("{result:?}");
+    result
+}
+
+/// Accept only fully completed runs with usable positive wall-clock duration.
+/// Parameters: config - parsed configuration; data - Harbor job result.
+/// Returns: seconds per occupied concurrency wave, or None for incomplete history.
+fn completed_sample(config: &Value, data: &Value) -> Option<f64> {
+    println!("job_name={} started={} finished={}", config["job_name"], data["started_at"], data["finished_at"]);
+    let result = (|| {
+        let total = data["n_total_trials"].as_u64()?;
+        let completed = data["stats"]["n_completed_trials"].as_u64().or_else(|| data["stats"]["n_trials"].as_u64())?;
+        if total == 0 || completed < total { return None; }
+        let duration = timestamp(&data["finished_at"])? - timestamp(&data["started_at"])?;
+        if duration <= 0.0 { return None; }
+        Some(duration / concurrency_waves(config, data)?)
+    })();
+    println!("{result:?}");
+    result
+}
+
+/// Scan a bounded local directory tree for genuine completed Harbor jobs.
+/// Parameters: root - current directory; depth - remaining directory levels; budget - remaining visits; samples - collected history.
+/// Returns: None after extending the sample list.
+fn scan_history(root: &Path, depth: u8, budget: &mut usize, samples: &mut Vec<Value>) {
+    println!("root={root:?} depth={depth} budget={budget} samples={samples:?}");
+    if *budget == 0 { println!("None"); return; }
+    *budget -= 1;
+    if root.join("config.json").is_file() && root.join("result.json").is_file() {
+        if let Some((_, config, data)) = read_job(root) {
+            if let Some(seconds) = completed_sample(&config, &data) {
+                samples.push(json!({"path": root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+                    "signature": workload_signature(&config), "seconds_per_wave": seconds, "finished_at": data["finished_at"]}));
+            }
+        }
+    } else if depth > 0 {
+        let mut directories: Vec<_> = fs::read_dir(root).into_iter().flatten().flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()) && !entry.file_name().to_string_lossy().starts_with('.')
+                && !["node_modules", "target", "venv", "__pycache__"].contains(&entry.file_name().to_string_lossy().as_ref()))
+            .map(|entry| entry.path()).collect();
+        directories.sort_by_key(|path| std::cmp::Reverse(fs::metadata(path).and_then(|m| m.modified()).ok()));
+        for directory in directories { scan_history(&directory, depth - 1, budget, samples); if *budget == 0 { break; } }
+    }
+    println!("None");
+}
+
+/// Cache a bounded historical scan outside the Shell rendering process.
+/// Parameters: roots - known artifact containers and Harbor launch directories; state_dir - observer state.
+/// Returns: cached completed-run sample list, or filesystem error.
+fn load_history(roots: &[PathBuf], state_dir: &Path) -> std::io::Result<Vec<Value>> {
+    println!("roots={roots:?} state_dir={state_dir:?}");
+    let saved = read_object(&state_dir.join("history.json"));
+    let now = chrono::Utc::now().timestamp() as f64;
+    let mut samples = saved["samples"].as_array().cloned().unwrap_or_default();
+    if timestamp(&saved["updated_at"]).is_none_or(|at| now - at > 60.0) {
+        samples.clear();
+        let mut budget = 20000;
+        for root in roots { scan_history(root, 5, &mut budget, &mut samples); }
+        samples.sort_by(|a,b| b["finished_at"].as_str().cmp(&a["finished_at"].as_str()));
+        let mut seen = std::collections::BTreeSet::new();
+        samples.retain(|sample| seen.insert(sample["path"].to_string()));
+        samples.truncate(1000);
+        write_object(&state_dir.join("history.json"), &json!({"updated_at": chrono::Utc::now().to_rfc3339(), "samples": samples}))?;
+    }
+    println!("{samples:?}");
+    Ok(samples)
+}
+
+/// Forecast a running job using the median of comparable completed runs.
+/// Parameters: path - current job identity; row - normalized job state; config - parsed configuration; data - parsed result; history - completed samples.
+/// Returns: total/remaining seconds and sample count, or null when no estimate is supported.
+fn estimate_job(path: &str, row: &Value, config: &Value, data: &Value, history: &[Value]) -> Value {
+    println!("path={path} row={row} job_name={} total={} history_count={}", config["job_name"], data["n_total_trials"], history.len());
+    let signature = workload_signature(config);
+    let mut samples: Vec<f64> = history.iter().filter(|sample| sample["path"] != path && sample["signature"] == signature)
+        .take(20).filter_map(|sample| sample["seconds_per_wave"].as_f64()).filter(|seconds| seconds.is_finite() && *seconds > 0.0).collect();
+    samples.sort_by(f64::total_cmp);
+    let result = if row["status"] == "running" && !samples.is_empty() {
+        match (concurrency_waves(config, data), timestamp(&data["started_at"])) {
+            (Some(waves), Some(start)) => {
+                let middle = samples.len() / 2;
+                let median = if samples.len() % 2 == 0 { (samples[middle - 1] + samples[middle]) / 2.0 } else { samples[middle] };
+                let total = median * waves;
+                let elapsed = (chrono::Utc::now().timestamp_millis() as f64 / 1000.0 - start).max(0.0);
+                json!({"total_seconds": total, "remaining_seconds": (total - elapsed).max(0.0), "samples": samples.len()})
+            }
+            _ => Value::Null,
+        }
+    } else { Value::Null };
+    println!("{result}");
     result
 }

@@ -33,7 +33,7 @@ export function renderHarborJobs(box, jobs) {
     print(`box=${box} jobs=${JSON.stringify(jobs)}`);
     box.destroy_all_children();
     for (const job of jobs) {
-        const label = new St.Label({text: `Harbor ${job.name} ${job.status}`,
+        const label = new St.Label({text: `Harbor ${job.name} ${job.status} ${formatHarborEstimate(job)}`,
             y_align: Clutter.ActorAlign.CENTER});
         box.add_child(label);
     }
@@ -59,6 +59,20 @@ export function attachHarborStatus(panel) {
     refresh();
     const timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, refresh);
     const result = () => { GLib.source_remove(timer); button.destroy(); };
+    print(result);
+    return result;
+}
+
+/** Format a historical estimate without inventing a countdown when history is missing.
+ * Parameters: job - normalized Harbor run and historical estimate.
+ * Returns: approximate remaining minutes, overdue, unknown, or terminal status.
+ */
+export function formatHarborEstimate(job) {
+    print(`job=${JSON.stringify(job)}`);
+    let result = job.status === 'running' ? '~?' : job.status;
+    const seconds = job.estimate?.remaining_seconds;
+    if (job.status === 'running' && Number.isFinite(seconds))
+        result = seconds > 0 ? `~${Math.max(1, Math.ceil(seconds / 60))}m` : '~overdue';
     print(result);
     return result;
 }
