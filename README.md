@@ -574,6 +574,22 @@ and adds Harbor cells to the existing taskbar workspace groups. ACC can be
 stopped or absent: no wrapper, ACC registry entry, programming-prompts hook,
 model request or Harbor modification is required.
 
+Desktop bars and completion speech are intended for runs you start directly.
+Agent verification should use `run_benchmark.sh --agent-run …` in the
+programming-prompts benchmark, or `harbor run --quiet …` for raw Harbor. The
+wrapper converts `--agent-run` to native `--quiet`; Harbor saves `quiet: true`
+in the job config. Such jobs are excluded from both the taskbar snapshot and
+completion announcements, including after completion, observer restarts or
+`harbor jobs resume`. Native `--quiet` also suppresses Harbor's terminal progress.
+
+As a backstop, the observer recognizes supported coding-agent executables in
+the launch's parent chain (Codex, Claude, Grok, Qwen, Cline, opencode and tracked
+provider launchers), including their known Node entrypoints. It remembers agent
+origin in `watched.json`, keeping those runs hidden if the parent exits. Always
+use the quiet parameter for verification: detached jobs whose agent ancestry
+was never observable need the persisted config setting. Ordinary direct-user
+launches without quiet mode retain their bars, estimates and completion speech.
+
 Each Harbor cell sits beside agent cells under their shared workspace heading
 (for example, `W2`), using the same dimensions, typography and progress-fill
 colors. Only the **completed/total count above the bar** is pink, replacing the
