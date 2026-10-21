@@ -106,7 +106,11 @@ The poller maintains a detached tmux session (default `agentic-cli-status`)
 with one window per monitored CLI running that CLI's TUI. Codex windows
 wait until that account's `auth.json` exists, and a pane that started
 before login is rebuilt afterwards, so the TUI cannot keep opening a
-ChatGPT browser loop. Each Codex pane is captured before any key is sent.
+ChatGPT browser loop. The managed Codex launcher hands off to its adjacent
+`codex-native` payload; both paths and their symlink targets count as the
+current runtime. Healthy consoles survive that handoff, while consoles on
+another account or an obsolete binary are still rebuilt. Each Codex pane is
+captured before any key is sent.
 A pane that is still blank, or that shows the ChatGPT sign-in or "finish
 signing in via your browser" screen, gets no keys at all. An Enter there
 would open a browser tab, and the next Escape would cancel that login's
@@ -746,6 +750,14 @@ bash scripts/check.sh        # fmt, clippy, tests, shell syntax, installer test
 - **Indicator shows `CX –`** — the poller has not produced data yet, or that
   CLI has never run: start the CLI once (or wait one poll tick), and check
   `systemctl --user status agentic-cli-status.service`.
+- **Codex percentages frozen after a CLI update** — check the poller journal
+  for repeated `recreating Codex debug console` / `older binary` messages.
+  The poller must recognize the managed launcher's `codex-native` handoff;
+  upgrade the poller using `bash install.sh --select startup_service`, then run
+  `systemctl --user restart agentic-cli-status.service`. Account readings
+  refresh through the background consoles within about a minute. A Shell
+  restart does not repair a failing collector, and this poller-only update
+  needs no Shell reload.
 - **Claude segment stuck / `HTTP 429`** — the OAuth usage endpoint throttles
   aggressive polling; the collector already enforces ≥ 180 s. Persistent 401 /
   "expired" errors mean Claude Code needs a fresh login.
