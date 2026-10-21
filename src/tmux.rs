@@ -430,16 +430,30 @@ fn homes_match(left: &str, right: &Path) -> bool {
     Path::new(left) == right
 }
 
-/// Return whether a pane cmdline is already running `binary`.
+/// Recognize a Codex launcher or its installed native payload in a pane command line.
 ///
-/// Args are nul-separated as in `/proc/<pid>/cmdline`. A missing cmdline is
-/// treated as unknown (not a mismatch) so tests that do not stub it keep
-/// existing windows.
+/// Parameters: cmdline - NUL-separated pane argv; binary - resolved Codex launcher path.
+/// Returns: true for the launcher, its sibling codex-native, or their canonical targets.
+/// Missing cmdlines are handled by the caller before this classification.
 fn cmdline_runs_binary(cmdline: &str, binary: &Path) -> bool {
-    let wanted = binary.to_string_lossy();
-    cmdline
+    println!("cmdline={cmdline:?} binary={}", binary.display());
+    // The managed hook launcher execs codex-native; npm payloads can in turn
+    // exec a vendor binary behind a symlink. Both are the current runtime.
+    let native = binary.with_file_name("codex-native");
+    let mut paths = vec![binary.to_path_buf()];
+    if native.is_file() {
+        paths.push(native);
+    }
+    for path in paths.clone() {
+        if let Ok(canonical) = path.canonicalize() {
+            paths.push(canonical);
+        }
+    }
+    let result = cmdline
         .split('\0')
-        .any(|arg| !arg.is_empty() && (Path::new(arg) == binary || arg == wanted.as_ref()))
+        .any(|arg| !arg.is_empty() && paths.iter().any(|path| Path::new(arg) == path));
+    println!("{result}");
+    result
 }
 
 fn read_proc_cmdline(pid: &str) -> Option<String> {
@@ -1904,6 +1918,50 @@ mod tests {
         assert_eq!(killed.len(), 1, "the stale login is rebuilt once settled");
         assert_eq!(killed[0][2], "acs:codex-2");
         restore_path(original_path);
+    }
+
+    /// Keep an authenticated console alive after the managed launcher execs its native payload.
+    /// Parameters: none.
+    /// Returns: None after repeated public console reconciliation preserves the pane.
+    #[test]
+    fn managed_native_console_survives_repeated_reconciliation() {
+        println!("parameters=none");
+        let sandbox = Sandbox::new();
+        let managed = sandbox
+            .home
+            .join(".local/share/linux_codex_claude_code_setup/npm/bin/codex");
+        std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        std::fs::write(&managed, "#!/bin/sh\n").unwrap();
+        let native = managed.with_file_name("codex-native");
+        let vendor = managed.parent().unwrap().join("vendor-codex");
+        std::fs::write(&vendor, "native payload fixture").unwrap();
+        std::os::unix::fs::symlink(&vendor, &native).unwrap();
+        let first = sandbox.home.join(".codex");
+        write_codex_auth(&first);
+        let consoles = [CodexConsole {
+            window: "codex".into(),
+            home: first.clone(),
+            instance_id: Some(1),
+        }];
+        for executable in [&managed, &native, &vendor] {
+            let tmux = MultiWindowTmux {
+                pane_age_seconds: None,
+                calls: Mutex::new(Vec::new()),
+                windows: vec!["codex".into()],
+                homes: std::collections::HashMap::from([("codex".into(), first.display().to_string())]),
+                cmdlines: std::collections::HashMap::from([(
+                    "codex".into(),
+                    format!("{}\0--no-daemon\0", executable.display()),
+                )]),
+            };
+            for tick in 0..3 {
+                assert!(ensure_console("acs", &["codex".into()], &sandbox.home, &tmux, true, &consoles));
+                let calls = tmux.calls.lock().unwrap();
+                assert!(!calls.iter().any(|args| matches!(args[0].as_str(), "kill-window" | "new-window" | "new-session")),
+                    "{} tick {tick}: healthy console was restarted: {calls:?}", executable.display());
+            }
+        }
+        println!("None");
     }
 
     #[test]
