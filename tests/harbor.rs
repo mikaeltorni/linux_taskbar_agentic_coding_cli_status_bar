@@ -56,13 +56,15 @@ fn artifact_tracking() {
     println!("parameters=none");
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
-    let mut data = json!({"id": "demo", "started_at": "2026-10-20T00:00:00Z", "finished_at": null,
+    let finished = chrono::Utc::now();
+    let started = finished - chrono::Duration::minutes(10);
+    let mut data = json!({"id": "demo", "started_at": started.to_rfc3339(), "finished_at": null,
         "n_total_trials": 4, "stats": {"n_completed_trials": 1}});
     let path = job(root, "demo", data.clone());
     let rows = poll(root, &[]);
     assert_eq!(rows["jobs"][0]["name"], "demo");
     assert_eq!(rows["jobs"][0]["status"], "running");
-    data["finished_at"] = json!("2026-10-20T00:10:00Z");
+    data["finished_at"] = json!(finished.to_rfc3339());
     data["stats"]["n_completed_trials"] = json!(4);
     fs::write(path.join("result.json"), data.to_string()).unwrap();
     assert_eq!(poll(root, &[])["jobs"][0]["status"], "complete");
