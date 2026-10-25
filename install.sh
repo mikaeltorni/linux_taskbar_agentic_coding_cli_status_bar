@@ -52,30 +52,32 @@ msg() {
   acs_log INFO "$*"
 }
 
-# load_component_framework: Load the shared installer component framework from
-# a sibling checkout of linux_installation_scripts_functions, falling back to
-# an on-demand download so a standalone clean install works without it.
-# Returns: 0 once isc_activate_components has run.
+# Load the shared framework from the maintained offline support package.
+# Parameters: none.
+# Returns: zero after activation; a failing command aborts setup.
 load_component_framework() {
-  local d
-  # Idempotent: both the readonly-arg router and main() call this.
-  [[ -n "${ACS_FRAMEWORK_LOADED:-}" ]] && return 0
+  # Load licensed, generated support without requiring a private checkout.
+  printf 'parameters=none\n' >&2
+  if [[ -n "${ACS_FRAMEWORK_LOADED:-}" ]]; then
+    printf '0\n' >&2
+    return 0
+  fi
   ACS_FRAMEWORK_LOADED=1
-  for d in "${ISC_FUNCTIONS_DIR:-}" \
-           "$SCRIPT_DIR/../linux_installation_scripts_functions" \
-           "$HOME/projects/linux_installation_scripts_functions"; do
-    [[ -n "$d" && -f "$d/component_loader.sh" ]] && { source "$d/component_loader.sh"; break; }
-  done
-  declare -F isc_activate_components >/dev/null 2>&1 || \
-    source <(curl -fsSL "https://raw.githubusercontent.com/mikaeltorni/linux_installation_scripts_functions/${ISC_FUNCTIONS_REF:-master}/component_loader.sh")
+  source "$SCRIPT_DIR/.installer-support/bootstrap.sh"
   isc_activate_components
   # Shared install-time helpers (run_as_target, need_cmd, …). They ship a plain
   # msg; redefine the logging-aware version afterwards so it wins repo-wide.
   isc_load_helpers
+  # Print a component status message using this owner's diagnostics.
+  # Parameters: positional arguments - message words.
+  # Returns: zero after the message is displayed.
   msg() {
+    printf 'parameters=%s\n' "$*" >&2
     printf "\n==> %s\n" "$*"
     acs_log INFO "$*"
+    printf '0\n' >&2
   }
+  printf '0\n' >&2
 }
 
 # main: Deploy the poller + extension core unconditionally, then route the
