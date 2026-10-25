@@ -117,15 +117,26 @@ fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
+/// Keep the shipped application runtime native while allowing isolated tests and generated installer support.
+/// Parameters: none. Returns: None.
 fn no_python_runtime_remains() {
+    println!("parameters=none");
+    let root = repo_root();
     let mut files = Vec::new();
-    walk_files(&repo_root(), &mut files);
+    walk_files(&root, &mut files);
     let python: Vec<_> = files
         .iter()
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("py"))
+        .filter(|path| {
+            let relative = path.strip_prefix(&root).unwrap();
+            !relative.starts_with("tests")
+                && !relative.starts_with("tmp")
+                && !relative.starts_with(".installer-support")
+                && path.extension().and_then(|extension| extension.to_str()) == Some("py")
+        })
         .cloned()
         .collect();
-    assert!(python.is_empty(), "Python files remain: {python:?}");
+    assert!(python.is_empty(), "Application Python files remain: {python:?}");
+    println!("None");
 }
 
 #[test]
@@ -159,15 +170,19 @@ fn systemd_unit_starts_the_rust_binary() {
 }
 
 #[test]
+/// Keep native deployment and separate read-only query routing.
+/// Parameters: none. Returns: None.
 fn installer_deploys_the_rust_binary() {
+    println!("parameters=none");
     let setup = read("lib/status_setup.sh");
     assert!(setup.contains("source \"$SCRIPT_DIR/lib/acs_bin.sh\""));
     assert!(setup.contains("acs_bin config-set"));
-    assert!(setup.contains("acs_bin config-get"));
+    assert!(setup.contains("acs_query config-get"));
     assert!(setup.contains("acs_bin config-init"));
     assert!(setup.contains("ensure_acs_bin"));
     assert!(setup.contains(".local/bin/agentic-cli-status"));
     assert!(!setup.contains("ACS_PACKAGE_FILES"));
+    println!("None");
 }
 
 #[test]

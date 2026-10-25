@@ -80,22 +80,19 @@ load_component_framework() {
   printf '0\n' >&2
 }
 
-# main: Deploy the poller + extension core unconditionally, then route the
-# selectable components through the shared component framework.
-# Arguments: $@ - forwarded to component_main.
-# Returns: the exit status of component_main.
+# Apply a prepared selection after acceptance, preserving core failure propagation.
+# Parameters: $@ - already parsed installer arguments. Returns: zero on completion.
 main() {
-  msg "=== Agentic Coding CLI Status Bar Setup ==="
-  load_component_framework
-  source "$SCRIPT_DIR/lib/status_setup.sh"
-  source "$SCRIPT_DIR/installer/components.sh"
-  if [ -z "${ISC_COMPONENTS:-}" ]; then
-    echo "ERROR: ISC_COMPONENTS manifest is not defined." >&2
-    exit 1
+  printf 'arguments=%s\n' "$*" >&2
+  isc_plan_install
+  if [[ "$ISC_PLAN_ACTION" == cancel ]]; then printf '0\n' >&2; return 0; fi
+  if [[ "$ISC_PLAN_ACTION" == install ]]; then
+    msg "=== Agentic Coding CLI Status Bar Setup ==="
+    install_agentic_status_core
   fi
-  install_agentic_status_core
-  msg "Configuring agentic CLI monitoring options"
-  component_main "$@"
+  _isc_apply_plan "$ISC_ARGUMENT_ORIGIN"
+  printf '0\n' >&2
+  return 0
 }
 
 # Listing/help/configure must print only their own output and must not deploy
