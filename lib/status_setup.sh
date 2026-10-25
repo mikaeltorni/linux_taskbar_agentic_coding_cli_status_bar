@@ -31,8 +31,14 @@ acs_config_set() {
 }
 
 # acs_config_get KEY_PATH - Print one dotted config key's effective value.
+# Query current native configuration without triggering installation.
+# Parameters: $1 - config key path. Returns: native query status/output or one when unavailable.
 acs_config_get() {
-  acs_bin config-get "$1"
+  printf '$1=%s\n' "$1" >&2
+  local rc
+  acs_query config-get "$1"; rc=$?
+  printf '%s\n' "$rc" >&2
+  return "$rc"
 }
 
 # acs_systemctl_user ARGS... - Run systemctl --user for the target user with
@@ -250,8 +256,14 @@ acs_write_opencode_go_config() {
 }
 
 # acs_opencode_go_config_valid - Return 0 when workspace + auth cookie are set.
+# Query current native configuration without triggering installation.
+# Parameters: $1 - credentials config path. Returns: native query status/output or one when unavailable.
 acs_opencode_go_config_valid() {
-  acs_bin opencode-creds-valid "$1" 2>/dev/null
+  printf '$1=%s\n' "$1" >&2
+  local rc
+  acs_query opencode-creds-valid "$1" 2>/dev/null; rc=$?
+  printf '%s\n' "$rc" >&2
+  return "$rc"
 }
 
 # acs_opencode_go_credential_status - One-line credential summary for the menu.
@@ -440,8 +452,14 @@ acs_openrouter_env_path() {
 }
 
 # acs_openrouter_key_configured - Return 0 when a management API key is present.
+# Query current native configuration without triggering installation.
+# Parameters: none. Returns: native query status/output or one when unavailable.
 acs_openrouter_key_configured() {
-  acs_bin has-openrouter-key 2>/dev/null
+  printf 'parameters=none\n' >&2
+  local rc
+  acs_query has-openrouter-key 2>/dev/null; rc=$?
+  printf '%s\n' "$rc" >&2
+  return "$rc"
 }
 
 # acs_write_openrouter_management_key - Persist OPENROUTER_MANAGEMENT_API_KEY.
@@ -649,8 +667,14 @@ acs_write_cursor_creds() {
 }
 
 # acs_cursor_creds_valid - Return 0 when a spending cookie is stored.
+# Query current native configuration without triggering installation.
+# Parameters: none. Returns: native query status/output or one when unavailable.
 acs_cursor_creds_valid() {
-  acs_bin cursor-creds-valid "$(acs_cursor_config_path)" 2>/dev/null
+  printf 'parameters=none\n' >&2
+  local rc
+  acs_query cursor-creds-valid "$(acs_cursor_config_path)" 2>/dev/null; rc=$?
+  printf '%s\n' "$rc" >&2
+  return "$rc"
 }
 
 # acs_apply_cursor_interval - Persist CRS_FETCH_INTERVAL_SECONDS when set.

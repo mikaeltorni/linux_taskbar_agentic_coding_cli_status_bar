@@ -42,3 +42,30 @@ acs_bin() {
     "$ACS_BIN" "$@"
   fi
 }
+
+# Resolve an existing native query binary without building or installing anything.
+# Parameters: $@ - candidate executable paths. Returns: an executable path, or one if none exists.
+_acs_validate_query_binary() {
+  printf 'candidates=%s\n' "$*" >&2
+  local candidate
+  for candidate in "$@"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      printf '%s\n' "$candidate" >&2
+      return 0
+    fi
+  done
+  printf 'No installed native status query helper is available.\n1\n' >&2
+  return 1
+}
+
+# Run a read-only native command through the existing target-user invocation.
+# Parameters: $@ - native query command and operands. Returns: native status/output or one when unavailable.
+acs_query() {
+  printf 'arguments=%s\n' "$*" >&2
+  local requested="${ACS_QUERY_BIN:-${ACS_BIN:-}}" ACS_BIN rc
+  ACS_BIN="$(_acs_validate_query_binary "$requested" "$TARGET_HOME/.local/bin/agentic-cli-status" "$SCRIPT_DIR/dist/agentic-cli-status" "$SCRIPT_DIR/target/release/agentic-cli-status")" || { printf '1\n' >&2; return 1; }
+  acs_bin "$@"; rc=$?
+  printf '%s\n' "$rc" >&2
+  return "$rc"
+}
