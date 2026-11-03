@@ -94,6 +94,8 @@ poller's own components remove. To go back to the default, set it explicitly:
 | OpenRouter | Management API `POST /api/v1/analytics/query` (read-only; not chat/completions). Daily window for the configured free-model slug (default `stealth/ox-alpha`, limit 1000). Key from `OPENROUTER_MANAGEMENT_API_KEY` or `~/.config/agentic-cli-status/.env`. Self-throttled to ≥60 s | — |
 | Cursor | Headless scrape of the spending dashboard's own usage endpoints (`/api/usage-summary` + `/api/dashboard/get-sand-usage-status`). The HTML `/dashboard/spending` URL 307-loops through a web bootstrap and is not fetched. Session cookie from `CRS_AUTH_COOKIE` or `~/.config/agentic-cli-status/cursor-spending.json` (percent-decoded). Included Pro pools only: Cursor Models, Other Models, Grok Bot, usage-limit reset. On-demand is never collected. Self-throttled independently of the bar tick (`CRS_FETCH_INTERVAL_SECONDS` or config, default 30 s), including after errors | — |
 
+For Codex, a recognized plan in a fresh `/status` capture replaces an older rollout plan for the matching account. Business is displayed as Team; if the status omits a recognized plan, the rollout plan is retained.
+
 None of these send a prompt or start a model turn, so **monitoring never
 consumes plan limits**: the Codex and Grok sources are files the CLIs already
 write, the Claude endpoint is the billing/metadata endpoint that powers
