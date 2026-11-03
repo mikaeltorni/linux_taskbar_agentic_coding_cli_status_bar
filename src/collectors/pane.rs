@@ -482,8 +482,28 @@ fn pane_window_percent(
     found
 }
 
+/// Extract a recognized plan from the latest Codex account line.
+/// Parameters: text - captured status text.
+/// Returns: the normalized plan when present.
+fn codex_pane_plan(text: &str) -> Option<String> {
+    print!("text={text}");
+    let pattern = re(
+        r"(?i)\baccount:\s*(?:[^\n()]*\()?\b(free|plus|pro|team|business|enterprise|edu)\b\)?\s*(?:│|$)",
+    );
+    let result = text
+        .lines()
+        .filter_map(|line| pattern.captures(line))
+        .last()
+        .map(|caps| caps[1].to_ascii_lowercase());
+    print!("{result:?}");
+    result
+}
+
 /// Parse captured tmux pane text into the shared snapshot shape.
+/// Parameters: cli_id - provider; text - captured pane; now - observation time.
+/// Returns: the parsed snapshot.
 pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
+    print!("cli_id={cli_id}, text={text}, now={now:?}");
     let lines: Vec<&str> = text.lines().collect();
     let now = now.unwrap_or_else(now_epoch);
     let keywords = pane_window_keywords(cli_id);
@@ -534,6 +554,9 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
     let observed = if windows.is_empty() { None } else { Some(now) };
     let mut snap = snapshot("tmux_pane", observed, None, windows, error);
     if cli_id == "codex" {
+        if let Some(plan) = codex_pane_plan(text) {
+            snap["plan"] = json!(plan);
+        }
         if let Some(caps) = re(CODEX_RESETS_AVAILABLE).captures_iter(text).last() {
             // The disabled redeem entry spells zero as "No ... available".
             let raw = caps.get(1).unwrap().as_str();
@@ -546,6 +569,7 @@ pub fn parse_pane(cli_id: &str, text: &str, now: Option<f64>) -> Value {
             }
         }
     }
+    print!("{snap}");
     snap
 }
 
@@ -842,6 +866,28 @@ mod tests {
             })
             .collect();
         assert_eq!(pairs, vec![("5h".into(), 1.0), ("week".into(), 51.0)]);
+    }
+
+    /// Verify supported account lines and the absence of an invented plan.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn codex_status_plan_formats() {
+        println!("parameters=none");
+        for (input, expected) in [
+            ("Account: Free\nMonthly limit: 4% left", Some("free")),
+            (
+                "│ Account: user@example.com (Plus) │\n5h limit: 99% left",
+                Some("plus"),
+            ),
+            ("Account: Team\n5h limit: 72% left", Some("team")),
+            ("Account: unknown\n5h limit: 72% left", None),
+            ("5h limit: 72% left", None),
+        ] {
+            let result = parse_pane("codex", input, Some(100.0));
+            assert_eq!(result["plan"].as_str(), expected, "{input}");
+        }
+        println!("None");
     }
 
     #[test]
