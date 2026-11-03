@@ -484,7 +484,7 @@ fn pane_window_percent(
 
 /// Extract a recognized plan from the latest Codex account line.
 /// Parameters: text - captured status text.
-/// Returns: the normalized plan when present.
+/// Returns: the normalized plan when present, with Business shown as team.
 fn codex_pane_plan(text: &str) -> Option<String> {
     print!("text={text}");
     let pattern = re(
@@ -494,7 +494,10 @@ fn codex_pane_plan(text: &str) -> Option<String> {
         .lines()
         .filter_map(|line| pattern.captures(line))
         .last()
-        .map(|caps| caps[1].to_ascii_lowercase());
+        .map(|caps| match caps[1].to_ascii_lowercase().as_str() {
+            "business" => "team".to_owned(),
+            plan => plan.to_owned(),
+        });
     print!("{result:?}");
     result
 }
@@ -881,6 +884,7 @@ mod tests {
                 Some("plus"),
             ),
             ("Account: Team\n5h limit: 72% left", Some("team")),
+            ("Account: Business\n5h limit: 72% left", Some("team")),
             ("Account: unknown\n5h limit: 72% left", None),
             ("5h limit: 72% left", None),
         ] {
