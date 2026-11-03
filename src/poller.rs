@@ -651,6 +651,9 @@ fn collect_grok_cli(
     snapshot
 }
 
+/// Merge an observed pane into its account snapshot.
+/// Parameters: snapshot - current data; cli_id - provider; pane_text - captured status; pane_observed_at - capture time; source_mode - source preference; stale_after - freshness interval; last - previous snapshot; now - current time.
+/// Returns: the merged snapshot.
 fn merge_cli_pane(
     mut snapshot: Value,
     cli_id: &str,
@@ -661,6 +664,7 @@ fn merge_cli_pane(
     last: Option<&Value>,
     now: f64,
 ) -> Value {
+    print!("snapshot={snapshot}, cli_id={cli_id}, pane_text={pane_text}, pane_observed_at={pane_observed_at}, source_mode={source_mode}, stale_after={stale_after}, last={last:?}, now={now}");
     let pane_snapshot = parse_pane(cli_id, pane_text, Some(pane_observed_at));
     let metadata_read_started = cli_id == "codex" && snapshot.get("reset_probe_at").is_some();
     let pane_has_reset_metadata =
@@ -717,11 +721,12 @@ fn merge_cli_pane(
                 .unwrap()
                 .remove("resets_available");
         }
-        pane_snapshot["plan"] = snapshot
+        pane_snapshot["plan"] = pane_snapshot
             .get("plan")
             .cloned()
             .filter(|p| !p.is_null())
-            .unwrap_or_else(|| pane_snapshot.get("plan").cloned().unwrap_or(Value::Null));
+            .or_else(|| snapshot.get("plan").cloned().filter(|p| !p.is_null()))
+            .unwrap_or(Value::Null);
         pane_snapshot["observed_at"] = json!(pane_observed_at);
         // `/status` prints windows only. Dropping the rollout's credit state
         // here would hide a credit block behind a window countdown that will
@@ -759,6 +764,7 @@ fn merge_cli_pane(
         }
     }
     snapshot["pane_checked_at"] = json!(pane_observed_at);
+    print!("{snapshot}");
     snapshot
 }
 
@@ -2382,6 +2388,30 @@ mod tests {
         });
         assert!(codex_same_account_last("codex", &fresh, Some(&same_account)).is_some());
         assert!(codex_same_account_last("claude_code", &fresh, Some(&previous)).is_some());
+    }
+
+    /// Verify a live account plan replaces only its own stale rollout plan.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn current_codex_status_plan_replaces_stale_rollout_plan_for_its_account() {
+        print!("parameters=none");
+        let snapshot = json!({
+            "selected": 2,
+            "instances": [
+                {"id": 1, "home": "/a", "plan": "team", "windows": [{"label": "5h", "used_percent": 28.0}]},
+                {"id": 2, "home": "/b", "plan": "plus", "windows": [{"label": "week", "used_percent": 1.0}]},
+                {"id": 3, "home": "/c", "plan": "plus", "observed_at": 50.0, "windows": [{"label": "month", "used_percent": 96.0}]}
+            ]
+        });
+        let pane = "Account: Free\nMonthly limit: 4% left (resets 21 Nov)\n";
+        let result =
+            apply_codex_live_pane(snapshot, pane, 80.0, "auto", 1800, None, 80.0, Some("/c"));
+        assert_eq!(result["instances"][0]["plan"], "team");
+        assert_eq!(result["instances"][1]["plan"], "plus");
+        assert_eq!(result["instances"][2]["plan"], "free");
+        assert_eq!(result["instances"][2]["windows"][0]["used_percent"], 96.0);
+        print!("None");
     }
 
     #[test]
