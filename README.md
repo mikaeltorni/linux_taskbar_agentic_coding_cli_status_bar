@@ -28,7 +28,14 @@ When Agent Command Center has extra ChatGPT logins (`acc ca instance create`),
 the Codex segment lists every account as `CX1`, `CX2`, … with a gray pipe:
 `CX1 43·57 | CX2 12`. The `CXN` tags use a light-blue→purple identity
 gradient (first account blue, last account purple); remaining-percent
-digits keep the usual green→red usage colors. A trial/free plan is just another instance; its month
+digits keep the usual green→red usage colors. A full `100` for a Codex 5h or
+weekly window flashes white when that window is confirmed idle and needs usage
+to start its timer. A running timer stays steady, even while its displayed
+remaining percentage rounds to 100. Each account and window is tracked
+independently; missing, stale, or ambiguous timer readings do not flash. A
+moving reset is confirmed from observations at least three minutes apart, while
+an explicit unused window without a reset from account metadata is immediately
+recognized as idle. A trial/free plan is just another instance; its month
 window is independent of the paid account's 5h/week windows. The click menu
 lists `Codex [1]` and `Codex [2] trial *` as separate sections, with `*` on the
 selected account. A Codex pane's separate `Luna Reserve` weekly pool is kept
@@ -40,8 +47,11 @@ Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
 Codex's manual-reset allowance is refreshed independently for each account
 through the installed CLI's read-only `account/rateLimits/read` metadata request
-every minute. The menu shows zero explicitly; a failed read hides an old count
-until the next retry. This does not redeem a reset or send a prompt.
+every minute. The same account-validated read publishes its 5h and weekly
+usage and reset timestamps to the status document for the indicator and ACC's
+startup probe selection. The menu shows zero resets explicitly; a failed read
+hides the old count and timer metadata until the next retry. This does not
+redeem a reset or send a prompt.
 The monitor prefers the Codex installed by `linux_codex_claude_code_setup`
 over older system copies and submits slash commands with an Enter key.
 When concurrent Codex sessions record several distinct rolling windows, the
