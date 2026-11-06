@@ -2236,3 +2236,158 @@ emit(JSON.stringify(samples));
     }
     println!("None");
 }
+
+/// Exercise the compact Codex indicator with independent timer observations.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn codex_full_window_flashes_only_for_advancing_reset() {
+    println!("parameters=none");
+    assert!(gjs_available(), "gjs is required");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let mut snippets: Vec<String> = ["GRADIENT_FULL_RGB", "GRADIENT_MID_RGB", "GRADIENT_LOW_RGB", "EMPTY_COLOR", "NEUTRAL_COLOR", "CLUTTER_MARKUP_PREFIX", "INSTANCE_TAG_FIRST_RGB", "INSTANCE_TAG_LAST_RGB"]
+        .iter().map(|name| extract_constant(&source, name)).collect();
+    snippets.extend(["resetPassed", "percentLeft", "percentColor", "instanceTagColor", "resetClock", "resetDate", "resetCountdown", "creditBlocked", "segmentMarkup", "lunaReserveWindow", "codexLunaReserveWindow", "lunaReserveMarkup", "updateCodexWindowTracking", "codexBarMarkup", "forecastPercentMarkup", "codexBarWithForecastMarkup", "flashingCodexBarMarkup"]
+        .iter().map(|name| extract_function(&source, name)));
+    let result = run_gjs(&snippets, r#"
+        const GLib = imports.gi.GLib;
+        let tracking = new Map();
+        let snapshot = {instances: [
+          {id: 1, observed_at: 1000, windows: [{label:'5h', used_percent:0, resets_at:19000}, {label:'week', used_percent:0, resets_at:605800}]},
+          {id: 2, observed_at: 1000, windows: [{label:'5h', used_percent:0, resets_at:19000}, {label:'week', used_percent:0, resets_at:605800}]}
+        ]};
+        updateCodexWindowTracking(tracking, snapshot, 1000);
+        let initial = flashingCodexBarMarkup(null, 'CX', snapshot, 1000, tracking, true);
+        snapshot.instances[0].observed_at = 1120;
+        snapshot.instances[0].windows[0].resets_at += 120;
+        snapshot.instances[1].observed_at = 1120;
+        snapshot.instances[1].windows[1].resets_at += 120;
+        updateCodexWindowTracking(tracking, snapshot, 1120);
+        let bright = flashingCodexBarMarkup(null, 'CX', snapshot, 1120, tracking, true);
+        let dim = flashingCodexBarMarkup(null, 'CX', snapshot, 1120, tracking, false);
+        snapshot.instances[0].windows.push({label:'luna_reserve', used_percent:0});
+        let withForecast = flashingCodexBarMarkup({enabled:true, consensus_percent:100}, 'CX', snapshot, 1120, tracking, true);
+        snapshot.instances[0].windows.pop();
+        snapshot.instances[0].observed_at = 1240;
+        updateCodexWindowTracking(tracking, snapshot, 1240);
+        let stoppedSliding = flashingCodexBarMarkup(null, 'CX', snapshot, 1240, tracking, true);
+        snapshot.instances[1].error = 'unavailable';
+        let error = flashingCodexBarMarkup(null, 'CX', snapshot, 1240, tracking, true);
+        delete snapshot.instances[1].error;
+        snapshot.instances[1].windows[1].used_percent = 0.1;
+        let rounded = flashingCodexBarMarkup(null, 'CX', snapshot, 1240, tracking, true);
+        updateCodexWindowTracking(tracking, snapshot, 2000);
+        let stale = flashingCodexBarMarkup(null, 'CX', snapshot, 2000, tracking, true);
+        print(JSON.stringify({initial, bright, dim, withForecast, stoppedSliding, error, rounded, stale}));
+    "#);
+    assert!(!result["initial"].as_str().unwrap().contains("#ffffff"), "one reading cannot prove an idle timer");
+    assert_eq!(result["bright"].as_str().unwrap().matches("#ffffff").count(), 2, "only the independently advancing 5h and week digits flash");
+    assert!(!result["dim"].as_str().unwrap().contains("#ffffff"), "flash has a normal phase");
+    assert_eq!(result["withForecast"].as_str().unwrap().matches("#ffffff").count(), 2, "forecast and Luna percentages must not flash");
+    assert_eq!(result["stoppedSliding"].as_str().unwrap().matches("#ffffff").count(), 1, "fixed reset stops flashing its own digit");
+    assert!(!result["error"].as_str().unwrap().contains("#ffffff"), "errored snapshots cannot flash");
+    assert!(!result["rounded"].as_str().unwrap().contains("#ffffff"), "a rounded 100 with nonzero usage does not flash");
+    assert!(!result["stale"].as_str().unwrap().contains("#ffffff"), "old observations cannot prove a sliding reset");
+    println!("None");
+}
+
+/// Exercise the live indicator's animation timer without opening a desktop.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn codex_flash_timer_starts_refreshes_and_stops() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let methods = [extract_method(&source, "_syncCodexFlash"), extract_method(&source, "stopCodexFlash")].join("\n");
+    let probe = format!(r#"
+        const timers = new Map();
+        let next = 1;
+        let clock = 1120;
+        const GLib = {{PRIORITY_DEFAULT: 0, SOURCE_REMOVE: false, SOURCE_CONTINUE: true,
+          timeout_add_seconds: (_p, _s, cb) => {{ const id = next++; timers.set(id, cb); return id; }},
+          source_remove: id => timers.delete(id), get_real_time: () => clock * 1000000}};
+        function updateCodexWindowTracking(tracking, snapshot, nowEpoch, maxAge) {{
+          print(`tracking=${{tracking}}, snapshot=${{snapshot}}, nowEpoch=${{nowEpoch}}, maxAge=${{maxAge}}`);
+          print(tracking);
+          return tracking;
+        }}
+        function flashingCodexBarMarkup(forecast, tag, snapshot, nowEpoch, tracking, bright) {{
+          print(`forecast=${{forecast}}, tag=${{tag}}, snapshot=${{snapshot}}, nowEpoch=${{nowEpoch}}, tracking=${{tracking}}, bright=${{bright}}`);
+          const result = bright ? 'bright' : 'normal'; print(result); return result;
+        }}
+        class Button {{ {methods} }}
+        const button = new Button();
+        button._codexTracking = new Map([['1::5h', {{idle:true, latest:1120}}]]);
+        button._codexFlashId = 0;
+        button._codexStatus = {{clis: {{codex: {{windows: []}}}}}};
+        const values = [];
+        button._segments = new Map([['codex', {{clutter_text: {{set_markup: value => values.push(value)}}}}]]);
+        button._syncCodexFlash(); button._syncCodexFlash();
+        const one = timers.size;
+        const id = button._codexFlashId;
+        const continued = timers.get(id)();
+        clock = 1500;
+        const removed = timers.get(id)();
+        timers.delete(id);
+        const repaint = values.at(-1);
+        button._codexTracking.set('1::week', {{idle:true, latest:1500}});
+        button._syncCodexFlash(); button.stopCodexFlash();
+        print(JSON.stringify({{one, continued, removed, repaint, after:timers.size, id:button._codexFlashId}}));
+    "#);
+    let result = run_gjs(&[], &probe);
+    assert_eq!(result["one"], 1);
+    assert_eq!(result["continued"], true);
+    assert_eq!(result["removed"], false);
+    assert_eq!(result["repaint"], "normal");
+    assert_eq!(result["after"], 0);
+    assert_eq!(result["id"], 0);
+    println!("None");
+}
+
+/// Verify a status update routes the current tracking state into the visible Codex label.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn codex_flash_is_connected_to_status_rendering() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let method = extract_method(&source, "render");
+    let probe = format!(r#"
+        const GLib = {{get_real_time: () => 1120000000}};
+        const CLI_TAGS = [['codex', 'CX']];
+        const PopupMenu = {{PopupSeparatorMenuItem: class {{}}}};
+        let routed = false, synchronized = false, painted = '';
+        const updateCodexWindowTracking = (tracking, snapshot, now) => {{ tracking.set('observed', snapshot.observed_at); return tracking; }};
+        const flashingCodexBarMarkup = (forecast, tag, snapshot, now, tracking, bright) => {{
+          routed = tracking.get('observed') === 1120 && bright; return 'codex-markup';
+        }};
+        class Button {{ {method} }}
+        const button = new Button();
+        button._codexTracking = new Map();
+        button._segments = new Map([['codex', {{clutter_text: {{set_markup: value => painted = value}}}}]]);
+        button.menu = {{removeAll: () => {{}}, isEmpty: () => true, addMenuItem: () => {{}}}};
+        button._syncCodexFlash = () => synchronized = true;
+        button._appendForecastSection = () => {{}};
+        button._appendMenuSection = () => {{}};
+        Date.now = () => 2000;
+        button.render({{clis: {{codex: {{observed_at:1120, windows:[]}}}}}});
+        print(JSON.stringify({{routed, synchronized, painted}}));
+    "#);
+    let result = run_gjs(&[], &probe);
+    assert_eq!(result["routed"], true);
+    assert_eq!(result["synchronized"], true);
+    assert_eq!(result["painted"], "codex-markup");
+    println!("None");
+}
+
+/// Verify the status button initializes through the real native GObject lifecycle.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn codex_status_button_initializes_with_native_gobject() {
+    println!("parameters=none");
+    let output = Command::new("gjs").args(["tests/codex_status_native_init.js", env!("CARGO_MANIFEST_DIR")])
+        .current_dir(repo_root()).output().expect("gjs is required");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    println!("None");
+}
