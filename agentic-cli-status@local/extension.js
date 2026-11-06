@@ -592,29 +592,42 @@ function updateCodexWindowTracking(tracking, snapshot, nowEpoch, maxAge = 300) {
   const seen = new Set();
   for (const instance of instances) {
     const identity = `${instance?.id ?? snapshot?.selected ?? 1}:${instance?.home ?? ''}`;
-    for (const window of instance?.windows ?? []) {
+    const authoritative = Array.isArray(instance?.timer_windows);
+    const windows = authoritative ? instance.timer_windows : (instance?.windows ?? []);
+    const observed = Number(authoritative ? instance.timer_observed_at : instance?.observed_at);
+    const matchingHome = !authoritative || (instance.timer_home &&
+      (!instance.home || instance.home === instance.timer_home));
+    for (const window of windows) {
       if (!['5h', 'week'].includes(window.label))
         continue;
       const key = `${identity}:${window.label}`;
       seen.add(key);
-      const observed = Number(instance.observed_at);
       const reset = Number(window.resets_at);
-      if (snapshot?.enabled === false || instance.error || instance.stale ||
+      if (snapshot?.enabled === false || !matchingHome ||
+          (!authoritative && (instance.error || instance.stale)) ||
           !Number.isFinite(observed) || observed <= 0 || observed > nowEpoch + 30 ||
-          nowEpoch - observed > maxAge || !Number.isFinite(reset) || reset <= 0) {
+          nowEpoch - observed > maxAge) {
+        tracking.delete(key);
+        continue;
+      }
+      if (authoritative && window.used_percent === 0 && window.resets_at === null) {
+        tracking.set(key, {observed, latest: observed, reset: null, source: 'codex_metadata', idle: true});
+        continue;
+      }
+      if (!Number.isFinite(reset) || reset <= 0) {
         tracking.delete(key);
         continue;
       }
       const prior = tracking.get(key);
-      const source = instance.source ?? null;
-      if (!prior || prior.source !== source || observed < prior.latest) {
+      const source = authoritative ? 'codex_metadata' : (instance.source ?? null);
+      if (!prior || prior.source !== source || prior.reset === null || observed < prior.latest) {
         tracking.set(key, {observed, latest: observed, reset, source, idle: false});
-      } else if (observed - prior.observed >= 120) {
+      } else if (observed - prior.observed >= 180) {
         const elapsed = observed - prior.observed;
         const delta = reset - prior.reset;
-        // Pane clocks are minute-rounded; require a substantial forward drift
-        // matching elapsed time, allowing a minute of rounding error.
-        const idle = delta >= 60 && Math.abs(delta - elapsed) <= 65;
+        // Pane clocks are minute-rounded; require separation between a fixed
+        // reset and a reset drifting forward with the observation time.
+        const idle = delta >= 120 && Math.abs(delta - elapsed) <= 65;
         tracking.set(key, {observed, latest: observed, reset, source, idle});
       } else if (observed > prior.latest) {
         prior.latest = observed;

@@ -58,23 +58,27 @@ pub fn carry_last_reading(mut snapshot: Value, last_result: Option<&Value>) -> V
     snapshot
 }
 
-/// Copy Codex usage-limit reset counts from a previous snapshot.
-///
-/// `/usage daily` heatmaps and `/status` panes do not include the count, so a
-/// later capture must not erase a count this account already reported.
+/// Carry missing Codex reset counts and timer observations from the same account.
+/// Parameters: snapshot - current account snapshot; last - previous account snapshot.
+/// Returns: current snapshot with missing account metadata carried forward.
 pub fn carry_reset_metadata(snapshot: Value, last: Option<&Value>) -> Value {
-    let Some(last) = last else {
-        return snapshot;
-    };
-    if snapshot.get("resets_available").is_some() {
-        return snapshot;
-    }
+    println!("snapshot={snapshot}, last={last:?}");
     let mut carried = snapshot;
-    for key in ["resets_available", "resets_checked_at", "reset_probe_at"] {
-        if let Some(value) = last.get(key) {
-            carried[key] = value.clone();
+    if let Some(last) = last {
+        for (marker, keys) in [
+            ("resets_available", &["resets_available", "resets_checked_at", "reset_probe_at"][..]),
+            ("timer_windows", &["timer_windows", "timer_observed_at", "timer_home"][..]),
+        ] {
+            if carried.get(marker).is_none() {
+                for key in keys {
+                    if let Some(value) = last.get(*key) {
+                        carried[*key] = value.clone();
+                    }
+                }
+            }
         }
     }
+    println!("{carried}");
     carried
 }
 

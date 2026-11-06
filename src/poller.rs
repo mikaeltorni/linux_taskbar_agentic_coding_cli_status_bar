@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 
 use crate::collectors::codex::refresh_codex_reset_counts;
-use crate::collectors::codex_reset_credits::read_codex_reset_count;
+use crate::collectors::codex_reset_credits::read_codex_rate_limit_metadata;
 use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
     codex_home_authenticated, codex_status_send_failed, collect_claude, collect_codex_accounts,
@@ -61,6 +61,8 @@ pub struct PollHooks {
     pub sleeper: Option<Arc<dyn Fn(f64) + Send + Sync>>,
     /// Inject the read-only Codex reset metadata source in tests.
     pub codex_reset_reader: Option<Arc<dyn Fn(&Path, &str) -> Result<i64, String> + Send + Sync>>,
+    /// Inject an account-scoped read-only timer metadata source in tests.
+    pub codex_metadata_reader: Option<Arc<dyn Fn(&Path, &str) -> Result<Value, String> + Send + Sync>>,
 }
 
 fn now_epoch() -> f64 {
@@ -675,7 +677,7 @@ fn merge_cli_pane(
             .and_then(Value::as_f64)
             .unwrap_or(0.0);
     let mut prior_reset_metadata = json!({});
-    for key in ["resets_available", "resets_checked_at", "reset_probe_at"] {
+    for key in ["resets_available", "resets_checked_at", "reset_probe_at", "timer_windows", "timer_observed_at", "timer_home"] {
         if let Some(value) = snapshot.get(key) {
             prior_reset_metadata[key] = value.clone();
         }
@@ -1291,7 +1293,51 @@ pub fn next_tick_delay(started_at: f64, interval: i64, now: f64) -> f64 {
     (started_at + interval as f64 - now).max(0.0)
 }
 
+/// Attach verified timer observations to the corresponding Codex account only.
+/// Parameters: snapshot - collected Codex accounts; records - per-home metadata results; home - user home; now - observation time.
+/// Returns: the snapshot with fresh account-specific metadata.
+fn attach_codex_timer_metadata(mut snapshot: Value, records: &HashMap<PathBuf, Option<Value>>, home: &Path, now: f64) -> Value {
+    println!("snapshot={snapshot}, records={records:?}, home={home:?}, now={now}");
+    let apply = |row: &mut Value, path: &Path| {
+        if let Some(metadata) = records.get(path) {
+            row["timer_windows"] = metadata.as_ref().and_then(|data| data.get("timer_windows")).cloned().unwrap_or(json!([]));
+            row["timer_observed_at"] = if metadata.is_some() { json!(now) } else { Value::Null };
+            row["timer_home"] = json!(path);
+            if let Some(windows) = metadata.as_ref().and_then(|data| data.get("timer_windows")).and_then(Value::as_array).filter(|windows| !windows.is_empty()) {
+                let mut combined = windows.clone();
+                if let Some(previous) = row.get("windows").and_then(Value::as_array) {
+                    combined.extend(previous.iter().filter(|window| !windows.iter().any(|fresh| fresh["label"] == window["label"])).cloned());
+                }
+                row["windows"] = Value::Array(combined);
+                row["observed_at"] = json!(now);
+                row["source"] = json!("codex_metadata");
+                row["error"] = Value::Null;
+                row["stale"] = json!(false);
+            }
+        }
+    };
+    if let Some(rows) = snapshot.get_mut("instances").and_then(Value::as_array_mut) {
+        for row in rows {
+            if let Some(path) = row.get("home").and_then(Value::as_str).map(PathBuf::from) {
+                apply(row, &path);
+            }
+        }
+        let selected = snapshot["selected"].as_i64();
+        if let Some(row) = snapshot["instances"].as_array().and_then(|rows| rows.iter().find(|row| row["id"].as_i64() == selected)).cloned() {
+            for key in ["timer_windows", "timer_observed_at", "timer_home", "windows", "observed_at", "source", "error", "stale"] {
+                if let Some(value) = row.get(key) { snapshot[key] = value.clone(); }
+            }
+        }
+    } else {
+        apply(&mut snapshot, &home.join(".codex"));
+    }
+    println!("{snapshot}");
+    snapshot
+}
+
 /// Run one poll tick and write the aggregated status file.
+/// Parameters: home - optional home directory; previous - previous status; now - optional epoch seconds; tmux_refresh_request - optional refresh callback; headless_refresh_worker - optional background worker; hooks - injectable collectors.
+/// Returns: the published status document.
 pub fn poll_once(
     home: Option<&Path>,
     previous: Option<&Value>,
@@ -1300,6 +1346,7 @@ pub fn poll_once(
     headless_refresh_worker: Option<&HeadlessRefreshWorker>,
     hooks: &PollHooks,
 ) -> Value {
+    println!("home={home:?}, previous={previous:?}, now={now:?}, tmux_refresh_request={:p}, headless_refresh_worker={:p}, hooks={hooks:p}", tmux_refresh_request.map_or(std::ptr::null(), |callback| callback as *const _ as *const ()), headless_refresh_worker.map_or(std::ptr::null(), |worker| worker as *const _));
     let home_buf = home
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into())));
@@ -1397,11 +1444,19 @@ pub fn poll_once(
                 snapshot = refresh_codex_reset_counts(snapshot, home, now, reader.as_ref());
             } else {
                 let binary = resolve_cli_binary("codex", home);
-                snapshot =
-                    refresh_codex_reset_counts(snapshot, home, now, &|codex_home, account| {
-                        let path = binary.as_deref().ok_or("Codex CLI is unavailable")?;
-                        read_codex_reset_count(path, codex_home, account)
-                    });
+                let records = std::cell::RefCell::new(HashMap::new());
+                snapshot = refresh_codex_reset_counts(snapshot, home, now, &|codex_home, account| {
+                    let read = if let Some(reader) = hooks.codex_metadata_reader.as_ref() {
+                        reader(codex_home, account)
+                    } else {
+                        binary.as_deref().ok_or("Codex CLI is unavailable".to_string())
+                            .and_then(|path| read_codex_rate_limit_metadata(path, codex_home, account))
+                    };
+                    records.borrow_mut().insert(codex_home.to_path_buf(), read.as_ref().ok().cloned());
+                    read.and_then(|metadata| metadata["resets_available"].as_i64()
+                        .ok_or_else(|| "Codex reset availability response had no count".to_string()))
+                });
+                snapshot = attach_codex_timer_metadata(snapshot, &records.into_inner(), home, now);
             }
         }
         snapshot["enabled"] = json!(true);
@@ -1416,6 +1471,7 @@ pub fn poll_once(
     status["codex_reset_forecast"] =
         poll_codex_reset_forecast(&config, previous, home, now, headless_refresh_worker, hooks);
     write_status(&status, home);
+    println!("{status}");
     status
 }
 
@@ -2072,6 +2128,41 @@ mod tests {
             json!({"version": 1, "selected": selected, "instances": rows}).to_string(),
         )
         .unwrap();
+    }
+
+    /// Publish and retain independent read-only timer metadata through the public poller.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn public_poll_publishes_account_scoped_timer_metadata() {
+        println!("parameters=none");
+        let sandbox = Sandbox::new();
+        configure(false);
+        let first = sandbox.home.join(".codex");
+        let second = sandbox.home.join(".codex-account-2");
+        write_instance_registry(&sandbox.home, &[(1, first.clone()), (2, second.clone())], 2);
+        for (home, account) in [(&first, "account-one"), (&second, "account-two")] {
+            fs::create_dir_all(home).unwrap();
+            fs::write(home.join("auth.json"), json!({"tokens":{"account_id":account}}).to_string()).unwrap();
+        }
+        let hooks = PollHooks {
+            codex_metadata_reader: Some(Arc::new(|_, account| {
+                Ok(json!({"resets_available": 1, "timer_windows": [
+                    {"label":"5h", "used_percent": if account == "account-one" {0} else {12}, "resets_at": if account == "account-one" {Value::Null} else {json!(NOW + 1000.0)}}
+                ]}))
+            })),
+            ..PollHooks::default()
+        };
+        let first_poll = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &hooks);
+        assert_eq!(first_poll["clis"]["codex"]["instances"][0]["timer_windows"][0]["resets_at"], Value::Null);
+        assert_eq!(first_poll["clis"]["codex"]["instances"][1]["timer_windows"][0]["used_percent"], json!(12));
+        assert_eq!(first_poll["clis"]["codex"]["instances"][0]["windows"][0]["used_percent"], json!(0));
+        assert!(first_poll["clis"]["codex"]["instances"][0]["error"].is_null());
+        assert_eq!(first_poll["clis"]["codex"]["timer_observed_at"], json!(NOW));
+        let next = poll_once(Some(&sandbox.home), Some(&first_poll), Some(NOW + 10.0), None, None, &hooks);
+        assert_eq!(next["clis"]["codex"]["instances"][0]["timer_windows"], first_poll["clis"]["codex"]["instances"][0]["timer_windows"]);
+        assert_eq!(next["clis"]["codex"]["instances"][0]["timer_observed_at"], json!(NOW));
+        println!("None");
     }
 
     #[test]

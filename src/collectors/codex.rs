@@ -242,7 +242,11 @@ pub fn load_codex_account_instances(home: &Path) -> Vec<CodexAccountInstance> {
     instances
 }
 
+/// Build an account-specific snapshot, preserving its reset and timer metadata.
+/// Parameters: row - registered Codex account; collected - collected snapshot; selected_id - selected account identifier.
+/// Returns: the account snapshot.
 fn instance_snapshot(row: &CodexAccountInstance, collected: Value, selected_id: i64) -> Value {
+    println!("row_id={}, row_home={:?}, row_label={}, collected={collected}, selected_id={selected_id}", row.id, row.home, row.label);
     let mut snap = json!({
         "id": row.id,
         "label": row.label,
@@ -255,11 +259,12 @@ fn instance_snapshot(row: &CodexAccountInstance, collected: Value, selected_id: 
         "credits": collected.get("credits").cloned().unwrap_or(Value::Null),
         "error": collected.get("error").cloned().unwrap_or(Value::Null),
     });
-    for key in ["resets_available", "resets_checked_at", "reset_probe_at"] {
+    for key in ["resets_available", "resets_checked_at", "reset_probe_at", "timer_windows", "timer_observed_at", "timer_home"] {
         if let Some(value) = collected.get(key) {
             snap[key] = value.clone();
         }
     }
+    println!("{snap}");
     snap
 }
 
