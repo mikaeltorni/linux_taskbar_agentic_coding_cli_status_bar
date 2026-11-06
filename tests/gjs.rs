@@ -2273,6 +2273,23 @@ fn codex_full_window_flashes_only_for_advancing_reset() {
         snapshot.instances[1].windows[1].resets_at += 190;
         updateCodexWindowTracking(tracking, snapshot, 1190);
         let bright = flashingCodexBarMarkup(null, 'CX', snapshot, 1190, tracking, true);
+        const frozenTracking = new Map([...tracking].map(([key, value]) => [key, {...value}]));
+        const frozenSnapshot = JSON.parse(JSON.stringify(snapshot));
+        frozenSnapshot.instances[0].observed_at = 1250;
+        updateCodexWindowTracking(frozenTracking, frozenSnapshot, 1250);
+        let immediatelyFixed = flashingCodexBarMarkup(null, 'CX', frozenSnapshot, 1250, frozenTracking, true);
+        const usedTracking = new Map();
+        const usedSnapshot = {instances:[{id:4, home:'/four', timer_home:'/four', timer_observed_at:1000,
+          windows:[{label:'5h', used_percent:0, resets_at:19000}],
+          timer_windows:[{label:'5h', used_percent:0, resets_at:19000}]}]};
+        updateCodexWindowTracking(usedTracking, usedSnapshot, 1000);
+        usedSnapshot.instances[0].timer_observed_at = 1190;
+        usedSnapshot.instances[0].timer_windows[0].resets_at += 190;
+        updateCodexWindowTracking(usedTracking, usedSnapshot, 1190);
+        usedSnapshot.instances[0].timer_observed_at = 1250;
+        usedSnapshot.instances[0].timer_windows[0].used_percent = 1;
+        updateCodexWindowTracking(usedTracking, usedSnapshot, 1250);
+        let immediatelyUsed = flashingCodexBarMarkup(null, 'CX', usedSnapshot, 1250, usedTracking, true);
         let dim = flashingCodexBarMarkup(null, 'CX', snapshot, 1190, tracking, false);
         snapshot.error = 'selected account unavailable';
         snapshot.instances[0].error = 'selected account unavailable';
@@ -2292,12 +2309,14 @@ fn codex_full_window_flashes_only_for_advancing_reset() {
         let rounded = flashingCodexBarMarkup(null, 'CX', snapshot, 1380, tracking, true);
         updateCodexWindowTracking(tracking, snapshot, 2000);
         let stale = flashingCodexBarMarkup(null, 'CX', snapshot, 2000, tracking, true);
-        print(JSON.stringify({initial, explicitIdle, wrongAccount, bright, dim, otherAccount, withForecast, stoppedSliding, error, rounded, stale}));
+        print(JSON.stringify({initial, explicitIdle, wrongAccount, bright, immediatelyFixed, immediatelyUsed, dim, otherAccount, withForecast, stoppedSliding, error, rounded, stale}));
     "#);
     assert!(!result["initial"].as_str().unwrap().contains("#ffffff"), "one reading cannot prove an idle timer");
     assert_eq!(result["explicitIdle"].as_str().unwrap().matches("#ffffff").count(), 1, "explicit idle metadata flashes immediately");
     assert!(!result["wrongAccount"].as_str().unwrap().contains("#ffffff"), "another account's metadata must not flash");
     assert_eq!(result["bright"].as_str().unwrap().matches("#ffffff").count(), 2, "only the independently advancing 5h and week digits flash");
+    assert_eq!(result["immediatelyFixed"].as_str().unwrap().matches("#ffffff").count(), 1, "a freshly fixed timer stops flashing without waiting three minutes");
+    assert!(!result["immediatelyUsed"].as_str().unwrap().contains("#ffffff"), "fresh usage stops flashing despite a stale rendered percentage");
     assert!(!result["dim"].as_str().unwrap().contains("#ffffff"), "flash has a normal phase");
     assert_eq!(result["otherAccount"].as_str().unwrap().matches("#ffffff").count(), 1, "one account's error must not suppress another idle account");
     assert_eq!(result["withForecast"].as_str().unwrap().matches("#ffffff").count(), 2, "forecast and Luna percentages must not flash");

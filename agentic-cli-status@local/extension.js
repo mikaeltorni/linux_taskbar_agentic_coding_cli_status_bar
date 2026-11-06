@@ -614,23 +614,28 @@ function updateCodexWindowTracking(tracking, snapshot, nowEpoch, maxAge = 300) {
         tracking.set(key, {observed, latest: observed, reset: null, source: 'codex_metadata', idle: true});
         continue;
       }
-      if (!Number.isFinite(reset) || reset <= 0) {
+      if (!Number.isFinite(reset) || reset <= 0 ||
+          typeof window.used_percent !== 'number' || !Number.isFinite(window.used_percent) ||
+          window.used_percent < 0 || window.used_percent > 100) {
         tracking.delete(key);
         continue;
       }
       const prior = tracking.get(key);
       const source = authoritative ? 'codex_metadata' : (instance.source ?? null);
-      if (!prior || prior.source !== source || prior.reset === null || observed < prior.latest) {
-        tracking.set(key, {observed, latest: observed, reset, source, idle: false});
+      if (!prior || prior.source !== source || prior.reset === null || observed < prior.latest ||
+          window.used_percent > 0 || (prior.idle && observed > prior.latest &&
+            reset - prior.latestReset < Math.max(1, observed - prior.latest - 65))) {
+        tracking.set(key, {observed, latest: observed, reset, latestReset: reset, source, idle: false});
       } else if (observed - prior.observed >= 180) {
         const elapsed = observed - prior.observed;
         const delta = reset - prior.reset;
         // Pane clocks are minute-rounded; require separation between a fixed
         // reset and a reset drifting forward with the observation time.
         const idle = delta >= 120 && Math.abs(delta - elapsed) <= 65;
-        tracking.set(key, {observed, latest: observed, reset, source, idle});
+        tracking.set(key, {observed, latest: observed, reset, latestReset: reset, source, idle});
       } else if (observed > prior.latest) {
         prior.latest = observed;
+        prior.latestReset = reset;
       }
     }
   }
