@@ -582,6 +582,54 @@ function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 100000
 }
 
 /**
+ * Track whether fresh Codex reset timestamps move with their observation times.
+ * Parameters: tracking - account/window history; snapshot - Codex data; nowEpoch - current epoch seconds; maxAge - maximum observation age in seconds.
+ * Returns: the updated history map.
+ */
+function updateCodexWindowTracking(tracking, snapshot, nowEpoch, maxAge = 300) {
+  print(`tracking=${JSON.stringify([...tracking])}, snapshot=${JSON.stringify(snapshot)}, nowEpoch=${nowEpoch}, maxAge=${maxAge}`);
+  const instances = snapshot?.instances?.length ? snapshot.instances : [snapshot];
+  const seen = new Set();
+  for (const instance of instances) {
+    const identity = `${instance?.id ?? snapshot?.selected ?? 1}:${instance?.home ?? ''}`;
+    for (const window of instance?.windows ?? []) {
+      if (!['5h', 'week'].includes(window.label))
+        continue;
+      const key = `${identity}:${window.label}`;
+      seen.add(key);
+      const observed = Number(instance.observed_at);
+      const reset = Number(window.resets_at);
+      if (snapshot?.enabled === false || instance.error || instance.stale ||
+          !Number.isFinite(observed) || observed <= 0 || observed > nowEpoch + 30 ||
+          nowEpoch - observed > maxAge || !Number.isFinite(reset) || reset <= 0) {
+        tracking.delete(key);
+        continue;
+      }
+      const prior = tracking.get(key);
+      const source = instance.source ?? null;
+      if (!prior || prior.source !== source || observed < prior.latest) {
+        tracking.set(key, {observed, latest: observed, reset, source, idle: false});
+      } else if (observed - prior.observed >= 120) {
+        const elapsed = observed - prior.observed;
+        const delta = reset - prior.reset;
+        // Pane clocks are minute-rounded; require a substantial forward drift
+        // matching elapsed time, allowing a minute of rounding error.
+        const idle = delta >= 60 && Math.abs(delta - elapsed) <= 65;
+        tracking.set(key, {observed, latest: observed, reset, source, idle});
+      } else if (observed > prior.latest) {
+        prior.latest = observed;
+      }
+    }
+  }
+  for (const key of tracking.keys()) {
+    if (!seen.has(key))
+      tracking.delete(key);
+  }
+  print(JSON.stringify([...tracking]));
+  return tracking;
+}
+
+/**
  * Join independent Codex account segments with a gray pipe.
  *
  * Agent Command Center registers extra ChatGPT logins as isolated
@@ -702,6 +750,46 @@ function codexBarWithForecastMarkup(
   const result = resetForecast
     ? `${resetForecast}<span foreground="${NEUTRAL_COLOR}"> | </span>${codex}`
     : codex;
+  return result;
+}
+
+/**
+ * Add a flash to verified inactive full Codex windows in the existing markup.
+ * Parameters: forecast - reset forecast; tag - CLI label; snapshot - account data; nowEpoch - current epoch seconds; tracking - observed timer states; bright - flash phase.
+ * Returns: compact Codex and forecast markup.
+ */
+function flashingCodexBarMarkup(forecast, tag, snapshot, nowEpoch, tracking, bright) {
+  print(`forecast=${JSON.stringify(forecast)}, tag=${tag}, snapshot=${JSON.stringify(snapshot)}, nowEpoch=${nowEpoch}, tracking=${JSON.stringify([...tracking])}, bright=${bright}`);
+  const base = codexBarWithForecastMarkup(forecast, tag, snapshot, nowEpoch);
+  if (!bright || !snapshot || snapshot.error) {
+    print(base);
+    return base;
+  }
+  const instances = snapshot.instances?.length ? snapshot.instances : [snapshot];
+  const separator = `<span foreground="${NEUTRAL_COLOR}"> | </span>`;
+  const chunks = base.split(separator);
+  const offset = chunks.length - instances.length;
+  for (let index = 0; index < instances.length; index++) {
+    const instance = instances[index];
+    if (instance.error || offset + index < 0)
+      continue;
+    const id = instance.id ?? snapshot.selected ?? 1;
+    const windows = (instance.windows ?? []).filter(window => window?.label !== 'luna_reserve');
+    const weekly = windows.find(window => window.label === 'week');
+    if (weekly && percentLeft(weekly, nowEpoch) === 0)
+      continue;
+    const full = windows.filter(window => percentLeft(window, nowEpoch) === 100);
+    let position = 0;
+    const needle = `<span foreground="${percentColor(100)}">100</span>`;
+    chunks[offset + index] = chunks[offset + index].replaceAll(needle, match => {
+      const window = full[position++];
+      const key = `${id}:${instance.home ?? ''}:${window?.label}`;
+      return window?.used_percent === 0 && tracking.get(key)?.idle
+        ? '<span foreground="#ffffff">100</span>' : match;
+    });
+  }
+  const result = chunks.join(separator);
+  print(result);
   return result;
 }
 
@@ -875,8 +963,16 @@ function cliSectionHeading(name, snapshot) {
 
 const AgenticCliStatusButton = GObject.registerClass(
 class AgenticCliStatusButton extends PanelMenu.Button {
+  /** Initialize the status button.
+   * Parameters: self - button instance.
+   * Returns: None.
+   */
   _init() {
+    print(`self=${this}`);
     super._init(0.5, 'Agentic CLI Status');
+    this._codexTracking = new Map();
+    this._codexFlashId = 0;
+    this._codexStatus = null;
     this._box = new St.BoxLayout({ y_align: Clutter.ActorAlign.CENTER });
     this._segments = new Map();
     for (const [cliId, tag] of CLI_TAGS) {
@@ -889,16 +985,22 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       this._box.add_child(label);
     }
     this.add_child(this._box);
+    print(null);
   }
 
   /**
    * Re-render the taskbar segments and the popup menu from a status object.
    *
-   * @param {?object} status - Parsed status.json content, or null when the
-   *   poller has not produced data yet.
-   * @returns {void}
+   * Parameters: self - button instance; status - parsed status or null.
+   * Returns: None.
    */
     render(status) {
+    print(`self=${this}, status=${JSON.stringify(status)}`);
+    this._codexStatus = status;
+    const codex = status?.clis?.codex;
+    const maxAge = Math.max(300, Number(status?.poll_interval_seconds || 5) * 3);
+    updateCodexWindowTracking(this._codexTracking, codex, GLib.get_real_time() / 1000000, maxAge);
+    this._syncCodexFlash();
     this.menu.removeAll();
     if (!status) {
       // No status file yet: fall back to the poller's own config so opt-in
@@ -917,6 +1019,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       }
       this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
         'Waiting for the agentic-cli-status poller…', { reactive: false }));
+      print(null);
       return;
     }
     const codexSnapshot = status.clis?.codex;
@@ -939,7 +1042,8 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       }
       label.visible = true;
       const markup = cliId === 'codex'
-        ? codexBarWithForecastMarkup(status.codex_reset_forecast, tag, snapshot)
+        ? flashingCodexBarMarkup(status.codex_reset_forecast, tag, snapshot,
+          GLib.get_real_time() / 1000000, this._codexTracking, Math.floor(Date.now() / 1000) % 2 === 0)
         : cliId === 'cursor'
           ? cursorBarMarkup(tag, snapshot)
           : segmentMarkup(tag, snapshot);
@@ -960,6 +1064,58 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
       this._appendMenuSection(names[cliId], snapshot);
     }
+    print(null);
+  }
+
+  /** Maintain the animation timer while a known inactive window is visible.
+   * Parameters: self - button instance.
+   * Returns: None.
+   */
+    _syncCodexFlash() {
+    print(`self=${this}`);
+    const idle = [...this._codexTracking.values()].filter(row => row.idle);
+    const active = idle.length > 0;
+    if (active) {
+      const status = this._codexStatus;
+      const snapshot = status.clis.codex;
+      const now = GLib.get_real_time() / 1000000;
+      const maxAge = Math.max(300, Number(status.poll_interval_seconds || 5) * 3);
+      this._codexFlashUntil = Math.min(...idle.map(row => row.latest + maxAge));
+      this._codexFlashNormal = flashingCodexBarMarkup(status.codex_reset_forecast, 'CX', snapshot,
+        now, this._codexTracking, false);
+      this._codexFlashBright = flashingCodexBarMarkup(status.codex_reset_forecast, 'CX', snapshot,
+        now, this._codexTracking, true);
+    }
+    if (!active && this._codexFlashId) {
+      GLib.source_remove(this._codexFlashId);
+      this._codexFlashId = 0;
+    } else if (active && !this._codexFlashId) {
+      this._codexFlashId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
+        const fresh = GLib.get_real_time() / 1000000 <= this._codexFlashUntil;
+        const bright = fresh && Math.floor(Date.now() / 1000) % 2 === 0;
+        this._segments.get('codex').clutter_text.set_markup(
+          bright ? this._codexFlashBright : this._codexFlashNormal);
+        if (!fresh) {
+          this._codexFlashId = 0;
+          return GLib.SOURCE_REMOVE;
+        }
+        return GLib.SOURCE_CONTINUE;
+      });
+    }
+    print(null);
+  }
+
+  /** Stop the animation before removing the button.
+   * Parameters: self - button instance.
+   * Returns: None.
+   */
+    stopCodexFlash() {
+    print(`self=${this}`);
+    if (this._codexFlashId) {
+      GLib.source_remove(this._codexFlashId);
+      this._codexFlashId = 0;
+    }
+    print(null);
   }
 
   /**
@@ -1068,8 +1224,14 @@ export default class AgenticCliStatusExtension extends Extension {
     this._refresh();
   }
 
+  /** Disable the extension and release its resources.
+   * Parameters: self - extension instance.
+   * Returns: None.
+   */
   disable() {
+    print(`self=${this}`);
     log('info', 'disabling');
+    this._button?.stopCodexFlash();
     if (this._timerId) {
       GLib.source_remove(this._timerId);
       this._timerId = null;
@@ -1082,6 +1244,7 @@ export default class AgenticCliStatusExtension extends Extension {
     this._statusFile = null;
     this._button?.destroy();
     this._button = null;
+    print(null);
   }
 
   /**
