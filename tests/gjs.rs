@@ -2274,6 +2274,11 @@ fn codex_full_window_flashes_only_for_advancing_reset() {
         updateCodexWindowTracking(tracking, snapshot, 1190);
         let bright = flashingCodexBarMarkup(null, 'CX', snapshot, 1190, tracking, true);
         let dim = flashingCodexBarMarkup(null, 'CX', snapshot, 1190, tracking, false);
+        snapshot.error = 'selected account unavailable';
+        snapshot.instances[0].error = 'selected account unavailable';
+        let otherAccount = flashingCodexBarMarkup(null, 'CX', snapshot, 1190, tracking, true);
+        delete snapshot.error;
+        delete snapshot.instances[0].error;
         snapshot.instances[0].windows.push({label:'luna_reserve', used_percent:0});
         let withForecast = flashingCodexBarMarkup({enabled:true, consensus_percent:100}, 'CX', snapshot, 1190, tracking, true);
         snapshot.instances[0].windows.pop();
@@ -2287,13 +2292,14 @@ fn codex_full_window_flashes_only_for_advancing_reset() {
         let rounded = flashingCodexBarMarkup(null, 'CX', snapshot, 1380, tracking, true);
         updateCodexWindowTracking(tracking, snapshot, 2000);
         let stale = flashingCodexBarMarkup(null, 'CX', snapshot, 2000, tracking, true);
-        print(JSON.stringify({initial, explicitIdle, wrongAccount, bright, dim, withForecast, stoppedSliding, error, rounded, stale}));
+        print(JSON.stringify({initial, explicitIdle, wrongAccount, bright, dim, otherAccount, withForecast, stoppedSliding, error, rounded, stale}));
     "#);
     assert!(!result["initial"].as_str().unwrap().contains("#ffffff"), "one reading cannot prove an idle timer");
     assert_eq!(result["explicitIdle"].as_str().unwrap().matches("#ffffff").count(), 1, "explicit idle metadata flashes immediately");
     assert!(!result["wrongAccount"].as_str().unwrap().contains("#ffffff"), "another account's metadata must not flash");
     assert_eq!(result["bright"].as_str().unwrap().matches("#ffffff").count(), 2, "only the independently advancing 5h and week digits flash");
     assert!(!result["dim"].as_str().unwrap().contains("#ffffff"), "flash has a normal phase");
+    assert_eq!(result["otherAccount"].as_str().unwrap().matches("#ffffff").count(), 1, "one account's error must not suppress another idle account");
     assert_eq!(result["withForecast"].as_str().unwrap().matches("#ffffff").count(), 2, "forecast and Luna percentages must not flash");
     assert_eq!(result["stoppedSliding"].as_str().unwrap().matches("#ffffff").count(), 1, "fixed reset stops flashing its own digit");
     assert!(!result["error"].as_str().unwrap().contains("#ffffff"), "errored snapshots cannot flash");

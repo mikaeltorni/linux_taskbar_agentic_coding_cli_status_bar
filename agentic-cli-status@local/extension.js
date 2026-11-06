@@ -774,7 +774,7 @@ function codexBarWithForecastMarkup(
 function flashingCodexBarMarkup(forecast, tag, snapshot, nowEpoch, tracking, bright) {
   print(`forecast=${JSON.stringify(forecast)}, tag=${tag}, snapshot=${JSON.stringify(snapshot)}, nowEpoch=${nowEpoch}, tracking=${JSON.stringify([...tracking])}, bright=${bright}`);
   const base = codexBarWithForecastMarkup(forecast, tag, snapshot, nowEpoch);
-  if (!bright || !snapshot || snapshot.error) {
+  if (!bright || !snapshot || (snapshot.error && !snapshot.instances?.length)) {
     print(base);
     return base;
   }
