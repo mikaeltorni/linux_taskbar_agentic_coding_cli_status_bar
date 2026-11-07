@@ -194,6 +194,14 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 | `startup_service` | on | Poller starts at login (`systemd --user`) and keeps running |
 | `model_status_bar` | **off (opt-in)** | Agent taskbar plus independent Harbor run counts, progress, ETA and completion speech |
 
+The panel and its menu show a monitored provider only after it has a fresh,
+valid usage percentage without an error. Codex accounts are checked separately:
+a registered login needs authentication and a fresh account-specific reading.
+The poller publishes this same availability to the ACC help overlay. A missing
+or expired poller snapshot hides the panel readings until fresh data returns.
+Provider monitors that are configured off remain off; enable a supported
+monitor through its installer component to collect its usage.
+
 The Codex reset forecast is part of the default Codex monitoring experience:
 a clean install enables its public sources automatically, and disabling
 the Codex monitor also suppresses forecast fetching and display. The panel
@@ -210,10 +218,12 @@ Clicking or pressing Enter on a source row opens its public page in the
 desktop's default browser. Each source can be disabled with its
 `codex_reset_forecast.sites.<id>.enabled` setting.
 
-Polymarket, `codex_reset` (codex-reset.com), and `will_codex_reset` (Will Codex
-Reset) are retired sources: they are no longer fetched or shown. Old enable
-settings and cached rows for them are ignored automatically. Only
-`codex_reset_monitor` and `whenreset` remain in the source catalog.
+Polymarket is discovered through its public Gamma search API. An open Codex
+reset market appears in the forecast menu with its current Yes prices; weekly
+reset-count outcomes are separate from the 24h/48h consensus. The source
+reports when there is no open market. `codex_reset` (codex-reset.com) and
+`will_codex_reset` (Will Codex Reset) remain retired sources; their old settings
+and cached rows are ignored.
 
 ### Public Codex reset sources
 
@@ -225,6 +235,7 @@ or [OpenAI's usage guidance](https://help.openai.com/en/articles/11369540-using-
 | --- | --- | --- |
 | [Codex Reset Monitor](https://codexreset.org/) | Verified timeline and 24h/48h estimates | Public HTML page |
 | [WhenReset](https://whenreset.dev/codex) | Latest direct or banked reset, with original posts and history | Public Codex RSS feed; shown as historical context |
+| [Polymarket](https://polymarket.com/) | Live Codex reset market prices | Public Gamma search; shown separately from timed consensus |
 
 Every CLI exposes the same reconfigurable option set (via the menu's edit
 action or `bash install.sh --configure-component <id>`):
