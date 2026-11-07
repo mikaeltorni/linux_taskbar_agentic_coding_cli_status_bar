@@ -581,6 +581,21 @@ function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 100000
   return `<span foreground="${tagColor}">${tag} </span>${parts}${staleMark}`;
 }
 
+/** Determine whether a provider returned a usable usage reading.
+ * Parameters: snapshot - provider status from the poller.
+ * Returns: true when an enabled, current reading has a valid percentage.
+ */
+function hasVerifiedUsage(snapshot) {
+  print(`snapshot=${JSON.stringify(snapshot)}`);
+  const result = !!snapshot && snapshot.enabled !== false && !snapshot.error && !snapshot.stale &&
+    typeof snapshot.observed_at === 'number' && Number.isFinite(snapshot.observed_at) && snapshot.observed_at > 0 &&
+    Array.isArray(snapshot.windows) && snapshot.windows.some(window =>
+      typeof window.used_percent === 'number' && Number.isFinite(window.used_percent) &&
+      window.used_percent >= 0 && window.used_percent <= 100);
+  print(result);
+  return result;
+}
+
 /**
  * Track whether fresh Codex reset timestamps move with their observation times.
  * Parameters: tracking - account/window history; snapshot - Codex data; nowEpoch - current epoch seconds; maxAge - maximum observation age in seconds.
@@ -1021,27 +1036,16 @@ class AgenticCliStatusButton extends PanelMenu.Button {
     this._syncCodexFlash();
     this.menu.removeAll();
     if (!status) {
-      // No status file yet: fall back to the poller's own config so opt-in
-      // CLIs (OpenRouter, OpenCode Go) do not flash a placeholder segment
-      // the user never asked for.
-      const enabled = cliEnabledFromConfig(readPollerConfig(), DEFAULT_CLI_ENABLED);
-      for (const [cliId, tag] of CLI_TAGS) {
-        const label = this._segments.get(cliId);
-        if (enabled[cliId] === false) {
-          label.visible = false;
-          continue;
-        }
-        label.text = `${tag} –`;
-        label.style_class = 'acs-segment acs-off';
-        label.visible = true;
-      }
+      // Without a reading no provider has been verified yet.
+      for (const [cliId] of CLI_TAGS)
+        this._segments.get(cliId).visible = false;
       this.menu.addMenuItem(new PopupMenu.PopupMenuItem(
         'Waiting for the agentic-cli-status poller…', { reactive: false }));
       print(null);
       return;
     }
     const codexSnapshot = status.clis?.codex;
-    if (codexSnapshot && codexSnapshot.enabled !== false)
+    if (hasVerifiedUsage(codexSnapshot))
       this._appendForecastSection(status.codex_reset_forecast);
     const names = {
       codex: 'Codex',
@@ -1054,7 +1058,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
     for (const [cliId, tag] of CLI_TAGS) {
       const snapshot = status.clis?.[cliId];
       const label = this._segments.get(cliId);
-      if (!snapshot || snapshot.enabled === false) {
+      if (!hasVerifiedUsage(snapshot)) {
         label.visible = false;
         continue;
       }
