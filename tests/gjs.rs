@@ -1606,7 +1606,7 @@ fn opt_in_clis_stay_off_the_bar_until_enabled() {
     let code = code_only(&source);
     // The waiting-for-poller branch consults the config instead of painting a
     // placeholder for every known CLI.
-    assert!(code.contains("cliEnabledFromConfig(readPollerConfig(), DEFAULT_CLI_ENABLED)"));
+    assert!(code.contains("hasVerifiedUsage(snapshot)"));
     assert!(code.contains("openrouter: false"));
     assert!(code.contains("opencode_go: false"));
     assert!(code.contains("cursor: false"));
@@ -2387,7 +2387,7 @@ fn codex_flash_timer_starts_refreshes_and_stops() {
 fn codex_flash_is_connected_to_status_rendering() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
-    let method = extract_method(&source, "render");
+    let method = format!("{}\nclass Button {{ {} }}", extract_function(&source, "hasVerifiedUsage"), extract_method(&source, "render"));
     let probe = format!(r#"
         const GLib = {{get_real_time: () => 1120000000}};
         const CLI_TAGS = [['codex', 'CX']];
@@ -2397,7 +2397,7 @@ fn codex_flash_is_connected_to_status_rendering() {
         const flashingCodexBarMarkup = (forecast, tag, snapshot, now, tracking, bright) => {{
           routed = tracking.get('observed') === 1120 && bright; return 'codex-markup';
         }};
-        class Button {{ {method} }}
+        {method}
         const button = new Button();
         button._codexTracking = new Map();
         button._segments = new Map([['codex', {{clutter_text: {{set_markup: value => painted = value}}}}]]);
@@ -2406,7 +2406,7 @@ fn codex_flash_is_connected_to_status_rendering() {
         button._appendForecastSection = () => {{}};
         button._appendMenuSection = () => {{}};
         Date.now = () => 2000;
-        button.render({{clis: {{codex: {{observed_at:1120, windows:[]}}}}}});
+        button.render({{clis: {{codex: {{observed_at:1120, windows:[{{used_percent:0}}]}}}}}});
         print(JSON.stringify({{routed, synchronized, painted}}));
     "#);
     let result = run_gjs(&[], &probe);
@@ -2425,5 +2425,49 @@ fn codex_status_button_initializes_with_native_gobject() {
     let output = Command::new("gjs").args(["tests/codex_status_native_init.js", env!("CARGO_MANIFEST_DIR")])
         .current_dir(repo_root()).output().expect("gjs is required");
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    println!("None");
+}
+
+/// Render only providers that have successfully reported usable usage windows.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn status_panel_hides_providers_without_verified_usage() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let render = extract_method(&source, "render");
+    let availability = extract_function(&source, "hasVerifiedUsage");
+    let probe = format!(r#"
+        {availability}
+        const GLib = {{get_real_time: () => 2000000000}};
+        const CLI_TAGS = [['codex', 'CX'], ['claude_code', 'CC'], ['grok', 'G']];
+        const DEFAULT_CLI_ENABLED = {{codex: true, claude_code: true, grok: true}};
+        const readPollerConfig = () => ({{}});
+        const cliEnabledFromConfig = () => DEFAULT_CLI_ENABLED;
+        const PopupMenu = {{PopupMenuItem: class {{}}, PopupSeparatorMenuItem: class {{}}}};
+        const updateCodexWindowTracking = () => {{}};
+        const flashingCodexBarMarkup = () => 'codex';
+        const segmentMarkup = () => 'provider';
+        class Button {{ {render} }}
+        const button = new Button();
+        button._codexTracking = new Map();
+        button._segments = new Map(CLI_TAGS.map(([id]) => [id, {{visible:true, clutter_text:{{set_markup:() => {{}}}}}}]));
+        let sections = [];
+        button.menu = {{removeAll: () => {{sections=[]}}, isEmpty: () => true, addMenuItem: () => {{}}}};
+        button._syncCodexFlash = () => {{}};
+        button._appendForecastSection = () => {{}};
+        button._appendMenuSection = name => sections.push(name);
+        const read = () => Object.fromEntries([...button._segments].map(([id, label]) => [id, label.visible]));
+        button.render(null); const absent = read();
+        button.render({{clis: {{codex: {{enabled:true, observed_at:1999, windows:[{{label:'5h',used_percent:0}}]}}, claude_code: {{enabled:true, windows:[], error:'not signed in'}}, grok: {{enabled:true, observed_at:1999, windows:[{{label:'week',used_percent:17}}]}}}}}});
+        const present = read(), validSections = sections;
+        button.render({{clis: {{codex: {{enabled:true, observed_at:1999, stale:true, windows:[{{used_percent:5}}]}}, claude_code: {{enabled:true, observed_at:1999, windows:[{{used_percent:120}}]}}, grok: {{enabled:false, observed_at:1999, windows:[{{used_percent:5}}]}}}}}});
+        print(JSON.stringify({{absent, present, sections:validSections, invalid:read()}}));
+    "#);
+    let result = run_gjs(&[], &probe);
+    assert_eq!(result["absent"], serde_json::json!({"codex":false,"claude_code":false,"grok":false}));
+    assert_eq!(result["present"], serde_json::json!({"codex":true,"claude_code":false,"grok":true}));
+    assert_eq!(result["sections"], serde_json::json!(["Codex", "Grok CLI"]));
+    assert_eq!(result["invalid"], serde_json::json!({"codex":false,"claude_code":false,"grok":false}));
     println!("None");
 }
