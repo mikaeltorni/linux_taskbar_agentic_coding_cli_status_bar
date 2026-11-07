@@ -581,6 +581,22 @@ function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 100000
   return `<span foreground="${tagColor}">${tag} </span>${parts}${staleMark}`;
 }
 
+/** Check that the poller is still producing current status snapshots.
+ * Parameters: status - published poller document; nowEpoch - current Unix time.
+ * Returns: true when its generation time and polling interval are valid.
+ */
+function statusIsCurrent(status, nowEpoch) {
+  print(`status=${JSON.stringify(status)}, nowEpoch=${nowEpoch}`);
+  const generated = status?.generated_at;
+  const interval = status?.poll_interval_seconds ?? 5;
+  const age = nowEpoch - generated;
+  const result = typeof generated === 'number' && Number.isFinite(generated) &&
+    typeof interval === 'number' && Number.isFinite(interval) &&
+    age >= -30 && age <= Math.max(300, Math.min(interval, 3600) * 3);
+  print(result);
+  return result;
+}
+
 /** Determine whether a provider returned a usable usage reading.
  * Parameters: snapshot - provider status from the poller.
  * Returns: true when the poller verified current usage.
@@ -1045,6 +1061,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
    */
     render(status) {
     print(`self=${this}, status=${JSON.stringify(status)}`);
+    status = statusIsCurrent(status, GLib.get_real_time() / 1000000) ? status : null;
     const codex = verifiedCodexSnapshot(status?.clis?.codex);
     this._codexStatus = status ? {...status, clis: {...status.clis, codex}} : null;
     const maxAge = Math.max(300, Number(status?.poll_interval_seconds || 5) * 3);

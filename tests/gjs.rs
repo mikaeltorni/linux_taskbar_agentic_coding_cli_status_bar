@@ -2388,7 +2388,7 @@ fn codex_flash_timer_starts_refreshes_and_stops() {
 fn codex_flash_is_connected_to_status_rendering() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
-    let method = format!("{}\nclass Button {{ {} }}", format!("{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot")), extract_method(&source, "render"));
+    let method = format!("{}\nclass Button {{ {} }}", format!("{}\n{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot"), extract_function(&source, "statusIsCurrent")), extract_method(&source, "render"));
     let probe = format!(r#"
         const GLib = {{get_real_time: () => 1120000000}};
         const CLI_TAGS = [['codex', 'CX']];
@@ -2407,7 +2407,7 @@ fn codex_flash_is_connected_to_status_rendering() {
         button._appendForecastSection = () => {{}};
         button._appendMenuSection = () => {{}};
         Date.now = () => 2000;
-        button.render({{clis: {{codex: {{available:true, observed_at:1120, windows:[{{used_percent:0}}]}}}}}});
+        button.render({{generated_at:1120, clis: {{codex: {{available:true, observed_at:1120, windows:[{{used_percent:0}}]}}}}}});
         print(JSON.stringify({{routed, synchronized, painted}}));
     "#);
     let result = run_gjs(&[], &probe);
@@ -2437,7 +2437,7 @@ fn status_panel_hides_providers_without_verified_usage() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
     let render = extract_method(&source, "render");
-    let availability = format!("{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot"));
+    let availability = format!("{}\n{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot"), extract_function(&source, "statusIsCurrent"));
     let probe = format!(r#"
         {availability}
         const GLib = {{get_real_time: () => 2000000000}};
@@ -2460,16 +2460,25 @@ fn status_panel_hides_providers_without_verified_usage() {
         button._appendMenuSection = name => sections.push(name);
         const read = () => Object.fromEntries([...button._segments].map(([id, label]) => [id, label.visible]));
         button.render(null); const absent = read();
-        button.render({{clis: {{codex: {{available:true}}, claude_code: {{available:false}}, grok: {{available:true}}}}}});
+        button.render({{generated_at:2000, clis: {{codex: {{available:true}}, claude_code: {{available:false}}, grok: {{available:true}}}}}});
         const present = read(), validSections = sections;
-        button.render({{clis: {{codex: {{available:false}}, claude_code: {{available:false}}, grok: {{available:false}}}}}});
-        print(JSON.stringify({{absent, present, sections:validSections, invalid:read()}}));
+        button.render({{generated_at:2000, clis: {{codex: {{available:false}}, claude_code: {{available:false}}, grok: {{available:false}}}}}});
+        const invalid = read();
+        button.render({{generated_at:1, clis: {{codex: {{available:true}}}}}});
+        const stale = read();
+        button.render({{generated_at:2050, clis: {{codex: {{available:true}}}}}});
+        const future = read();
+        button.render({{generated_at:2000, clis: {{codex: {{available:true}}}}}});
+        print(JSON.stringify({{absent, present, sections:validSections, invalid, stale, future, recovered:read()}}));
     "#);
     let result = run_gjs(&[], &probe);
     assert_eq!(result["absent"], serde_json::json!({"codex":false,"claude_code":false,"grok":false}));
     assert_eq!(result["present"], serde_json::json!({"codex":true,"claude_code":false,"grok":true}));
     assert_eq!(result["sections"], serde_json::json!(["Codex", "Grok CLI"]));
     assert_eq!(result["invalid"], serde_json::json!({"codex":false,"claude_code":false,"grok":false}));
+    assert_eq!(result["stale"], serde_json::json!({"codex":false,"claude_code":false,"grok":false}));
+    assert_eq!(result["future"], serde_json::json!({"codex":false,"claude_code":false,"grok":false}));
+    assert_eq!(result["recovered"], serde_json::json!({"codex":true,"claude_code":false,"grok":false}));
     println!("None");
 }
 
@@ -2481,7 +2490,7 @@ fn status_panel_filters_codex_accounts_independently() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
     let render = extract_method(&source, "render");
-    let availability = format!("{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot"));
+    let availability = format!("{}\n{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot"), extract_function(&source, "statusIsCurrent"));
     let probe = format!(r#"
         {availability}
         const GLib = {{get_real_time: () => 2000000000}};
@@ -2499,7 +2508,7 @@ fn status_panel_filters_codex_accounts_independently() {
         button._appendMenuSection = name => sections.push(name);
         button.menu = {{removeAll:()=>{{}}, isEmpty:()=>true, addMenuItem:()=>{{}}}};
         const good = id => ({{id, available:true, observed_at:1999, windows:[{{used_percent:0}}]}});
-        button.render({{clis:{{codex:{{enabled:true, error:'unavailable', instances:[good(1),good(2),{{id:3,error:'login required',windows:[]}},{{...good(4),available:false,authenticated:false}},{{...good(5),available:false,stale:true}}]}}}}}});
+        button.render({{generated_at:2000, clis:{{codex:{{enabled:true, error:'unavailable', instances:[good(1),good(2),{{id:3,error:'login required',windows:[]}},{{...good(4),available:false,authenticated:false}},{{...good(5),available:false,stale:true}}]}}}}}});
         print(JSON.stringify({{visible:label.visible, painted, sections}}));
     "#);
     let result = run_gjs(&[], &probe);
