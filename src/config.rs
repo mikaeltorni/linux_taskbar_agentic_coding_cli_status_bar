@@ -697,7 +697,7 @@ mod tests {
         assert!(!sites.contains_key("codex_observatory"));
         assert!(!sites.contains_key("codex_resets"));
         // An explicit opt-out survives; unlisted sites default to on.
-        assert!(!sites.contains_key("polymarket"));
+        assert_eq!(sites["polymarket"]["enabled"], json!(true));
         assert_eq!(sites["codex_reset_monitor"]["enabled"], json!(false));
         assert_eq!(sites["whenreset"]["enabled"], json!(true));
         println!("None");

@@ -587,12 +587,32 @@ function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 100000
  */
 function hasVerifiedUsage(snapshot) {
   print(`snapshot=${JSON.stringify(snapshot)}`);
-  const result = !!snapshot && snapshot.enabled !== false && !snapshot.error && !snapshot.stale &&
+  const result = !!snapshot && snapshot.enabled !== false && snapshot.authenticated !== false && !snapshot.error && !snapshot.stale &&
     typeof snapshot.observed_at === 'number' && Number.isFinite(snapshot.observed_at) && snapshot.observed_at > 0 &&
     Array.isArray(snapshot.windows) && snapshot.windows.some(window =>
       typeof window.used_percent === 'number' && Number.isFinite(window.used_percent) &&
       window.used_percent >= 0 && window.used_percent <= 100);
   print(result);
+  return result;
+}
+
+/** Retain only Codex logins with independently verified usage.
+ * Parameters: snapshot - Codex status with optional account rows.
+ * Returns: filtered snapshot, or null when no account has usable usage.
+ */
+function verifiedCodexSnapshot(snapshot) {
+  print(`snapshot=${JSON.stringify(snapshot)}`);
+  let result = null;
+  if (snapshot && snapshot.enabled !== false) {
+    if (Array.isArray(snapshot.instances) && snapshot.instances.length) {
+      const instances = snapshot.instances.filter(hasVerifiedUsage);
+      if (instances.length)
+        result = {...snapshot, instances, error: null, stale: false};
+    } else if (hasVerifiedUsage(snapshot)) {
+      result = snapshot;
+    }
+  }
+  print(JSON.stringify(result));
   return result;
 }
 
@@ -879,8 +899,8 @@ function codexResetForecastMenuEntries(forecast) {
   for (const site of forecast.sites ?? []) {
     const name = String(site?.name ?? site?.id ?? 'Unknown site').trim() ||
       'Unknown site';
-    // Ignore old weekly-count snapshots while the daily source refreshes.
-    const sitePredictions = site?.id === 'polymarket'
+    // Only a freshly identified weekly market may render count outcomes.
+    const sitePredictions = site?.id === 'polymarket' && site?.detail !== 'weekly-count markets · Yes price'
       ? (site?.predictions ?? []).filter(prediction => {
         const label = String(prediction?.label ?? '').trim();
         return /^\d{1,2}\.\d{1,2}$/.test(formatPolymarketDate(label));
@@ -1029,8 +1049,8 @@ class AgenticCliStatusButton extends PanelMenu.Button {
    */
     render(status) {
     print(`self=${this}, status=${JSON.stringify(status)}`);
-    this._codexStatus = status;
-    const codex = status?.clis?.codex;
+    const codex = verifiedCodexSnapshot(status?.clis?.codex);
+    this._codexStatus = status ? {...status, clis: {...status.clis, codex}} : null;
     const maxAge = Math.max(300, Number(status?.poll_interval_seconds || 5) * 3);
     updateCodexWindowTracking(this._codexTracking, codex, GLib.get_real_time() / 1000000, maxAge);
     this._syncCodexFlash();
@@ -1044,8 +1064,8 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       print(null);
       return;
     }
-    const codexSnapshot = status.clis?.codex;
-    if (hasVerifiedUsage(codexSnapshot))
+    const codexSnapshot = codex;
+    if (codexSnapshot)
       this._appendForecastSection(status.codex_reset_forecast);
     const names = {
       codex: 'Codex',
@@ -1056,9 +1076,9 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       cursor: 'Cursor',
     };
     for (const [cliId, tag] of CLI_TAGS) {
-      const snapshot = status.clis?.[cliId];
+      const snapshot = cliId === 'codex' ? codexSnapshot : status.clis?.[cliId];
       const label = this._segments.get(cliId);
-      if (!hasVerifiedUsage(snapshot)) {
+      if (cliId === 'codex' ? !snapshot : !hasVerifiedUsage(snapshot)) {
         label.visible = false;
         continue;
       }
@@ -1074,7 +1094,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         ? 'acs-segment acs-stale'
         : 'acs-segment';
       if (cliId === 'codex' && Array.isArray(snapshot.instances) &&
-          snapshot.instances.length > 1) {
+          snapshot.instances.length > 0) {
         for (const instance of snapshot.instances) {
           if (!this.menu.isEmpty())
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());

@@ -321,6 +321,7 @@ const results = {
     consensus_percent: 48,
     consensus_percent_48h: 48,
   }),
+  forecast_market_counts: codexResetForecastMenuEntries({enabled: true, sites: [{id:'polymarket', name:'Polymarket', detail:'weekly-count markets · Yes price', predictions:[{label:'0',percent:37},{label:'1',percent:46},{label:'4+',percent:33}]}]}),
   forecast_menu_markup: forecastMenuMarkup('Codex & reset <0%-100%> · 50%'),
   valid_forecast_launch: validForecastLaunch,
   reference_forecast_launches: referenceForecastLaunches,
