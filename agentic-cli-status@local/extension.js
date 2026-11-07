@@ -650,6 +650,12 @@ function updateCodexWindowTracking(tracking, snapshot, nowEpoch, maxAge = 300) {
       const key = `${identity}:${window.label}`;
       seen.add(key);
       const reset = Number(window.resets_at);
+      const prior = tracking.get(key);
+      const source = authoritative ? 'codex_metadata' : (instance.source ?? null);
+      // A late writer can publish an old snapshot after a newer one.
+      if (snapshot?.enabled !== false && matchingHome && prior?.source === source &&
+          Number.isFinite(observed) && prior.latest <= nowEpoch + 30 && observed < prior.latest)
+        continue;
       if (snapshot?.enabled === false || !matchingHome ||
           (!authoritative && (instance.error || instance.stale)) ||
           !Number.isFinite(observed) || observed <= 0 || observed > nowEpoch + 30 ||
@@ -657,8 +663,16 @@ function updateCodexWindowTracking(tracking, snapshot, nowEpoch, maxAge = 300) {
         tracking.delete(key);
         continue;
       }
+      // A transient pane-only snapshot must not discard fresher metadata.
+      // Fresh positive usage still immediately cancels an idle warning.
+      if (!authoritative && prior?.source === 'codex_metadata' &&
+          prior.latest <= nowEpoch + 30 && nowEpoch - prior.latest <= maxAge) {
+        if (observed > prior.latest && window.used_percent > 0)
+          prior.idle = false;
+        continue;
+      }
       if (authoritative && window.used_percent === 0 && window.resets_at === null) {
-        tracking.set(key, {observed, latest: observed, reset: null, source: 'codex_metadata', idle: true});
+        tracking.set(key, {observed, latest: observed, reset: null, source, idle: true});
         continue;
       }
       if (!Number.isFinite(reset) || reset <= 0 ||
@@ -667,18 +681,19 @@ function updateCodexWindowTracking(tracking, snapshot, nowEpoch, maxAge = 300) {
         tracking.delete(key);
         continue;
       }
-      const prior = tracking.get(key);
-      const source = authoritative ? 'codex_metadata' : (instance.source ?? null);
-      if (!prior || prior.source !== source || prior.reset === null || observed < prior.latest ||
+      if (!prior || prior.source !== source || prior.reset === null ||
+          prior.latest > nowEpoch + 30 || nowEpoch - prior.latest > maxAge ||
           window.used_percent > 0 || (prior.idle && observed > prior.latest &&
             reset - prior.latestReset < Math.max(1, observed - prior.latest - 65))) {
         tracking.set(key, {observed, latest: observed, reset, latestReset: reset, source, idle: false});
-      } else if (observed - prior.observed >= 180) {
+      } else if (observed - prior.observed >= (authoritative ? 45 : 180)) {
         const elapsed = observed - prior.observed;
         const delta = reset - prior.reset;
-        // Pane clocks are minute-rounded; require separation between a fixed
-        // reset and a reset drifting forward with the observation time.
-        const idle = delta >= 120 && Math.abs(delta - elapsed) <= 65;
+        // Metadata timestamps have second precision. Pane clocks are rounded
+        // to minutes and need a longer observation to distinguish drift.
+        const idle = authoritative
+          ? delta >= 30 && Math.abs(delta - elapsed) <= 20
+          : delta >= 120 && Math.abs(delta - elapsed) <= 65;
         tracking.set(key, {observed, latest: observed, reset, latestReset: reset, source, idle});
       } else if (observed > prior.latest) {
         prior.latest = observed;
@@ -687,7 +702,7 @@ function updateCodexWindowTracking(tracking, snapshot, nowEpoch, maxAge = 300) {
     }
   }
   for (const key of tracking.keys()) {
-    if (!seen.has(key))
+    if (!seen.has(key) && nowEpoch - (tracking.get(key)?.latest ?? 0) > maxAge)
       tracking.delete(key);
   }
   print(JSON.stringify([...tracking]));
@@ -1128,7 +1143,9 @@ class AgenticCliStatusButton extends PanelMenu.Button {
    */
     _syncCodexFlash() {
     print(`self=${this}`);
-    const idle = [...this._codexTracking.values()].filter(row => row.idle);
+    const idle = this._codexStatus?.clis?.codex
+      ? [...this._codexTracking.values()].filter(row => row.idle)
+      : [];
     const active = idle.length > 0;
     if (active) {
       const status = this._codexStatus;
