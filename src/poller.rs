@@ -90,6 +90,22 @@ fn is_stale(snapshot: &Value, stale_after: i64, now: f64) -> bool {
     (now - observed.unwrap()) > stale_after as f64
 }
 
+/// Determine whether an enabled account has a current, parsed usage percentage.
+/// Parameters: snapshot - poller reading with freshness and optional authentication state.
+/// Returns: true only for usable live usage data.
+fn has_verified_usage(snapshot: &Value) -> bool {
+    println!("snapshot={snapshot}");
+    let result = snapshot.get("enabled").and_then(Value::as_bool) != Some(false)
+        && snapshot.get("authenticated").and_then(Value::as_bool) != Some(false)
+        && snapshot.get("stale").and_then(Value::as_bool) != Some(true)
+        && snapshot.get("error").map(Value::is_null).unwrap_or(true)
+        && snapshot.get("observed_at").and_then(Value::as_f64).is_some_and(|value| value.is_finite() && value > 0.0)
+        && snapshot.get("windows").and_then(Value::as_array).is_some_and(|windows| windows.iter().any(|window|
+            window.get("used_percent").and_then(Value::as_f64).is_some_and(|value| value.is_finite() && (0.0..=100.0).contains(&value))));
+    println!("{result}");
+    result
+}
+
 fn carry_fresher_reading(snapshot: Value, last: Option<&Value>) -> Value {
     let Some(last) = last else {
         return snapshot;
@@ -1467,12 +1483,18 @@ pub fn poll_once(
                         .map(|path| codex_home_authenticated(Path::new(path))).unwrap_or(false);
                     row["authenticated"] = json!(authenticated);
                     row["stale"] = json!(is_stale(row, stale_after, now));
+                    row["available"] = json!(has_verified_usage(row));
                 }
             } else {
                 snapshot["authenticated"] = json!(codex_home_authenticated(&home.join(".codex")));
             }
         }
         snapshot["enabled"] = json!(true);
+        let available = snapshot.get("instances").and_then(Value::as_array)
+            .filter(|rows| !rows.is_empty())
+            .map(|rows| rows.iter().any(|row| row["available"] == true))
+            .unwrap_or_else(|| has_verified_usage(&snapshot));
+        snapshot["available"] = json!(available);
         if snapshot.get("error").map(|e| !e.is_null()).unwrap_or(false) {
             let prev_err = last_cli.and_then(|l| l.get("error"));
             if prev_err != snapshot.get("error") {
@@ -1923,6 +1945,7 @@ mod tests {
         assert_eq!(status["poll_interval_seconds"], json!(5));
         let codex = &status["clis"]["codex"];
         assert_eq!(codex["enabled"], json!(true));
+        assert_eq!(status["clis"]["grok"]["available"], json!(true));
         assert_eq!(codex["stale"], json!(false));
         assert_eq!(codex["windows"][0]["used_percent"], json!(57.0));
         assert!(codex.get("resets_available").is_none());
@@ -2239,6 +2262,22 @@ mod tests {
         assert_eq!(plan[0].instance_id, Some(1));
     }
 
+    /// Reject unverified snapshots and accept a real zero-percent usage window.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn availability_requires_valid_current_usage() {
+        println!("parameters=none");
+        let good = json!({"observed_at": 1000, "windows": [{"used_percent": 0}]});
+        assert!(has_verified_usage(&good));
+        for patch in [json!({"error":"not signed in"}), json!({"stale":true}), json!({"authenticated":false}), json!({"enabled":false}), json!({"observed_at":null}), json!({"windows":[]}), json!({"windows":[{"used_percent":101}]})] {
+            let mut reading = good.clone();
+            for (key, value) in patch.as_object().unwrap() { reading[key] = value.clone(); }
+            assert!(!has_verified_usage(&reading), "{patch}");
+        }
+        println!("None");
+    }
+
     /// Publish account login and freshness independently with each usage reading.
     /// Parameters: none.
     /// Returns: None.
@@ -2259,11 +2298,14 @@ mod tests {
         let status = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &hooks);
         let rows = status["clis"]["codex"]["instances"].as_array().unwrap();
         assert_eq!(rows[0]["authenticated"], true);
+        assert_eq!(rows[0]["available"], true);
         assert_eq!(rows[0]["stale"], false);
         assert_eq!(rows[1]["authenticated"], false);
+        assert_eq!(rows[1]["available"], false);
         assert_eq!(rows[1]["stale"], false);
         let later = poll_once(Some(&sandbox.home), Some(&status), Some(NOW + 2000.0), None, None, &hooks);
         assert_eq!(later["clis"]["codex"]["instances"][0]["stale"], true);
+        assert_eq!(later["clis"]["codex"]["available"], false);
         println!("None");
     }
 
