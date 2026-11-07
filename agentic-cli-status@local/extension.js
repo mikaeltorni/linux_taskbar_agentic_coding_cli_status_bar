@@ -583,15 +583,11 @@ function cursorBarMarkup(tag, snapshot, nowEpoch = GLib.get_real_time() / 100000
 
 /** Determine whether a provider returned a usable usage reading.
  * Parameters: snapshot - provider status from the poller.
- * Returns: true when an enabled, current reading has a valid percentage.
+ * Returns: true when the poller verified current usage.
  */
 function hasVerifiedUsage(snapshot) {
   print(`snapshot=${JSON.stringify(snapshot)}`);
-  const result = !!snapshot && snapshot.enabled !== false && snapshot.authenticated !== false && !snapshot.error && !snapshot.stale &&
-    typeof snapshot.observed_at === 'number' && Number.isFinite(snapshot.observed_at) && snapshot.observed_at > 0 &&
-    Array.isArray(snapshot.windows) && snapshot.windows.some(window =>
-      typeof window.used_percent === 'number' && Number.isFinite(window.used_percent) &&
-      window.used_percent >= 0 && window.used_percent <= 100);
+  const result = snapshot?.available === true;
   print(result);
   return result;
 }
