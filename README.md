@@ -33,8 +33,10 @@ weekly window flashes white when that window is confirmed idle and needs usage
 to start its timer. A running timer stays steady, even while its displayed
 remaining percentage rounds to 100. Each account and window is tracked
 independently; missing, stale, or ambiguous timer readings do not flash. A
-moving reset is confirmed from observations at least three minutes apart, while
-an explicit unused window without a reset from account metadata is immediately
+moving reset from precise account metadata is confirmed after observations at
+least 45 seconds apart; minute-rounded pane clocks require three minutes. A
+temporary missing or older status update does not discard fresh timer history.
+An explicit unused window without a reset from account metadata is immediately
 recognized as idle. A trial/free plan is just another instance; its month
 window is independent of the paid account's 5h/week windows. The click menu
 lists `Codex [1]` and `Codex [2] trial *` as separate sections, with `*` on the
