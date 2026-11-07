@@ -2361,6 +2361,13 @@ fn codex_flash_timer_starts_refreshes_and_stops() {
         button._segments = new Map([['codex', {{clutter_text: {{set_markup: value => values.push(value)}}}}]]);
         button._syncCodexFlash(); button._syncCodexFlash();
         const one = timers.size;
+        const currentStatus = button._codexStatus;
+        button._codexStatus = null;
+        button._syncCodexFlash();
+        const hidden = timers.size;
+        button._codexStatus = currentStatus;
+        button._syncCodexFlash();
+        const restored = timers.size;
         const id = button._codexFlashId;
         const continued = timers.get(id)();
         clock = 1500;
@@ -2369,10 +2376,12 @@ fn codex_flash_timer_starts_refreshes_and_stops() {
         const repaint = values.at(-1);
         button._codexTracking.set('1::week', {{idle:true, latest:1500}});
         button._syncCodexFlash(); button.stopCodexFlash();
-        print(JSON.stringify({{one, continued, removed, repaint, after:timers.size, id:button._codexFlashId}}));
+        print(JSON.stringify({{one, hidden, restored, continued, removed, repaint, after:timers.size, id:button._codexFlashId}}));
     "#);
     let result = run_gjs(&[], &probe);
     assert_eq!(result["one"], 1);
+    assert_eq!(result["hidden"], 0);
+    assert_eq!(result["restored"], 1);
     assert_eq!(result["continued"], true);
     assert_eq!(result["removed"], false);
     assert_eq!(result["repaint"], "normal");
@@ -2515,5 +2524,68 @@ fn status_panel_filters_codex_accounts_independently() {
     assert_eq!(result["visible"], true);
     assert_eq!(result["painted"], "1,2");
     assert_eq!(result["sections"], serde_json::json!(["CX1", "CX2"]));
+    println!("None");
+}
+
+/// Keep the idle warning through transient snapshots and recognize precise metadata promptly.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn codex_idle_flash_survives_boot_snapshot_reordering() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let mut snippets: Vec<String> = ["GRADIENT_FULL_RGB", "GRADIENT_MID_RGB", "GRADIENT_LOW_RGB", "EMPTY_COLOR", "NEUTRAL_COLOR", "CLUTTER_MARKUP_PREFIX", "INSTANCE_TAG_FIRST_RGB", "INSTANCE_TAG_LAST_RGB"]
+        .iter().map(|name| extract_constant(&source, name)).collect();
+    snippets.extend(["resetPassed", "percentLeft", "percentColor", "instanceTagColor", "resetClock", "resetDate", "resetCountdown", "creditBlocked", "segmentMarkup", "lunaReserveWindow", "codexLunaReserveWindow", "lunaReserveMarkup", "updateCodexWindowTracking", "codexBarMarkup", "forecastPercentMarkup", "codexBarWithForecastMarkup", "flashingCodexBarMarkup"]
+        .iter().map(|name| extract_function(&source, name)));
+    let result = run_gjs(&snippets, r#"
+        const GLib = imports.gi.GLib;
+        const tracking = new Map();
+        const account = {id:1, home:'/one', timer_home:'/one', timer_observed_at:1794086068.236,
+            windows:[{label:'5h', used_percent:0, resets_at:1794104087}],
+            timer_windows:[{label:'5h', used_percent:0, resets_at:1794104087}]};
+        const other = {id:2, home:'/two', timer_home:'/two', timer_observed_at:1794086068.236,
+            windows:[{label:'5h', used_percent:0, resets_at:1794104088}],
+            timer_windows:[{label:'5h', used_percent:0, resets_at:1794104088}]};
+        const snapshot = {instances:[account, other]};
+        updateCodexWindowTracking(tracking, snapshot, 1794086089);
+        updateCodexWindowTracking(tracking, null, 1794086094);
+        account.timer_observed_at = 1794086118.280;
+        account.timer_windows[0].resets_at = 1794104120;
+        other.timer_observed_at = 1794086118.280;
+        other.timer_windows[0].resets_at = 1794104090;
+        updateCodexWindowTracking(tracking, snapshot, 1794086120);
+        const prompt = flashingCodexBarMarkup(null, 'CX', snapshot, 1794086120, tracking, true);
+        account.timer_observed_at = 1794086068.236;
+        account.timer_windows[0].resets_at = 1794104087;
+        updateCodexWindowTracking(tracking, snapshot, 1794086121);
+        const reordered = flashingCodexBarMarkup(null, 'CX', snapshot, 1794086121, tracking, true);
+        const timewarpTracking = new Map([...tracking].map(([key, value]) => [key, {...value}]));
+        const timewarp = JSON.parse(JSON.stringify(snapshot));
+        timewarp.instances[0].timer_observed_at = 1794085000;
+        timewarp.instances[1].timer_observed_at = 1794085000;
+        updateCodexWindowTracking(timewarpTracking, timewarp, 1794085000);
+        const clockMoved = flashingCodexBarMarkup(null, 'CX', timewarp, 1794085000, timewarpTracking, true);
+        account.timer_observed_at = 1794085000;
+        updateCodexWindowTracking(tracking, snapshot, 1794086121);
+        const staleReordered = flashingCodexBarMarkup(null, 'CX', snapshot, 1794086121, tracking, true);
+        const paneSnapshot = JSON.parse(JSON.stringify(snapshot));
+        delete paneSnapshot.instances[0].timer_windows;
+        paneSnapshot.instances[0].source = 'tmux_pane';
+        paneSnapshot.instances[0].observed_at = 1794086122;
+        updateCodexWindowTracking(tracking, paneSnapshot, 1794086122);
+        const paneFallback = flashingCodexBarMarkup(null, 'CX', paneSnapshot, 1794086122, tracking, true);
+        account.timer_observed_at = 1794086178.280;
+        account.timer_windows[0].resets_at = 1794104120;
+        updateCodexWindowTracking(tracking, snapshot, 1794086179);
+        const rolling = flashingCodexBarMarkup(null, 'CX', snapshot, 1794086179, tracking, true);
+        print(JSON.stringify({prompt, reordered, clockMoved, staleReordered, paneFallback, rolling}));
+    "#);
+    assert_eq!(result["prompt"].as_str().unwrap().matches("#ffffff").count(), 1, "moving reset flashes; fixed reset with two-second jitter remains steady");
+    assert!(result["reordered"].as_str().unwrap().contains("#ffffff"), "older snapshots do not erase confirmed history");
+    assert!(!result["clockMoved"].as_str().unwrap().contains("#ffffff"), "a clock correction cannot retain future idle evidence");
+    assert!(result["staleReordered"].as_str().unwrap().contains("#ffffff"), "very old snapshots cannot erase fresher history");
+    assert!(result["paneFallback"].as_str().unwrap().contains("#ffffff"), "a temporary pane-only reading does not erase fresh metadata history");
+    assert!(!result["rolling"].as_str().unwrap().contains("#ffffff"), "a fresh fixed reset stops the idle flash");
     println!("None");
 }
