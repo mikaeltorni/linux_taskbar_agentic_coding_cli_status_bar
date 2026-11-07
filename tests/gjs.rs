@@ -265,6 +265,7 @@ fn gradient_and_segments() {
         println!("None");
         return;
     };
+    assert!(js["forecast_market_counts"][1]["text"].as_str().unwrap().contains("0: 37% · 1: 46% · 4+: 33%"));
     assert_eq!(js["missing_forecast_volume"], "");
     assert_eq!(js["invalid_forecast_volume"], "");
     assert_eq!(js["color_100"], "#8ff0a4");
@@ -2387,7 +2388,7 @@ fn codex_flash_timer_starts_refreshes_and_stops() {
 fn codex_flash_is_connected_to_status_rendering() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
-    let method = format!("{}\nclass Button {{ {} }}", extract_function(&source, "hasVerifiedUsage"), extract_method(&source, "render"));
+    let method = format!("{}\nclass Button {{ {} }}", format!("{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot")), extract_method(&source, "render"));
     let probe = format!(r#"
         const GLib = {{get_real_time: () => 1120000000}};
         const CLI_TAGS = [['codex', 'CX']];
@@ -2436,7 +2437,7 @@ fn status_panel_hides_providers_without_verified_usage() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
     let render = extract_method(&source, "render");
-    let availability = extract_function(&source, "hasVerifiedUsage");
+    let availability = format!("{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot"));
     let probe = format!(r#"
         {availability}
         const GLib = {{get_real_time: () => 2000000000}};
@@ -2469,5 +2470,41 @@ fn status_panel_hides_providers_without_verified_usage() {
     assert_eq!(result["present"], serde_json::json!({"codex":true,"claude_code":false,"grok":true}));
     assert_eq!(result["sections"], serde_json::json!(["Codex", "Grok CLI"]));
     assert_eq!(result["invalid"], serde_json::json!({"codex":false,"claude_code":false,"grok":false}));
+    println!("None");
+}
+
+/// Keep verified Codex accounts visible even if another account cannot report usage.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn status_panel_filters_codex_accounts_independently() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let render = extract_method(&source, "render");
+    let availability = format!("{}\n{}", extract_function(&source, "hasVerifiedUsage"), extract_function(&source, "verifiedCodexSnapshot"));
+    let probe = format!(r#"
+        {availability}
+        const GLib = {{get_real_time: () => 2000000000}};
+        const CLI_TAGS = [['codex', 'CX']];
+        const PopupMenu = {{PopupSeparatorMenuItem: class {{}}}};
+        const updateCodexWindowTracking = () => {{}};
+        const flashingCodexBarMarkup = (_f, _t, s) => s.instances.map(x => x.id).join(',');
+        const codexInstanceTitle = x => `CX${{x.id}}`;
+        class Button {{ {render} }}
+        const button = new Button();
+        let painted = '', sections = [];
+        const label = {{visible:false, clutter_text:{{set_markup:x => painted=x}}}};
+        button._segments = new Map([['codex',label]]); button._codexTracking = new Map();
+        button._syncCodexFlash = () => {{}}; button._appendForecastSection = () => {{}};
+        button._appendMenuSection = name => sections.push(name);
+        button.menu = {{removeAll:()=>{{}}, isEmpty:()=>true, addMenuItem:()=>{{}}}};
+        const good = id => ({{id, observed_at:1999, windows:[{{used_percent:0}}]}});
+        button.render({{clis:{{codex:{{enabled:true, error:'unavailable', instances:[good(1),good(2),{{id:3,error:'login required',windows:[]}},{{...good(4),authenticated:false}},{{...good(5),stale:true}}]}}}}}});
+        print(JSON.stringify({{visible:label.visible, painted, sections}}));
+    "#);
+    let result = run_gjs(&[], &probe);
+    assert_eq!(result["visible"], true);
+    assert_eq!(result["painted"], "1,2");
+    assert_eq!(result["sections"], serde_json::json!(["CX1", "CX2"]));
     println!("None");
 }

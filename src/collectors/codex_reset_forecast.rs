@@ -2,7 +2,7 @@
 //!
 //! OpenAI grants discretionary ("goodwill") Codex weekly-limit resets on no
 //! published schedule. This collector reads Codex Reset Monitor probabilities,
-//! and WhenReset history. Only published 24h/48h
+//! Polymarket market prices, and WhenReset history. Only published 24h/48h
 //! probabilities contribute to the percentage next to the Codex segments.
 //!
 //! Major components:
@@ -109,15 +109,20 @@ pub struct ForecastSite {
 /// - `codexreset.org` — "Codex Reset Monitor"; HTML only, so it is parsed from
 ///   stable `data-testid` attributes. Its page is ~1 MB and its own data
 ///   refreshes hourly, hence the 300 s floor.
-pub const FORECAST_SITES: &[ForecastSite] = &[ForecastSite {
-    id: "codex_reset_monitor",
-    name: "codexreset.org",
-    url: "https://codexreset.org/",
-    endpoint: "https://codexreset.org/",
-    min_interval_seconds: 300.0,
-    display_order: 3,
-    parse: parse_codex_reset_monitor,
-}];
+/// - Polymarket — public search discovers live Codex reset contracts; dated
+///   and count markets are displayed independently of timed consensus.
+pub const FORECAST_SITES: &[ForecastSite] = &[
+    ForecastSite {
+        id: "codex_reset_monitor", name: "codexreset.org", url: "https://codexreset.org/",
+        endpoint: "https://codexreset.org/", min_interval_seconds: 300.0,
+        display_order: 3, parse: parse_codex_reset_monitor,
+    },
+    ForecastSite {
+        id: "polymarket", name: "Polymarket", url: "https://polymarket.com/",
+        endpoint: "https://gamma-api.polymarket.com/public-search?q=OpenAI%20resets%20Codex%20weekly%20limit&events_status=active&limit_per_type=20",
+        min_interval_seconds: 30.0, display_order: 0, parse: parse_polymarket_search,
+    },
+];
 
 /// A vetted public supplemental source whose data is not an independent
 /// numeric forecast for the consensus.
@@ -300,6 +305,62 @@ fn fetch_site(
     parse(&response.text())
 }
 
+/// Decode a Gamma binary-market field, which may be a JSON array or an encoded one.
+/// Parameters: market - public market object; key - array field name.
+/// Returns: the decoded string array, or an empty array for malformed data.
+fn gamma_strings(market: &Value, key: &str) -> Vec<String> {
+    println!("market={market:?}, key={key}");
+    let value = market.get(key);
+    let result = value.and_then(Value::as_str)
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+        .or_else(|| value.cloned().and_then(|value| serde_json::from_value(value).ok()))
+        .unwrap_or_default();
+    println!("{result:?}");
+    result
+}
+
+/// Parse a live Codex reset event returned by Polymarket public search.
+/// Parameters: body - JSON search response from Gamma.
+/// Returns: active dated market prices or an explicit no-open-market result.
+fn parse_polymarket_search(body: &str) -> Result<SiteForecast, String> {
+    println!("body={body}");
+    let data: Value = serde_json::from_str(body).map_err(|e| format!("invalid Gamma JSON ({e})"))?;
+    let events = data.get("events").and_then(Value::as_array);
+    if events.is_none() && data.pointer("/pagination/totalResults").and_then(Value::as_u64) != Some(0) {
+        return Err("Gamma search has no events array".into());
+    }
+    let event = events.into_iter().flatten().find(|event| {
+        let slug = event.get("slug").and_then(Value::as_str).unwrap_or("");
+        event.get("active").and_then(Value::as_bool) == Some(true)
+            && event.get("closed").and_then(Value::as_bool) == Some(false)
+            && (slug.starts_with("how-many-codex-resets-week-of-") || slug.starts_with("openai-resets-codex-weekly-limit-"))
+            && slug.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+    });
+    let mut result = SiteForecast { detail: Some("no open market".into()), ..SiteForecast::default() };
+    if let Some(event) = event {
+        let slug = event["slug"].as_str().unwrap_or("");
+        result.url = Some(format!("https://polymarket.com/event/{slug}"));
+        let weekly = slug.starts_with("how-many-codex-resets-week-of-");
+        for market in event.get("markets").and_then(Value::as_array).into_iter().flatten() {
+            if market.get("active").and_then(Value::as_bool) != Some(true) || market.get("closed").and_then(Value::as_bool) != Some(false) { continue; }
+            let Some(label) = market.get("groupItemTitle").and_then(Value::as_str) else { continue; };
+            if weekly && (label.is_empty() || !label.chars().all(|ch| ch.is_ascii_digit() || ch == '+')) { continue; }
+            let Some(end_at) = market.get("endDate").and_then(Value::as_str).and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok()).map(|date| date.timestamp() as f64) else { continue; };
+            let outcomes = gamma_strings(market, "outcomes");
+            let prices = gamma_strings(market, "outcomePrices");
+            let Some(price) = outcomes.iter().position(|value| value.eq_ignore_ascii_case("yes"))
+                .and_then(|index| prices.get(index)).and_then(|price| price.parse::<f64>().ok())
+                .filter(|price| price.is_finite() && (0.0..=1.0).contains(price)) else { continue; };
+            result.predictions.push(Prediction { label: label.to_string(), percent: price * 100.0, volume_usd: None, end_at: Some(end_at) });
+        }
+        if !result.predictions.is_empty() {
+            result.detail = Some(if weekly { "weekly-count markets · Yes price" } else { "daily markets · Yes price" }.into());
+        }
+    }
+    println!("{result:?}");
+    Ok(result)
+}
+
 /// Whether a dated prediction is still inside its vote window at `now`.
 ///
 /// An optional cached validity deadline is compared with the collector clock.
@@ -326,7 +387,8 @@ fn visible_predictions(predictions: &[Prediction], now: f64) -> Vec<Prediction> 
         .filter(|prediction| vote_window_open(prediction, now))
         .cloned()
         .collect();
-    if open.iter().any(|prediction| prediction.end_at.is_some()) {
+    if open.iter().any(|prediction| prediction.end_at.is_some())
+        && !open.iter().all(|prediction| prediction.label.chars().all(|ch| ch.is_ascii_digit() || ch == '+')) {
         open.sort_by(|left, right| {
             left.end_at
                 .unwrap_or(f64::INFINITY)
@@ -586,7 +648,7 @@ pub fn collect_codex_reset_forecast(
         let interval = min_interval.max(site.min_interval_seconds);
         if let Some(checked) = checked_within_interval(last_site, now, interval) {
             // Re-serialize any dated commitment that can expire before refetch.
-            if last_site.and_then(|row| row.get("commitment")).is_some() {
+            if last_site.and_then(|row| row.get("commitment")).is_some() || site.id == "polymarket" {
                 let carried = carried_forecast(last_site);
                 let error = last_site
                     .and_then(|row| row.get("error"))
@@ -845,6 +907,7 @@ mod tests {
         let result = FakeOpener {
             bodies: vec![
                 ("codexreset.org".into(), Ok(monitor_html())),
+                ("gamma-api.polymarket.com".into(), Ok(r#"{"events":[]}"#.into())),
                 ("whenreset.dev".into(), Ok("<rss><channel><item><title>Tibo · Bonus reset</title><pubDate>Tue, 22 Sep 2026 18:23:37 GMT</pubDate></item></channel></rss>".into())),
             ],
             calls,
@@ -918,7 +981,7 @@ mod tests {
         assert_eq!(result["consensus_percent_48h"], json!(42.0));
         assert_eq!(result["contributing_sites"], json!(1));
         assert_eq!(result["error"], Value::Null);
-        assert_eq!(result["sites"].as_array().unwrap().len(), 2);
+        assert_eq!(result["sites"].as_array().unwrap().len(), 3);
         assert_eq!(
             result["sites"]
                 .as_array()
@@ -926,15 +989,15 @@ mod tests {
                 .iter()
                 .map(|site| site["id"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["codex_reset_monitor", "whenreset"]
+            vec!["polymarket", "codex_reset_monitor", "whenreset"]
         );
         assert!(!result["sites"]
             .as_array()
             .unwrap()
             .iter()
             .any(|site| site["id"] == "nextreset"));
-        assert_eq!(result["sites"][0]["url"], json!("https://codexreset.org/"));
-        assert_eq!(calls.lock().unwrap().len(), 2);
+        assert_eq!(result["sites"][1]["url"], json!("https://codexreset.org/"));
+        assert_eq!(calls.lock().unwrap().len(), 3);
         println!("None");
     }
 
@@ -1006,7 +1069,7 @@ mod tests {
         );
         calls.lock().unwrap().clear();
 
-        // Both retained sources hold their 300 s minimum interval.
+        // Polymarket refreshes at 30 seconds; the other sources hold their 300 second floor.
         let second = collect_codex_reset_forecast(
             Some(&first),
             Some(1_060.0),
@@ -1016,7 +1079,8 @@ mod tests {
             Some(&all_sites_opener(calls.clone())),
         );
         let fetched = calls.lock().unwrap().clone();
-        assert!(fetched.is_empty());
+        assert_eq!(fetched.len(), 1);
+        assert!(fetched[0].contains("gamma-api.polymarket.com"));
         assert!(fetched.iter().all(|url| !url.contains("codexreset.org")));
         // The throttled site still reports its carried value.
         assert_eq!(second["consensus_percent"], json!(24.0));
@@ -1117,14 +1181,14 @@ mod tests {
             Some(&broken),
         );
 
-        let failed = &result["sites"][0];
+        let failed = &result["sites"][1];
         assert_eq!(failed["id"], json!("codex_reset_monitor"));
         assert_eq!(failed["error"], json!("connection refused"));
         assert_eq!(failed["predictions"][0]["percent"], json!(24.0));
         assert_eq!(failed["url"], json!("https://codexreset.org/"));
-        assert_eq!(result["sites"][1]["id"], json!("whenreset"));
-        assert_eq!(result["sites"][1]["error"], json!("connection refused"));
-        assert!(result["sites"][1]["detail"]
+        assert_eq!(result["sites"][2]["id"], json!("whenreset"));
+        assert_eq!(result["sites"][2]["error"], json!("connection refused"));
+        assert!(result["sites"][2]["detail"]
             .as_str()
             .unwrap()
             .ends_with(" · last known"));
@@ -1149,7 +1213,7 @@ mod tests {
             )],
             calls: Arc::new(Mutex::new(Vec::new())),
         };
-        let sites = json!({"whenreset": {"enabled": false}});
+        let sites = json!({"whenreset": {"enabled": false}, "polymarket": {"enabled": false}});
         let result = collect_codex_reset_forecast(
             None,
             Some(1000.0),
@@ -1193,7 +1257,7 @@ mod tests {
     /// Returns: None.
     fn every_registry_entry_is_a_public_https_endpoint() {
         println!("parameters=none");
-        assert_eq!(FORECAST_SITES.len(), 1);
+        assert_eq!(FORECAST_SITES.len(), 2);
         for site in FORECAST_SITES {
             assert!(site.endpoint.starts_with("https://"), "{}", site.id);
             assert!(site.url.starts_with("https://"), "{}", site.id);

@@ -1459,6 +1459,19 @@ pub fn poll_once(
                 snapshot = attach_codex_timer_metadata(snapshot, &records.into_inner(), home, now);
             }
         }
+        if *cli_id == "codex" {
+            let stale_after = cli_config["stale_after_seconds"].as_i64().unwrap_or(1800);
+            if let Some(rows) = snapshot.get_mut("instances").and_then(Value::as_array_mut) {
+                for row in rows {
+                    let authenticated = row.get("home").and_then(Value::as_str)
+                        .map(|path| codex_home_authenticated(Path::new(path))).unwrap_or(false);
+                    row["authenticated"] = json!(authenticated);
+                    row["stale"] = json!(is_stale(row, stale_after, now));
+                }
+            } else {
+                snapshot["authenticated"] = json!(codex_home_authenticated(&home.join(".codex")));
+            }
+        }
         snapshot["enabled"] = json!(true);
         if snapshot.get("error").map(|e| !e.is_null()).unwrap_or(false) {
             let prev_err = last_cli.and_then(|l| l.get("error"));
@@ -2224,6 +2237,34 @@ mod tests {
         assert_eq!(plan.len(), 1);
         assert_eq!(plan[0].window, "codex");
         assert_eq!(plan[0].instance_id, Some(1));
+    }
+
+    /// Publish account login and freshness independently with each usage reading.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn poll_once_publishes_codex_login_and_freshness_per_account() {
+        println!("parameters=none");
+        let sandbox = Sandbox::new();
+        configure(false);
+        let first = sandbox.home.join(".codex");
+        let second = sandbox.home.join(".codex-account-2");
+        write_codex_auth(&first);
+        let original = write_codex_rollout(&sandbox.home, "2026/07/03", "rollout-a.jsonl", &[codex_token_count_event(57.0, 43.0)]);
+        let other = second.join("sessions/2026/07/03/rollout-b.jsonl");
+        fs::create_dir_all(other.parent().unwrap()).unwrap();
+        fs::copy(original, other).unwrap();
+        write_instance_registry(&sandbox.home, &[(1, first), (2, second)], 1);
+        let hooks = PollHooks { codex_reset_reader: Some(Arc::new(|_, _| Err("test".into()))), ..PollHooks::default() };
+        let status = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &hooks);
+        let rows = status["clis"]["codex"]["instances"].as_array().unwrap();
+        assert_eq!(rows[0]["authenticated"], true);
+        assert_eq!(rows[0]["stale"], false);
+        assert_eq!(rows[1]["authenticated"], false);
+        assert_eq!(rows[1]["stale"], false);
+        let later = poll_once(Some(&sandbox.home), Some(&status), Some(NOW + 2000.0), None, None, &hooks);
+        assert_eq!(later["clis"]["codex"]["instances"][0]["stale"], true);
+        println!("None");
     }
 
     #[test]
