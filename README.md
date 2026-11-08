@@ -502,6 +502,16 @@ requests or writes to history or notes. Install/update with
 `bash install.sh --select model_status_bar`. On Wayland, newly installed
 extension code takes effect after logout/login.
 
+Questions and status replies have their own blue `QUESTION` / `ANSWERED`
+badges. Their compact panel cell shows `Question` or `Answered` beneath the
+bar. These indicators come from ACC's `workflow.interaction` activity, while
+`workflow.task_complete=false` keeps the unfinished task's measured fraction.
+A completed answer does not fill the task bar or discard its retained steps.
+Explicit continue/resume and automatic goal turns retain the same task plan,
+including after restart. ACC owns the plan and interaction lifecycle; this
+extension renders the published fields and does not modify task files.
+Check the question rendering with `gjs tests/workflow_questions.js .`.
+
 Each task with an ACC workflow plan has colored background segments matching
 its terminal workflow bar: blue, purple, teal and amber for completed phases,
 gold for the active action, and charcoal for pending work. Wider gaps separate
