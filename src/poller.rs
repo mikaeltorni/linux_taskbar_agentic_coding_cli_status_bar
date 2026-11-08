@@ -1489,6 +1489,9 @@ pub fn poll_once(
                 snapshot["authenticated"] = json!(codex_home_authenticated(&home.join(".codex")));
             }
         }
+        if *cli_id == "codex" {
+            snapshot = forecast_codex_limits(snapshot, last_cli, now);
+        }
         snapshot["enabled"] = json!(true);
         let available = snapshot.get("instances").and_then(Value::as_array)
             .filter(|rows| !rows.is_empty())
@@ -1508,6 +1511,81 @@ pub fn poll_once(
     write_status(&status, home);
     println!("{status}");
     status
+}
+
+/// Estimate exhaustion independently for one account's rate-limit windows.
+/// Parameters: account - fresh account snapshot; previous - previous account snapshot; now - current epoch seconds.
+/// Returns: account snapshot with per-window forecast metadata.
+fn forecast_account_limits(mut account: Value, previous: Option<&Value>, now: f64) -> Value {
+    println!("account={account}, previous={previous:?}, now={now}");
+    let observed = account["observed_at"].as_f64().unwrap_or(0.0);
+    let stale = account["stale"].as_bool().unwrap_or(false);
+    if let Some(windows) = account.get_mut("windows").and_then(Value::as_array_mut) {
+        for window in windows {
+            let label = window["label"].as_str().unwrap_or("");
+            let used = window["used_percent"].as_f64();
+            let reset = window["resets_at"].as_f64();
+            let prior = previous.and_then(|p| p["windows"].as_array())
+                .and_then(|rows| rows.iter().find(|row| row["label"].as_str() == Some(label)));
+            let matching = prior.filter(|row| row["resets_at"].as_f64() == reset);
+            let baseline = matching.and_then(|row| row.get("usage_baseline")).cloned().or_else(|| {
+                matching.and_then(|row| Some(json!({"used_percent":row["used_percent"].as_f64()?, "observed_at":previous?["observed_at"].as_f64()?})))
+            });
+            let anchor = baseline.filter(|base| {
+                let old = base["used_percent"].as_f64().unwrap_or(-1.0);
+                let at = base["observed_at"].as_f64().unwrap_or(0.0);
+                used.is_some_and(|value| value >= old && value <= 100.0) && old >= 0.0 && at > 0.0 && observed >= at
+            }).unwrap_or_else(|| json!({"used_percent":used, "observed_at":observed}));
+            let old_used = anchor["used_percent"].as_f64().unwrap_or(0.0);
+            let old_time = anchor["observed_at"].as_f64().unwrap_or(0.0);
+            let mut eta = None;
+            let mut forecast_state = if stale { "stale" } else { "estimating" };
+            if !stale && observed > old_time && old_time > 0.0 {
+                if let Some(value) = used.filter(|value| value.is_finite() && *value > old_used && *value <= 100.0) {
+                    let deadline = observed + (100.0 - value) * (observed - old_time) / (value - old_used);
+                    if deadline.is_finite() {
+                        if reset.is_none_or(|limit| deadline <= limit) {
+                            eta = Some((deadline - now).max(0.0));
+                            forecast_state = "active";
+                        } else {
+                            forecast_state = "after_reset";
+                        }
+                    }
+                }
+            }
+            if !stale && used.is_some_and(|value| value >= 100.0) {
+                eta = Some(0.0);
+                forecast_state = "active";
+            }
+            window["usage_baseline"] = anchor;
+            window["exhaustion_seconds"] = json!(eta);
+            window["exhaustion_state"] = json!(forecast_state);
+        }
+    }
+    println!("{account}");
+    account
+}
+
+/// Attach account-scoped usage forecasts to the Codex snapshot.
+/// Parameters: snapshot - current Codex snapshot; previous - previous Codex snapshot; now - current epoch seconds.
+/// Returns: snapshot with per-window forecast data.
+fn forecast_codex_limits(mut snapshot: Value, previous: Option<&Value>, now: f64) -> Value {
+    println!("snapshot={snapshot}, previous={previous:?}, now={now}");
+    if let Some(rows) = snapshot.get_mut("instances").and_then(Value::as_array_mut) {
+        for row in rows {
+            let prior = previous.and_then(|p| p["instances"].as_array())
+                .and_then(|items| items.iter().find(|item| item["id"] == row["id"] && item["home"] == row["home"]));
+            *row = forecast_account_limits(row.clone(), prior, now);
+        }
+        let selected = snapshot["selected"].as_i64();
+        if let Some(row) = snapshot["instances"].as_array().and_then(|rows| rows.iter().find(|row| row["id"].as_i64() == selected)).cloned() {
+            snapshot["windows"] = row["windows"].clone();
+        }
+    } else {
+        snapshot = forecast_account_limits(snapshot, previous, now);
+    }
+    println!("{snapshot}");
+    snapshot
 }
 
 /// Refresh the Codex reset forecast for this tick.
@@ -2164,6 +2242,55 @@ mod tests {
             json!({"version": 1, "selected": selected, "instances": rows}).to_string(),
         )
         .unwrap();
+    }
+
+    /// Estimate exhaustion from two observations of the same Codex account window.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn public_poll_forecasts_account_exhaustion() {
+        println!("parameters=none");
+        let sandbox = Sandbox::new();
+        configure(false);
+        let account_home = sandbox.home.join(".codex");
+        write_instance_registry(&sandbox.home, &[(1, account_home.clone())], 1);
+        fs::create_dir_all(&account_home).unwrap();
+        fs::write(account_home.join("auth.json"), json!({"tokens":{"account_id":"account-one"}}).to_string()).unwrap();
+        let first_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":10, "resets_at": NOW + 1000.0}]})))), ..PollHooks::default() };
+        let second_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":20, "resets_at": NOW + 1000.0}]})))), ..PollHooks::default() };
+        let first = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &first_hooks);
+        let second = poll_once(Some(&sandbox.home), Some(&first), Some(NOW + 60.0), None, None, &second_hooks);
+        assert_eq!(second["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"], json!(480.0));
+        let third = poll_once(Some(&sandbox.home), Some(&second), Some(NOW + 70.0), None, None, &second_hooks);
+        assert_eq!(third["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"], json!(470.0));
+        let reset_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":2, "resets_at": NOW + 5000.0}]})))), ..PollHooks::default() };
+        let reset = poll_once(Some(&sandbox.home), Some(&third), Some(NOW + 120.0), None, None, &reset_hooks);
+        assert!(reset["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"].is_null());
+        println!("None");
+    }
+
+    /// Keep forecast history isolated between accounts and unchanged windows.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn public_poll_forecasts_each_account_independently() {
+        println!("parameters=none");
+        let sandbox = Sandbox::new();
+        configure(false);
+        let first = sandbox.home.join(".codex");
+        let second = sandbox.home.join(".codex-account-2");
+        write_instance_registry(&sandbox.home, &[(1, first.clone()), (2, second.clone())], 1);
+        for (path, id) in [(&first, "one"), (&second, "two")] {
+            fs::create_dir_all(path).unwrap();
+            fs::write(path.join("auth.json"), json!({"tokens":{"account_id":id}}).to_string()).unwrap();
+        }
+        let earlier = PollHooks { codex_metadata_reader: Some(Arc::new(|_, account| Ok(json!({"resets_available":1, "timer_windows":[{"label":"5h", "used_percent":if account == "one" {10} else {40}, "resets_at":NOW + 10000.0}]})))), ..PollHooks::default() };
+        let later = PollHooks { codex_metadata_reader: Some(Arc::new(|_, account| Ok(json!({"resets_available":1, "timer_windows":[{"label":"5h", "used_percent":if account == "one" {20} else {40}, "resets_at":NOW + 10000.0}]})))), ..PollHooks::default() };
+        let first_poll = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &earlier);
+        let next = poll_once(Some(&sandbox.home), Some(&first_poll), Some(NOW + 60.0), None, None, &later);
+        assert_eq!(next["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"], json!(480.0));
+        assert!(next["clis"]["codex"]["instances"][1]["windows"][0]["exhaustion_seconds"].is_null());
+        println!("None");
     }
 
     /// Publish and retain independent read-only timer metadata through the public poller.

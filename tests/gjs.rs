@@ -219,6 +219,7 @@ fn agentic_results() -> Option<Value> {
         "resetDate",
         "resetCountdown",
         "resetsText",
+        "exhaustionText",
         "resetAvailabilityText",
         "creditBlocked",
         "zeroBalance",
@@ -265,6 +266,9 @@ fn gradient_and_segments() {
         println!("None");
         return;
     };
+    assert_eq!(js["exhaustion_estimate"], " — limit in 8m");
+    assert_eq!(js["exhaustion_unknown"], " — estimating usage rate");
+    assert_eq!(js["exhaustion_after_reset"], " — not expected before reset");
     assert!(js["forecast_market_counts"][1]["text"].as_str().unwrap().contains("0: 37% · 1: 46% · 4+: 33%"));
     assert_eq!(js["missing_forecast_volume"], "");
     assert_eq!(js["invalid_forecast_volume"], "");
