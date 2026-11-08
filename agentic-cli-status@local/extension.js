@@ -1022,6 +1022,24 @@ function resetsText(epoch, label) {
   return ` — resets ${reset}`;
 }
 
+/** Describe a Codex window's projected exhaustion time.
+ * Parameters: window - published rate-limit window and forecast.
+ * Returns: short forecast text for the account menu.
+ */
+function exhaustionText(window) {
+  print(`window=${JSON.stringify(window)}`);
+  const seconds = window?.exhaustion_seconds;
+  let result = window?.exhaustion_state === 'after_reset' ? ' — not expected before reset' :
+    window?.exhaustion_state === 'stale' ? ' — rate unavailable' : ' — estimating usage rate';
+  if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0) {
+    const minutes = Math.ceil(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    result = minutes < 1 ? ' — limit reached' : hours ? ` — limit in ${hours}h ${minutes % 60}m` : ` — limit in ${minutes}m`;
+  }
+  print(result);
+  return result;
+}
+
 /** Format Codex's optional manual-reset allowance for the details heading. */
 function resetAvailabilityText(count) {
   return Number.isInteger(count) && count >= 0
@@ -1266,7 +1284,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       item.label.clutter_text.set_markup(
         `   ${GLib.markup_escape_text(title, -1)}: ` +
         `<span foreground="${percentColor(left)}">${left}% left</span>` +
-        GLib.markup_escape_text(reset, -1));
+        GLib.markup_escape_text(reset + (name.startsWith('Codex') ? exhaustionText(window) : ''), -1));
       this.menu.addMenuItem(item);
     }
     if (name === 'Cursor') {
