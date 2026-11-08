@@ -137,27 +137,30 @@ function displayedPhase(agent) {
     return phase;
 }
 
+/** Format an interaction badge or the task's clock and measured counts.
+ * Parameters: agent - scoped payload row; nowMs - optional clock epoch.
+ * Returns: question/answer badge or task clock and phase.
+ */
 function agentPhaseBadgeText(agent, nowMs) {
+    print(`agent=${agent} nowMs=${nowMs}`);
     const phase = displayedPhase(agent);
     const completed = agent?.workflow?.phase_completed;
     const total = agent?.workflow?.phase_total;
-    const showProgress = phase !== 'DONE' && !agent?.unread_completion && !(phase === 'DONE' && agent?.ready_completed_at) &&
-        Number.isInteger(completed) && Number.isInteger(total) &&
-        total > 0 && completed >= 0 && completed <= total;
+    const showProgress = phase !== 'DONE' && !agent?.unread_completion &&
+        Number.isInteger(completed) && Number.isInteger(total) && total > 0 && completed >= 0 && completed <= total;
     const prefix = showProgress ? `[${completed}/${total}] ` : '';
-    const resetAt = Date.parse(agent && agent.queued_reset_at || '');
-    if (phase !== 'DONE' && !Number.isNaN(resetAt)) {
-        const now = Number.isFinite(nowMs) ? nowMs : Date.now();
-        if (resetAt > now)
-            return `${prefix}-${formatRunTimer(Math.ceil((resetAt - now) / 1000))}`;
-    }
-    const started = Date.parse(agent && agent.run_started_at || '');
-    const active = Boolean(agent && agent.run_active);
-    if (phase === 'RUNNING' && active && !Number.isNaN(started)) {
-        const now = Number.isFinite(nowMs) ? nowMs : Date.now();
-        return `${prefix}${formatRunTimer((now - started) / 1000)}`;
-    }
-    return `${prefix}${phase}`;
+    const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+    const resetAt = Date.parse(agent?.queued_reset_at || '');
+    const started = Date.parse(agent?.run_started_at || '');
+    let result = `${prefix}${phase}`;
+    if (agent?.workflow?.interaction?.mode === 'question')
+        result = agent.workflow.interaction.state === 'complete' ? 'ANSWERED' : 'QUESTION';
+    else if (phase !== 'DONE' && resetAt > now)
+        result = `${prefix}-${formatRunTimer(Math.ceil((resetAt - now) / 1000))}`;
+    else if (phase === 'RUNNING' && agent?.run_active && !Number.isNaN(started))
+        result = `${prefix}${formatRunTimer((now - started) / 1000)}`;
+    print(result);
+    return result;
 }
 
 /**
@@ -166,6 +169,7 @@ function agentPhaseBadgeText(agent, nowMs) {
  * Returns: CSS color from the phase palette.
  */
 function agentPhaseBadgeColor(agent, nowMs) {
+    print(`agent=${agent} nowMs=${nowMs}`);
     const now = Number.isFinite(nowMs) ? nowMs : Date.now();
     const phase = displayedPhase(agent);
     let result = phaseColor(phase);
@@ -176,6 +180,8 @@ function agentPhaseBadgeColor(agent, nowMs) {
             !Number.isNaN(Date.parse(agent.run_started_at || '')))
             result = PHASE_COLORS.GOAL;
     }
+    if (agent?.workflow?.interaction?.mode === 'question') result = '#5ca8ff';
+    print(result);
     return result;
 }
 
@@ -870,14 +876,19 @@ function workspaceAttentionCounts(payload) {
     return entries;
 }
 
-/** Return a measured fraction, or null when completion replaces progress. */
+/** Return measured task progress independently of conversational completion.
+ * Parameters: agent - scoped payload row.
+ * Returns: a bounded measured fraction, or null when unavailable.
+ */
 function taskProgressValue(agent) {
-    if (agent.unread_completion || (String(agent.phase || '').toUpperCase() === 'DONE' &&
-        agent.ready_completed_at))
-        return null;
+    print(`agent=${agent}`);
+    const ready = agent.workflow?.task_complete !== false && (agent.unread_completion ||
+        (String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at));
     const value = agent.workflow?.fraction;
-    return typeof value === 'number' && Number.isFinite(value)
+    const result = !ready && typeof value === 'number' && Number.isFinite(value)
         ? Math.max(0, Math.min(1, value)) : null;
+    print(result);
+    return result;
 }
 
 /**
@@ -886,9 +897,11 @@ function taskProgressValue(agent) {
  * Returns: a fraction from zero to one, or null when progress is unavailable.
  */
 function panelTaskProgressValue(agent) {
-    const result = agent.unread_completion ||
-        (String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at)
+    print(`agent=${agent}`);
+    const result = agent.workflow?.task_complete !== false && (agent.unread_completion ||
+        (String(agent.phase || '').toUpperCase() === 'DONE' && agent.ready_completed_at))
         ? 1 : agent.workflow?.available === false ? null : taskProgressValue(agent);
+    print(result);
     return result;
 }
 
@@ -1044,12 +1057,14 @@ function panelResetRemainingSeconds(agent, now) {
  * Returns: true when the task is done and must not be presented as waiting to start.
  */
 function taskMarkedDone(agent) {
+    print(`agent=${agent}`);
     const phase = String(agent?.phase || '').trim().toUpperCase();
     const completed = agent?.workflow?.phase_completed;
     const total = agent?.workflow?.phase_total;
     const workflowDone = Number.isInteger(completed) && Number.isInteger(total) &&
         total > 0 && completed >= total;
-    const result = phase === 'DONE' || Boolean(agent?.ready_completed_at) || workflowDone;
+    const result = agent?.workflow?.task_complete !== false && (phase === 'DONE' || Boolean(agent?.ready_completed_at) || workflowDone);
+    print(result);
     return result;
 }
 
@@ -1072,6 +1087,8 @@ function panelLaunchWaitSeconds(agent, now) {
  * Returns: compact agent duration or Harbor forecast/status text, or empty text.
  */
 const panelAgentEstimateText = (agent) => {
+    if (agent?.workflow?.interaction?.mode === 'question')
+        return agent.workflow.interaction.state === 'complete' ? 'Answered' : 'Question';
     if (agent.harbor)
         return formatHarborEstimate(agent.harbor);
     const label = panelLaunchWaitSeconds(agent, Date.now()) === null &&
@@ -1151,6 +1168,8 @@ const panelAgentRuntimeText = (agent, now = Date.now()) => {
  * Returns: pink Harbor count, completion RGB, goal purple, queued-reset green, interruption red, or running yellow.
  */
 const panelAgentRuntimeColor = (agent, now = Date.now(), stale = false) => {
+    if (agent?.workflow?.interaction?.mode === 'question')
+        return '#5ca8ff';
     if (agent.harbor)
         return '#f472b6';
     let color = panelProgressGoalActive(agent) ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING;
