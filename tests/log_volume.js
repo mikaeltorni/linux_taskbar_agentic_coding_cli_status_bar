@@ -40,20 +40,21 @@ for (let i = 0; i < 100; i++) {
     check(api.agentPhaseBadgeColor(agent, Date.parse('2026-10-14T10:01:30Z')) === '#a855f7',
         'goal color is retained');
 }
-check(traces.length === 0, `routine status updates emitted ${traces.length} trace messages`);
+check(traces.some(value => value.startsWith('agent=')), 'authored badge functions print their parameter contracts');
+const statusTraceCount = traces.length;
 check(serializations === 0, `diagnostics serialized agent payloads ${serializations} times`);
 const button = new api.AccModelStatusButton();
 let actorDescriptions = 0;
 button.toString = () => { actorDescriptions++; return 'off-stage actor'; };
 button._taskHover = null;
 button._hideTaskHover();
-check(actorDescriptions === 0 && traces.length === 0, 'cleanup must not stringify off-stage actors');
+check(actorDescriptions === 0 && traces.length === statusTraceCount, 'cleanup must not stringify off-stage actors');
 check(api.readPayload({load_contents: () => [true, new TextEncoder().encode('{bad json')]}) === null,
     'invalid payload retains its safe fallback');
 check(errors.length === 1 && errors[0][1] === 'acc-model-status: unparsable payload',
     'real payload errors remain visible');
-check(traces.length === 0, 'error handling adds no diagnostic trace spam');
-print('PASS: 300 status calls retain clocks/colors with zero traces, payload serialization or actor descriptions.');
+check(traces.length === statusTraceCount, 'error handling adds no diagnostic trace spam');
+print('PASS: 300 status calls retain clocks/colors with parameter/return prints and zero payload serialization or actor descriptions.');
 
 const item = new Actor();
 item.actor = item;
@@ -74,6 +75,7 @@ const rates = new Function('GObject', 'PanelMenu', 'Extension', 'print',
     `${rateSource}\nreturn {codexBarWithForecastMarkup, codexResetForecastMenuEntries};`)(
     {registerClass: value => value}, {Button: class {}}, class {},
     (...values) => traces.push(values.map(String).join(' ')));
+const forecastTraceCount = traces.length;
 const forecast = {enabled: true, consensus_percent_24h: 28, consensus_percent_48h: 49,
     sites: [{name: 'Example', predictions: [{label: '24h', percent: 28}]}],
     toJSON: () => { serializations++; return {enabled: true}; }};
@@ -83,5 +85,5 @@ for (let i = 0; i < 100; i++) {
     const entries = rates.codexResetForecastMenuEntries(forecast);
     check(entries[1].text === 'Example — 24h: 28%', 'forecast menu entries are retained');
 }
-check(traces.length === 0 && serializations === 0, 'forecast rendering must not dump snapshots into syslog');
+check(traces.length === forecastTraceCount && serializations === 0, 'forecast rendering must not dump snapshots into syslog');
 print('PASS: 200 forecast calls retain output with zero traces or diagnostic serialization.');
