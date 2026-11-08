@@ -215,6 +215,15 @@ hidden when there is no valid consensus. The popup has a plain
 `Codex reset forecast` heading followed by one named row per source. Forecast
 rows show every published horizon; WhenReset links to reset history without
 adding a percentage to the consensus.
+
+Each Codex account's 5-hour and weekly rows also show an estimate of when the
+remaining allowance will be exhausted at the observed usage rate. The poller
+compares readings for the same account and reset window, refreshes its status
+on the configured polling interval (five seconds by default), and updates the
+countdown without sending prompts. It shows an estimating/unavailable message
+until it has enough fresh data; when the extrapolated time falls after the
+window resets, the menu says exhaustion is not expected before reset. These
+are projections from observed usage, not guaranteed deadlines.
 The 24h/48h percentages come from Codex Reset Monitor (`codexreset.org`).
 Clicking or pressing Enter on a source row opens its public page in the
 desktop's default browser. Each source can be disabled with its
