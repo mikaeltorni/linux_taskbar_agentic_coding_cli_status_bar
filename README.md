@@ -49,7 +49,9 @@ Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
 Codex's manual-reset allowance is refreshed independently for each account
 through the installed CLI's read-only `account/rateLimits/read` metadata request
-every minute. The same account-validated read publishes its 5h and weekly
+every minute. Fresh metadata remains authoritative between refreshes for up to
+two minutes, preserving its original observation time; an older pane cannot
+replace it with a pre-probe 100% reading. The same account-validated read publishes its 5h and weekly
 usage and reset timestamps to the status document for the indicator and ACC's
 startup probe selection. The menu shows zero resets explicitly; a failed read
 hides the old count and timer metadata until the next retry. This does not
@@ -745,6 +747,7 @@ replace its input.
 systemctl --user status agentic-cli-status.service   # poller health
 agentic-cli-status --show                            # print current status.json
 agentic-cli-status --once                            # force one poll tick
+agentic-cli-status --once --no-tmux-refresh          # metadata/local refresh without console slash commands
 journalctl --user -u agentic-cli-status.service      # poller logs (installed)
 ```
 
