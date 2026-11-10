@@ -31,6 +31,9 @@ struct Cli {
     /// Run one tick and exit.
     #[arg(long, conflicts_with_all = ["daemon", "show"])]
     once: bool,
+    /// Read local/headless data without issuing console slash commands.
+    #[arg(long, requires = "once")]
+    no_tmux_refresh: bool,
     /// Poll at the configured rate until SIGTERM/SIGINT.
     #[arg(long, conflicts_with_all = ["once", "show"])]
     daemon: bool,
@@ -80,7 +83,11 @@ enum CrsCommand {
     Setup,
 }
 
+/// Parse CLI options once and route the selected status operation.
+/// Parameters: none.
+/// Returns: the process exit status.
 fn main() -> ExitCode {
+    eprintln!("parameters=none");
     let cli = Cli::parse();
     let code = if let Some(command) = cli.command {
         match command {
@@ -120,7 +127,9 @@ fn main() -> ExitCode {
         }
     } else if cli.once {
         logging::info("running one poll tick");
-        let _ = poll_once(None, None, None, None, None, &PollHooks::default());
+        let skip_console = |_: &str, _: &str, _: &str| false;
+        let refresh = if cli.no_tmux_refresh { Some(&skip_console as &dyn Fn(&str, &str, &str) -> bool) } else { None };
+        let _ = poll_once(None, None, None, refresh, None, &PollHooks::default());
         0
     } else if cli.daemon {
         run_daemon(None, PollHooks::default());
@@ -130,5 +139,7 @@ fn main() -> ExitCode {
         let _ = load_config(None);
         2
     };
-    ExitCode::from(code as u8)
+    let result = ExitCode::from(code as u8);
+    eprintln!("{result:?}");
+    result
 }

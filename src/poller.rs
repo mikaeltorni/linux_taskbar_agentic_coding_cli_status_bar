@@ -1319,13 +1319,17 @@ fn attach_codex_timer_metadata(mut snapshot: Value, records: &HashMap<PathBuf, O
             row["timer_windows"] = metadata.as_ref().and_then(|data| data.get("timer_windows")).cloned().unwrap_or(json!([]));
             row["timer_observed_at"] = if metadata.is_some() { json!(now) } else { Value::Null };
             row["timer_home"] = json!(path);
-            if let Some(windows) = metadata.as_ref().and_then(|data| data.get("timer_windows")).and_then(Value::as_array).filter(|windows| !windows.is_empty()) {
+        }
+        let observed = row["timer_observed_at"].as_f64().unwrap_or(0.0);
+        if row["timer_home"].as_str().is_some_and(|value| Path::new(value) == path)
+            && observed <= now && now - observed <= 120.0 {
+            if let Some(windows) = row.get("timer_windows").and_then(Value::as_array).filter(|windows| !windows.is_empty()) {
                 let mut combined = windows.clone();
                 if let Some(previous) = row.get("windows").and_then(Value::as_array) {
                     combined.extend(previous.iter().filter(|window| !windows.iter().any(|fresh| fresh["label"] == window["label"])).cloned());
                 }
                 row["windows"] = Value::Array(combined);
-                row["observed_at"] = json!(now);
+                row["observed_at"] = json!(observed);
                 row["source"] = json!("codex_metadata");
                 row["error"] = Value::Null;
                 row["stale"] = json!(false);
@@ -2325,6 +2329,30 @@ mod tests {
         let next = poll_once(Some(&sandbox.home), Some(&first_poll), Some(NOW + 10.0), None, None, &hooks);
         assert_eq!(next["clis"]["codex"]["instances"][0]["timer_windows"], first_poll["clis"]["codex"]["instances"][0]["timer_windows"]);
         assert_eq!(next["clis"]["codex"]["instances"][0]["timer_observed_at"], json!(NOW));
+        println!("None");
+    }
+
+    /// Keep metadata usage stable between polls despite an older pane capture.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn public_poll_retains_metadata_usage_between_refreshes() {
+        println!("parameters=none");
+        let sandbox = Sandbox::new();
+        configure(false);
+        let home = sandbox.home.join(".codex");
+        write_instance_registry(&sandbox.home, &[(1, home.clone())], 1);
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("auth.json"), json!({"tokens":{"account_id":"one"}}).to_string()).unwrap();
+        let previous = json!({"clis":{"codex":{"selected":1,"instances":[{
+            "id":1,"home":home,"observed_at":NOW-10.0,"source":"tmux_pane",
+            "windows":[{"label":"5h","used_percent":0,"resets_at":NOW+18000.0}],
+            "timer_home":home,"timer_observed_at":NOW,"reset_probe_at":NOW,
+            "timer_windows":[{"label":"5h","used_percent":2,"resets_at":NOW+18000.0}]
+        }]}}});
+        let next = poll_once(Some(&sandbox.home), Some(&previous), Some(NOW+5.0), None, None, &PollHooks::default());
+        assert_eq!(next["clis"]["codex"]["instances"][0]["windows"][0]["used_percent"],json!(2));
+        assert_eq!(next["clis"]["codex"]["instances"][0]["observed_at"],json!(NOW));
         println!("None");
     }
 
