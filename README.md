@@ -587,9 +587,10 @@ bash install.sh --uninstall model_status_bar  # remove it again
 
 The Codex mark copied by that install is
 `acc-model-status@local/icons/acc-provider-codex-symbolic.svg` (panel name
-`acc-provider-codex-symbolic`). It is a 16×16 symbolic ChatGPT blossom: six
-curved segments in six-fold symmetry around an open center, with a single
-recolorable `#2e3436` fill.
+`acc-provider-codex-symbolic`). It is a 16×16 symbolic OpenAI Blossom with
+interlocking bands and an open center, using a single recolorable `#2e3436`
+fill. The outline is adapted from the [OpenAI Blossom](<https://commons.wikimedia.org/wiki/File:OpenAI_logo_2025_(symbol).svg>);
+the mark belongs to OpenAI.
 
 The agent portion has no poller of its own: it renders
 `~/.local/state/codex-agent-tracker/model_status_bar.json`, which the Agent
