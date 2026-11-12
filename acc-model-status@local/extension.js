@@ -71,6 +71,8 @@ const INSTANCE_TAG_LAST_RGB = [0xa8, 0x56, 0xe8];
 const PHASE_COLORS = {
     RUNNING: '#e6c200',
     GOAL: '#a855f7',
+    QUESTION: '#c084fc',
+    ANSWERED: '#5ca8ff',
     RATE: '#f472b6',
     ATTN: '#ffb454',
     WAITING: '#ffb454',
@@ -137,9 +139,9 @@ function displayedPhase(agent) {
     return phase;
 }
 
-/** Format an interaction badge or the task's clock and measured counts.
+/** Format the task's clock and measured counts.
  * Parameters: agent - scoped payload row; nowMs - optional clock epoch.
- * Returns: question/answer badge or task clock and phase.
+ * Returns: task clock and phase.
  */
 function agentPhaseBadgeText(agent, nowMs) {
     print(`agent=${agent} nowMs=${nowMs}`);
@@ -153,9 +155,7 @@ function agentPhaseBadgeText(agent, nowMs) {
     const resetAt = Date.parse(agent?.queued_reset_at || '');
     const started = Date.parse(agent?.run_started_at || '');
     let result = `${prefix}${phase}`;
-    if (agent?.workflow?.interaction?.mode === 'question')
-        result = agent.workflow.interaction.state === 'complete' ? 'ANSWERED' : 'QUESTION';
-    else if (phase !== 'DONE' && resetAt > now)
+    if (phase !== 'DONE' && resetAt > now)
         result = `${prefix}-${formatRunTimer(Math.ceil((resetAt - now) / 1000))}`;
     else if (phase === 'RUNNING' && agent?.run_active && !Number.isNaN(started))
         result = `${prefix}${formatRunTimer((now - started) / 1000)}`;
@@ -180,7 +180,8 @@ function agentPhaseBadgeColor(agent, nowMs) {
             !Number.isNaN(Date.parse(agent.run_started_at || '')))
             result = PHASE_COLORS.GOAL;
     }
-    if (agent?.workflow?.interaction?.mode === 'question') result = '#5ca8ff';
+    if (agent?.workflow?.interaction?.mode === 'question')
+        result = PHASE_COLORS[agent.workflow.interaction.state === 'complete' ? 'ANSWERED' : 'QUESTION'];
     print(result);
     return result;
 }
@@ -912,14 +913,17 @@ function panelTaskProgressValue(agent) {
  * Returns: red, green and blue byte values for the progress color.
  */
 function panelProgressColor(fraction, ready = false, now = Date.now(), agent = null) {
+    print(`fraction=${fraction} ready=${ready} now=${now} agent=${agent}`);
+    const interaction = agent?.workflow?.interaction?.mode === 'question';
     const red = [239, 68, 68];
     const green = [34, 197, 94];
     const interrupted = String(agent?.phase || '').trim().toUpperCase() === 'INTERRUPTED';
-    const stateColor = interrupted || (!ready && fraction !== null) ? panelProgressStateColor(agent) : null;
+    const stateColor = interaction || interrupted || (!ready && fraction !== null) ? panelProgressStateColor(agent) : null;
     const base = stateColor || (fraction === null ? [48, 52, 64] :
         red.map((channel, index) => Math.round(channel + (green[index] - channel) * fraction)));
-    const wave = ready && !interrupted ? panelProgressWave(now) : 0;
+    const wave = ready && !interrupted && !interaction ? panelProgressWave(now) : 0;
     const result = base.map(channel => Math.round(channel + (255 - channel) * wave));
+    print(result);
     return result;
 }
 
@@ -929,9 +933,13 @@ function panelProgressColor(fraction, ready = false, now = Date.now(), agent = n
  * Returns: state RGB bytes, or null to retain the measured progress gradient.
  */
 function panelProgressStateColor(agent) {
+    print(`agent=${agent}`);
     const phase = displayedPhase(agent);
-    const hex = ['RATE', 'DRAFT', 'INTERRUPTED'].includes(phase) ? PHASE_COLORS[phase] : null;
+    const hex = agent?.workflow?.interaction?.mode === 'question'
+        ? PHASE_COLORS[agent.workflow.interaction.state === 'complete' ? 'ANSWERED' : 'QUESTION']
+        : ['RATE', 'DRAFT', 'INTERRUPTED'].includes(phase) ? PHASE_COLORS[phase] : null;
     const result = hex ? [1, 3, 5].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) : null;
+    print(result);
     return result;
 }
 
@@ -1087,8 +1095,6 @@ function panelLaunchWaitSeconds(agent, now) {
  * Returns: compact agent duration or Harbor forecast/status text, or empty text.
  */
 const panelAgentEstimateText = (agent) => {
-    if (agent?.workflow?.interaction?.mode === 'question')
-        return agent.workflow.interaction.state === 'complete' ? 'Answered' : 'Question';
     if (agent.harbor)
         return formatHarborEstimate(agent.harbor);
     const label = panelLaunchWaitSeconds(agent, Date.now()) === null &&
@@ -1169,7 +1175,7 @@ const panelAgentRuntimeText = (agent, now = Date.now()) => {
  */
 const panelAgentRuntimeColor = (agent, now = Date.now(), stale = false) => {
     if (agent?.workflow?.interaction?.mode === 'question')
-        return '#5ca8ff';
+        return PHASE_COLORS[agent.workflow.interaction.state === 'complete' ? 'ANSWERED' : 'QUESTION'];
     if (agent.harbor)
         return '#f472b6';
     let color = panelProgressGoalActive(agent) ? PHASE_COLORS.GOAL : PHASE_COLORS.RUNNING;
