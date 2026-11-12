@@ -362,7 +362,10 @@ badge, for both its track and measured fill. At 0% it shows only the faint
 lime track. These state colors preserve fill widths, track/fill alpha,
 and the existing opacity animation. Confirmed
 finished agents show a full bar; unavailable workflow progress shows an empty
-neutral track. The progress fills contain no percentage text.
+neutral track. The progress fills contain no percentage text. For running
+sessions, the hover preview and workspace menu show the active goal or latest
+human prompt below the session details when available. Goal text is purple,
+prompt text is gray, and hover previews use a shorter excerpt.
 
 Progress bars are grouped by ascending workspace number, with agents ordered
 by their terminal window numbers within each group. Larger round grey dots
