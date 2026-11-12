@@ -1460,8 +1460,12 @@ emit(JSON.stringify(snapshots));
     println!("None");
 }
 
+/// Preserve focus actions for each rendered session.
+/// Parameters: none.
+/// Returns: None.
 #[test]
 fn model_status_menu_rows_focus_the_exact_agent_through_acc() {
+    println!("parameters=none");
     let model =
         fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let menu = extract_method(&model, "_agentMenuItem");
@@ -1488,7 +1492,7 @@ function agentPhaseBadgeColor() { return '#fff'; }
     );
     let result = run_gjs(
         &[task_progress_stubs(), stubs, extract_function(&model, "taskProgressValue"),
-            extract_function(&model, "taskProgressRectangles"), extract_function(&model, "taskEstimateText"), extract_function(&model, "updateTaskProgress"), extract_function(&model, "buildTaskProgressLayer"), extension],
+            extract_function(&model, "taskProgressRectangles"), extract_function(&model, "taskEstimateText"), extract_function(&model, "sessionContextPresentation"), extract_function(&model, "updateTaskProgress"), extract_function(&model, "buildTaskProgressLayer"), extension],
         r#"
 const unread = extension._agentMenuItem({note_id: 'note-unread', unread_completion: true}, {}, 0);
 const read = extension._agentMenuItem({note_id: 'note-read', unread_completion: false}, {}, 0);
@@ -1558,6 +1562,7 @@ function logError(_error, _message) {}
             "flags": 0
         }], "ordering": ["close", "launch"]})
     );
+    println!("None");
 }
 
 #[test]
@@ -1843,8 +1848,12 @@ print(JSON.stringify({text, tick, bad, zero, full, queued, waiting, done, unread
         "finishedRate": "DONE", "waitingRate": "[1/6] RATE"}));
 }
 
+/// Keep the estimate aligned and refreshable in the session row.
+/// Parameters: none.
+/// Returns: None.
 #[test]
 fn model_status_estimate_is_right_of_summary_and_refreshes_in_place() {
+    println!("parameters=none");
     let source =
         fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let menu = format!(
@@ -1866,6 +1875,7 @@ function codexInstanceLabel() { return null; }
         extract_function(&source, "taskEstimateText"),
         extract_function(&source, "taskProgressValue"),
         extract_function(&source, "taskProgressRectangles"),
+        extract_function(&source, "sessionContextPresentation"),
         extract_function(&source, "updateTaskProgress"),
         extract_function(&source, "buildTaskProgressLayer"),
         menu,
@@ -1879,7 +1889,7 @@ const agent = {session_id: 'task', note_id: 'note', project_tag: 'ACC', project:
     task_time_estimate: {status: 'estimated', label: '~9m left'}};
 const item = extension._agentMenuItem(agent, {}, 0);
 const widgets = extension._taskRows.get('task');
-const row = item.children[0].children[1];
+const row = item.children[0].children[1].children[0];
 const initial = {last: row.children.at(-1).text, title: row.children.find(c => c.style_class === 'ams-agent-title').text,
     origin: row.children.find(c => c.style_class === 'ams-agent-origin').text,
     tag: row.children[0].text, aligned: row.children.at(-1).x_align === 1, expands: row.children.at(-1).x_expand};
@@ -1902,6 +1912,7 @@ print(JSON.stringify({initial, refreshed, idle, states, waiting, same: actor ===
         "refreshed": "~4m left", "idle": "", "states": ["", "", "", "", "learning time estimates", "past estimate"],
         "waiting": "~9m left", "same": true})
     );
+    println!("None");
 }
 
 /// Verify refresh never appends a trailing estimate while retaining menu targets.
@@ -2591,5 +2602,49 @@ fn codex_idle_flash_survives_boot_snapshot_reordering() {
     assert!(result["staleReordered"].as_str().unwrap().contains("#ffffff"), "very old snapshots cannot erase fresher history");
     assert!(result["paneFallback"].as_str().unwrap().contains("#ffffff"), "a temporary pane-only reading does not erase fresh metadata history");
     assert!(!result["rolling"].as_str().unwrap().contains("#ffffff"), "a fresh fixed reset stops the idle flash");
+    println!("None");
+}
+
+/// Exercise session context in the real menu and hover row builder.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn model_status_active_context_appears_below_menu_row_and_shortens_in_hover() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
+    let menu = format!("const builder = {{ {} }};", extract_method(&source, "_agentMenuItem"));
+    let stubs = r#"
+const PopupMenu = {PopupBaseMenuItem: class extends Actor { constructor(options) { super(options); this.actor = this; } }};
+St.BoxLayout = Actor; St.Icon = Actor; St.Label = Actor;
+Clutter.ActorAlign = {CENTER: 0, END: 1};
+function codexInstanceLabel() { return null; }
+"#.to_string();
+    let snippets = vec![task_progress_stubs(), stubs,
+        extract_function(&source, "taskEstimateText"), extract_function(&source, "taskProgressValue"),
+        extract_function(&source, "taskProgressRectangles"), extract_function(&source, "sessionContextPresentation"),
+        extract_function(&source, "updateTaskProgress"), extract_function(&source, "buildTaskProgressLayer"), menu];
+    let result = run_gjs(&snippets, r#"
+const extension = Object.assign({_runClockActors: [], _taskRows: new Map(), _icon() { return {}; }}, builder);
+const goal = {session_id: 'x', phase: 'RUNNING', session_context: {kind: 'goal', text: 'Create a useful feature for this session and then verify it carefully'}};
+const item = extension._agentMenuItem(goal, {}, 0);
+const container = item.children[0].children[1];
+const label = container.children[1];
+const initial = {below: container.children[0].style_class === 'ams-agent-row', text: label.text, style: label.style, visible: label.visible};
+const widgets = extension._taskRows.get('x');
+updateTaskProgress(widgets, {...goal, session_context: {kind:'prompt', text:'Latest human request'}});
+const prompt = {text:label.text, style:label.style, visible:label.visible};
+updateTaskProgress(widgets, {...goal, phase:'DONE'});
+const inactive = label.visible;
+const hover = extension._agentMenuItem(goal, {}, 0, false).children[0].children[1].children[1].text;
+print(JSON.stringify({initial, prompt, inactive, hover}));
+"#);
+    assert_eq!(result["initial"]["below"], true);
+    assert_eq!(result["initial"]["visible"], true);
+    assert!(result["initial"]["text"].as_str().unwrap().contains("Create a useful feature"));
+    assert!(result["initial"]["style"].as_str().unwrap().contains("#c59af4"));
+    assert_eq!(result["prompt"]["text"], "Latest human request");
+    assert!(result["prompt"]["style"].as_str().unwrap().contains("#a9bac8"));
+    assert_eq!(result["inactive"], false);
+    assert!(result["hover"].as_str().unwrap().len() < result["initial"]["text"].as_str().unwrap().len());
     println!("None");
 }
