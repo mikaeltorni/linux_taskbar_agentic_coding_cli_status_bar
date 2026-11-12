@@ -1714,8 +1714,12 @@ class AccModelStatusButton extends PanelMenu.Button {
         return new Gio.FileIcon({file: child});
     }
 
-    /** Refresh existing task widgets while the menu stays open and clickable. */
+    /** Refresh task widgets while the menu stays open and clickable.
+     * Parameters: this - status button; payload - current visible sessions.
+     * Returns: undefined.
+     */
     _updateTaskRows(payload) {
+        print(`this=${this} payload=${payload}`);
         const agents = new Map();
         for (const provider of payload?.providers || []) {
             for (const agent of provider.agents || []) {
@@ -1724,9 +1728,10 @@ class AccModelStatusButton extends PanelMenu.Button {
             }
         }
         for (const [key, widgets] of this._taskRows) {
-            const agent = agents.get(key) || {...widgets.agent, workflow: null, unread_completion: false};
+            const agent = agents.get(key) || {...widgets.agent, workflow: null, unread_completion: false, session_context: null};
             updateTaskProgress(widgets, agent);
         }
+        print(undefined);
     }
 
     /**

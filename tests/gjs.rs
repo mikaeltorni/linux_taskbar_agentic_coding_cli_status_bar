@@ -2612,7 +2612,7 @@ fn codex_idle_flash_survives_boot_snapshot_reordering() {
 fn model_status_active_context_appears_below_menu_row_and_shortens_in_hover() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
-    let menu = format!("const builder = {{ {} }};", extract_method(&source, "_agentMenuItem"));
+    let menu = format!("const builder = {{ {}, {} }};", extract_method(&source, "_agentMenuItem"), extract_method(&source, "_updateTaskRows"));
     let stubs = r#"
 const PopupMenu = {PopupBaseMenuItem: class extends Actor { constructor(options) { super(options); this.actor = this; } }};
 St.BoxLayout = Actor; St.Icon = Actor; St.Label = Actor;
@@ -2635,8 +2635,11 @@ updateTaskProgress(widgets, {...goal, session_context: {kind:'prompt', text:'Lat
 const prompt = {text:label.text, style:label.style, visible:label.visible};
 updateTaskProgress(widgets, {...goal, phase:'DONE'});
 const inactive = label.visible;
+updateTaskProgress(widgets, goal);
+extension._updateTaskRows({providers: []});
+const missing = label.visible;
 const hover = extension._agentMenuItem(goal, {}, 0, false).children[0].children[1].children[1].text;
-print(JSON.stringify({initial, prompt, inactive, hover}));
+print(JSON.stringify({initial, prompt, inactive, missing, hover}));
 "#);
     assert_eq!(result["initial"]["below"], true);
     assert_eq!(result["initial"]["visible"], true);
@@ -2645,6 +2648,7 @@ print(JSON.stringify({initial, prompt, inactive, hover}));
     assert_eq!(result["prompt"]["text"], "Latest human request");
     assert!(result["prompt"]["style"].as_str().unwrap().contains("#a9bac8"));
     assert_eq!(result["inactive"], false);
+    assert_eq!(result["missing"], false);
     assert!(result["hover"].as_str().unwrap().len() < result["initial"]["text"].as_str().unwrap().len());
     println!("None");
 }
