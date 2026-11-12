@@ -1379,8 +1379,36 @@ function taskEstimateText(agent) {
     return estimate.label.trim();
 }
 
-/** Update the background and completion glow together, retaining row actors. */
+/** Format the active session's goal or latest prompt for the menu or hover.
+ * Parameters: agent - published session row; compact - whether this is a hover preview.
+ * Returns: display text and its CSS color, or null when no active context exists.
+ */
+function sessionContextPresentation(agent, compact) {
+    print(`agent=${agent} compact=${compact}`);
+    const context = agent?.session_context;
+    let result = null;
+    if (String(agent?.phase || '').trim().toUpperCase() === 'RUNNING' &&
+        typeof context?.text === 'string') {
+        let text = context.text.replace(/\s+/g, ' ').trim();
+        const limit = compact ? 48 : 110;
+        if (text.length > limit) {
+            const prefix = text.slice(0, limit - 1);
+            const boundary = prefix.lastIndexOf(' ');
+            text = (boundary > limit / 2 ? prefix.slice(0, boundary) : prefix).trimEnd() + '…';
+        }
+        if (text)
+            result = {text, color: context.kind === 'goal' ? '#c59af4' : '#a9bac8'};
+    }
+    print(JSON.stringify(result));
+    return result;
+}
+
+/** Update the background, completion glow and context without replacing row actors.
+ * Parameters: widgets - retained row actors; agent - current session snapshot.
+ * Returns: undefined.
+ */
 function updateTaskProgress(widgets, agent) {
+    print(`widgets=${widgets} agent=${agent}`);
     widgets.agent = agent;
     const fraction = taskProgressValue(agent);
     widgets.fraction = fraction ?? 0;
@@ -1398,6 +1426,14 @@ function updateTaskProgress(widgets, agent) {
         widgets.estimateLabel.text = taskEstimateText(agent);
         widgets.estimateLabel.visible = Boolean(widgets.estimateLabel.text);
     }
+    if (widgets.contextLabel) {
+        const context = sessionContextPresentation(agent, widgets.compactContext);
+        widgets.contextLabel.text = context?.text || '';
+        widgets.contextLabel.visible = Boolean(context);
+        if (context)
+            widgets.contextLabel.set_style(`color: ${context.color};`);
+    }
+    print(undefined);
 }
 
 /** Layer a measured fill behind task text without changing its click target.
@@ -2237,6 +2273,7 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: the task menu item with its colored detail row.
      */
     _agentMenuItem(agent, provider, codexInstanceCount, track = true) {
+        print(`this=${this} agent=${agent} provider=${provider} codexInstanceCount=${codexInstanceCount} track=${track}`);
         const noteId = String(agent.note_id || '').trim();
         const actionable = Boolean(noteId);
         const item = new PopupMenu.PopupBaseMenuItem({
@@ -2337,11 +2374,20 @@ class AccModelStatusButton extends PanelMenu.Button {
         });
         estimateLabel.visible = Boolean(estimateLabel.text);
         row.add_child(estimateLabel);
-        const widgets = buildTaskProgressLayer(item, row, badge, agent);
+        const content = new St.BoxLayout({vertical: true, x_expand: true});
+        const contextLabel = new St.Label({text: '', visible: false,
+            style_class: 'ams-agent-context', x_expand: true});
+        content.add_child(row);
+        content.add_child(contextLabel);
+        const widgets = buildTaskProgressLayer(item, content, badge, agent);
         widgets.estimateLabel = estimateLabel;
+        widgets.contextLabel = contextLabel;
+        widgets.compactContext = !track;
+        updateTaskProgress(widgets, agent);
         const key = String(agent.session_id || agent.tmux_name || agent.key || '');
         if (track && key)
             this._taskRows.set(key, widgets);
+        print(item);
         return item;
     }
 
