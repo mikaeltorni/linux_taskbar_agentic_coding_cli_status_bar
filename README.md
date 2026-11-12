@@ -365,7 +365,8 @@ finished agents show a full bar; unavailable workflow progress shows an empty
 neutral track. The progress fills contain no percentage text. For running
 sessions, the hover preview and workspace menu show the active goal or latest
 human prompt below the session details when available. Goal text is purple,
-prompt text is gray, and hover previews use a shorter excerpt.
+prompt text is gray, and hover previews use the available row width before
+ellipsizing longer text.
 
 Progress bars are grouped by ascending workspace number, with agents ordered
 by their terminal window numbers within each group. Larger round grey dots
