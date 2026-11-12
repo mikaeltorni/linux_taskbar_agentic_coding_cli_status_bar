@@ -27,6 +27,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
+import Pango from 'gi://Pango';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
@@ -1396,7 +1397,7 @@ function sessionContextPresentation(agent, compact) {
     if (String(agent?.phase || '').trim().toUpperCase() === 'RUNNING' &&
         typeof context?.text === 'string') {
         let text = context.text.replace(/\s+/g, ' ').trim();
-        const limit = compact ? 48 : 110;
+        const limit = compact ? Infinity : 110;
         if (text.length > limit) {
             const prefix = text.slice(0, limit - 1);
             const boundary = prefix.lastIndexOf(' ');
@@ -2387,7 +2388,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         row.add_child(estimateLabel);
         const content = new St.BoxLayout({vertical: true, x_expand: true});
         const contextLabel = new St.Label({text: '', visible: false,
-            style_class: 'ams-agent-context', x_expand: true});
+            style_class: 'ams-agent-context', x_expand: true, width: 0});
+        contextLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         content.add_child(row);
         content.add_child(contextLabel);
         const widgets = buildTaskProgressLayer(item, content, badge, agent);

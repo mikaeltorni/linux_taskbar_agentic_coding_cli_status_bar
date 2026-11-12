@@ -13,6 +13,7 @@ class Actor {
         print(`this=${this} options=${JSON.stringify(options)}`);
         Object.assign(this, options);
         this.children = [];
+        this.clutter_text = {};
         this.signals = {};
         this.actor = this;
         this.bin = {set_child: child => this.children.push(child)};
@@ -60,7 +61,7 @@ const Pointer = class {
 };
 const completed = [];
 const focused = [];
-const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', 'St', 'Main', 'Clutter', 'global', 'print', 'PopupMenu', 'Shell',
+const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', 'St', 'Main', 'Clutter', 'global', 'print', 'PopupMenu', 'Shell', 'Pango',
     `${source}\nreturn {Button: AccModelStatusButton, buildPanelTaskCell, completionCommand};`)(
     {registerClass: value => value}, {Button: class {}}, class {},
     {BoxPointer: Pointer, PopupAnimation: {NONE: 0}},
@@ -68,7 +69,7 @@ const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', '
     {layoutManager: {addChrome: () => {}},
         pushModal: actor => { const grab = {actor}; grabs.push(grab); return grab; },
         popModal: grab => { grabs.splice(grabs.indexOf(grab), 1); }},
-    Clutter, {stage}, print, {PopupBaseMenuItem: Actor}, {ActionMode: {NORMAL: 1}});
+    Clutter, {stage}, print, {PopupBaseMenuItem: Actor}, {ActionMode: {NORMAL: 1}}, {EllipsizeMode: {END: 3}});
 const button = new Button.Button();
 button.menu = {isOpen: false};
 button._agentMenuItem = (agent, provider, count, track) => new Actor({agent, provider, count, track});
