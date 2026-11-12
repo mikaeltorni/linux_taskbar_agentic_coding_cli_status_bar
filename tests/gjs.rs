@@ -1666,7 +1666,7 @@ fn task_progress_stubs() -> String {
 class Actor {
     constructor(options = {}) {
         Object.assign(this, options); this.children = []; this.handlers = {};
-        this.styles = []; this.visible = true; this.width = 400; this.height = 32;
+        this.styles = []; this.visible = true; this.width = options.width ?? 400; this.height = 32; this.clutter_text = {};
     }
     add_child(child) { this.children.push(child); }
     connect(name, callback) { this.handlers[name] = callback; }
@@ -1681,6 +1681,7 @@ class Actor {
     remove_style_class_name(style) { this.styles = this.styles.filter(s => s !== style); }
 }
 const St = {Widget: Actor};
+const Pango = {EllipsizeMode: {END: 3}};
 const Clutter = {BinLayout: class {}, FixedLayout: class {}};
 function agentPhaseBadgeText(agent) { return agent.phase || ''; }
 function agentPhaseBadgeColor() { return '#fff'; }
@@ -2609,7 +2610,7 @@ fn codex_idle_flash_survives_boot_snapshot_reordering() {
 /// Parameters: none.
 /// Returns: None.
 #[test]
-fn model_status_active_context_appears_below_menu_row_and_shortens_in_hover() {
+fn model_status_active_context_appears_below_menu_row_and_fills_hover() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("acc-model-status@local/extension.js")).unwrap();
     let menu = format!("const builder = {{ {}, {} }};", extract_method(&source, "_agentMenuItem"), extract_method(&source, "_updateTaskRows"));
@@ -2638,7 +2639,8 @@ const inactive = label.visible;
 updateTaskProgress(widgets, goal);
 extension._updateTaskRows({providers: []});
 const missing = label.visible;
-const hover = extension._agentMenuItem(goal, {}, 0, false).children[0].children[1].children[1].text;
+const hoverLabel = extension._agentMenuItem(goal, {}, 0, false).children[0].children[1].children[1];
+const hover = {text: hoverLabel.text, width: hoverLabel.width, ellipsize: hoverLabel.clutter_text?.ellipsize};
 print(JSON.stringify({initial, prompt, inactive, missing, hover}));
 "#);
     assert_eq!(result["initial"]["below"], true);
@@ -2649,6 +2651,8 @@ print(JSON.stringify({initial, prompt, inactive, missing, hover}));
     assert!(result["prompt"]["style"].as_str().unwrap().contains("#a9bac8"));
     assert_eq!(result["inactive"], false);
     assert_eq!(result["missing"], false);
-    assert!(result["hover"].as_str().unwrap().len() < result["initial"]["text"].as_str().unwrap().len());
+    assert_eq!(result["hover"]["text"], "Create a useful feature for this session and then verify it carefully");
+    assert_eq!(result["hover"]["width"], 0);
+    assert_eq!(result["hover"]["ellipsize"], 3);
     println!("None");
 }
