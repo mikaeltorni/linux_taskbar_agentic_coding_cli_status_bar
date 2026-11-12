@@ -513,9 +513,10 @@ requests or writes to history or notes. Install/update with
 `bash install.sh --select model_status_bar`. On Wayland, newly installed
 extension code takes effect after logout/login.
 
-Questions and status replies have their own blue `QUESTION` / `ANSWERED`
-badges. Their compact panel cell shows `Question` or `Answered` beneath the
-bar. These indicators come from ACC's `workflow.interaction` activity, while
+Questions and status replies color the taskbar and menu badge violet while the
+question is active and blue after it is answered. The badge keeps the task's
+normal phase or clock, and no question/answer label appears below the bar.
+These colors come from ACC's `workflow.interaction` activity, while
 `workflow.task_complete=false` keeps the unfinished task's measured fraction.
 A completed answer does not fill the task bar or discard its retained steps.
 Explicit continue/resume and automatic goal turns retain the same task plan,
