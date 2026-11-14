@@ -1,4 +1,4 @@
-"""Preserve earlier caller output when exporting an isolated owner selection."""
+"""Exercise the isolated owner menu and its install and removal actions."""
 import json
 import pty
 import select
@@ -33,7 +33,7 @@ def run_terminal(command, environment, keys):
                 if not chunk:
                     break
                 output.extend(chunk)
-                if not sent and b'Named task workspaces' in output:
+                if not sent and b'Fixture component' in output:
                     os.write(master, keys)
                     sent = True
                 if not saved and b'Choice [1/2/3]' in output:
@@ -108,7 +108,7 @@ exit 97
     manifest = checkout/'installer/components.sh'
     core_name = 'install_agentic_status_core'
     with manifest.open('a') as stream:
-        stream.write('\n# Record only fixture core work.\n# Parameters: none. Returns: zero or ninety-one for a requested core failure.\nCORE_NAME() { printf \'parameters=none\\n\' >&2; printf \'core\\n\' >> "$EFFECTS"; if [[ "${CORE_FAIL:-0}" == 1 ]]; then printf \'91\\n\' >&2; return 91; fi; printf \'0\\n\' >&2; }\n# Record installation through the actual public dispatcher.\n# Parameters: none. Returns: zero.\nfixture_install() { printf \'parameters=none\\n\' >&2; printf \'install\\n\' >> "$EFFECTS"; printf \'0\\n\' >&2; }\n# Record removal through the actual public dispatcher.\n# Parameters: none. Returns: zero.\nfixture_remove() { printf \'parameters=none\\n\' >&2; printf \'remove\\n\' >> "$EFFECTS"; printf \'0\\n\' >&2; }\n# Preserve unrelated fixture flags during lifecycle checks.\n# Parameters: none. Returns: zero.\nsync_feature_flags() { printf \'parameters=none\\n0\\n\' >&2; }\n# Exclude historical data migrations from this menu regression.\n# Parameters: none. Returns: zero.\nremove_legacy_speech_to_text_state() { printf \'parameters=none\\n0\\n\' >&2; }\nISC_COMPONENTS=("fixture|Named task workspaces|on|fixture_install||fixture_remove")\n'.replace('CORE_NAME',core_name))
+        stream.write('\n# Record only fixture core work.\n# Parameters: none. Returns: zero or ninety-one for a requested core failure.\nCORE_NAME() { printf \'parameters=none\\n\' >&2; printf \'core\\n\' >> "$EFFECTS"; if [[ "${CORE_FAIL:-0}" == 1 ]]; then printf \'91\\n\' >&2; return 91; fi; printf \'0\\n\' >&2; }\n# Record installation through the actual public dispatcher.\n# Parameters: none. Returns: zero.\nfixture_install() { printf \'parameters=none\\n\' >&2; printf \'install\\n\' >> "$EFFECTS"; printf \'0\\n\' >&2; }\n# Record removal through the actual public dispatcher.\n# Parameters: none. Returns: zero.\nfixture_remove() { printf \'parameters=none\\n\' >&2; printf \'remove\\n\' >> "$EFFECTS"; printf \'0\\n\' >&2; }\nISC_COMPONENTS=("fixture|Fixture component|on|fixture_install||fixture_remove")\n'.replace('CORE_NAME',core_name))
     command = ['bash', str(checkout/'install.sh')]
     status, output = run_terminal(command, environment, b'q')
     assert status == 0 and not effects.exists(), ('cancel',status,output,effects.read_text() if effects.exists() else '')
