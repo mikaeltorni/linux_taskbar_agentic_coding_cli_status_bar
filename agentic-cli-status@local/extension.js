@@ -119,8 +119,14 @@ function readLiveSessions() {
       GLib.build_filenamev([GLib.get_user_state_dir(), 'codex-agent-tracker']);
     const file = Gio.File.new_for_path(GLib.build_filenamev([dir, 'model_status_bar.json']));
     const [ok, bytes] = file.load_contents(null);
-    if (ok)
-      result = JSON.parse(new TextDecoder().decode(bytes));
+    if (ok) {
+      const payload = JSON.parse(new TextDecoder().decode(bytes));
+      result = {updated_at: payload?.updated_at, providers: Array.isArray(payload?.providers)
+        ? payload.providers.filter(provider => provider?.kind === 'codex').map(provider => ({
+          kind: 'codex', agents: Array.isArray(provider.agents)
+            ? provider.agents.map(agent => ({codex_instance: agent?.codex_instance})) : [],
+        })) : []};
+    }
   } catch (_error) {
     // A missing or malformed publication cannot establish an active session.
   }
