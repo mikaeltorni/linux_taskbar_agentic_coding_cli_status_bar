@@ -2656,3 +2656,85 @@ print(JSON.stringify({initial, prompt, inactive, missing, hover}));
     assert_eq!(result["hover"]["ellipsize"], 3);
     println!("None");
 }
+
+/// Show projected limits only for Codex accounts with a live session.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn codex_menu_hides_projection_for_idle_instances() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let method = extract_method(&source.replace("
+  _appendMenuSection(", "
+    _appendMenuSection("), "_appendMenuSection");
+    let probe = format!(r#"
+        const GLib = {{ get_real_time:()=>2000000000, markup_escape_text:s=>s }};
+        const PopupMenu = {{PopupMenuItem: class {{ constructor() {{ this.label={{clutter_text:{{set_markup:s=>lines.push(s)}}}}; }} }} }};
+        const cliSectionHeading = n=>n, creditDetailText = ()=>'', percentLeft = ()=>80,
+          resetPassed = ()=>false, resetsText = ()=>' — resets later', codexWindowTitle = ()=>'5h',
+          percentColor = ()=>'green', exhaustionText = ()=>' — limit in 8m';
+        let lines=[]; class Button {{ {method} }}
+        const button=new Button(); button.menu={{addMenuItem:()=>{{}}}};
+        const snapshot={{windows:[{{label:'5h'}}]}};
+        button._appendMenuSection('Codex 1',snapshot,true); const active=lines.pop();
+        button._appendMenuSection('Codex 2',snapshot,false); const idle=lines.pop();
+        print(JSON.stringify({{active,idle}}));
+    "#);
+    let result = run_gjs(&[], &probe);
+    assert!(result["active"].as_str().unwrap().contains("limit in 8m"));
+    assert!(!result["idle"].as_str().unwrap().contains("limit in 8m"));
+    assert!(result["idle"].as_str().unwrap().contains("resets later"));
+    println!("None");
+}
+
+/// Match only live Codex sessions to their account and reject stale publications.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn codex_session_identity_controls_projection() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let helper = extract_function(&source, "hasLiveCodexSession");
+    let probe = format!(r#"
+      {helper}
+      const payload={{updated_at:'2026-01-01T00:00:00Z',providers:[
+        {{kind:'codex',agents:[{{codex_instance:2}},{{}}]}},
+        {{kind:'grok',agents:[{{codex_instance:3}}]}}]}};
+      const now=Date.parse(payload.updated_at)/1000;
+      print(JSON.stringify([hasLiveCodexSession(payload,1,now),hasLiveCodexSession(payload,2,now),
+        hasLiveCodexSession(payload,3,now),hasLiveCodexSession(payload,2,now+121),
+        hasLiveCodexSession(null,2,now)]));
+    "#);
+    assert_eq!(run_gjs(&[], &probe), serde_json::json!([true,true,false,false,false]));
+    println!("None");
+}
+
+/// Route each live account's session state into its displayed menu section.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn status_panel_matches_live_sessions_to_each_codex_menu() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let helpers = ["hasVerifiedUsage", "verifiedCodexSnapshot", "statusIsCurrent", "hasLiveCodexSession"].iter().map(|name| extract_function(&source, name)).collect::<Vec<_>>().join("\n");
+    let render = extract_method(&source, "render");
+    let probe = format!(r#"
+      {helpers}
+      const now=Date.parse('2026-01-01T00:00:00Z')/1000;
+      const GLib={{get_real_time:()=>now*1000000}}, CLI_TAGS=[['codex','CX']];
+      const PopupMenu={{PopupSeparatorMenuItem:class {{}}}}, updateCodexWindowTracking=()=>{{}},
+        flashingCodexBarMarkup=()=>'', codexInstanceTitle=x=>`Codex ${{x.id}}`;
+      class Button {{ {render} }}
+      const b=new Button(), sections=[];
+      b._liveSessions={{updated_at:'2026-01-01T00:00:00Z',providers:[{{kind:'codex',agents:[{{codex_instance:2}}]}}]}};
+      b._segments=new Map([['codex',{{clutter_text:{{set_markup:()=>{{}}}}}}]]); b._codexTracking=new Map();
+      b._syncCodexFlash=()=>{{}}; b._appendForecastSection=()=>{{}};
+      b._appendMenuSection=(name, snapshot, visible)=>sections.push([name,visible]);
+      b.menu={{removeAll:()=>{{}},isEmpty:()=>true,addMenuItem:()=>{{}}}};
+      const account=id=>({{id,available:true,observed_at:now,windows:[{{used_percent:20}}]}});
+      b.render({{generated_at:now,clis:{{codex:{{instances:[account(1),account(2)]}}}}}});
+      print(JSON.stringify(sections));
+    "#);
+    assert_eq!(run_gjs(&[], &probe), serde_json::json!([["Codex 1",false],["Codex 2",true]]));
+    println!("None");
+}
