@@ -404,7 +404,8 @@ these boundaries automatically without changing terminal-number order. The outli
 focus; other terminals on the same workspace stay unoutlined.
 Hover an individual agent bar to show its colored task detail row in a separate
 box anchored above that bar: project tag, provider icon, Codex instance, phase
-or run clock, task title, branch, and any remaining estimate. The box stays in
+or run clock, task title, branch, and any remaining estimate. Vibe task
+details show the color Mistral logo next to the project tag. The box stays in
 place as the pointer moves within the bar, disappears on leave, and is hidden
 while the right-click details menu is open. Left-click still focuses that exact
 agent terminal.
