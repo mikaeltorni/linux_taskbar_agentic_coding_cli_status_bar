@@ -288,6 +288,16 @@ assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
 assert_eq "$(cfg_get clis.claude_code.enabled)" "false" "claude_code should stay disabled"
 
 # --- OpenRouter component enables openrouter and can be disabled alone ------
+run_installer --select vibe_monitor >"$TMP_DIR/install-vibe.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --select vibe_monitor exited non-zero"; }
+assert_eq "$(cfg_get clis.vibe.enabled)" "true" "--select vibe_monitor enables native metadata"
+run_installer --select vibe_monitor >"$TMP_DIR/reinstall-vibe.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: reinstall of vibe_monitor exited non-zero"; }
+assert_eq "$(cfg_get clis.vibe.enabled)" "true" "reinstall keeps Vibe monitoring enabled"
+run_installer --uninstall vibe_monitor >"$TMP_DIR/uninstall-vibe.out" 2>&1 || {
+  FAIL=$((FAIL + 1)); echo "FAIL: --uninstall vibe_monitor exited non-zero"; }
+assert_eq "$(cfg_get clis.vibe.enabled)" "false" "--uninstall vibe_monitor disables monitoring"
+
 run_installer --select openrouter_monitor >"$TMP_DIR/install-or.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --select openrouter_monitor exited non-zero"; }
 assert_eq "$(cfg_get clis.openrouter.enabled)" "true" "openrouter should be enabled"
@@ -403,9 +413,11 @@ PATH="$BIN_DIR:$PATH" SUDO_USER=mk DISPLAY=:99 HOME="$LIST_HOME" \
   ISC_FUNCTIONS_DIR="$ISC_FUNCTIONS_DIR_RESOLVED" \
   bash "$REPO_ROOT/install.sh" --list-components >"$TMP_DIR/list.out" 2>/dev/null || {
     FAIL=$((FAIL + 1)); echo "FAIL: --list-components exited non-zero"; }
-for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor openrouter_monitor cursor_monitor polling_rate tmux_console startup_service; do
+for ID in codex_monitor claude_code_monitor grok_monitor opencode_go_monitor openrouter_monitor cursor_monitor vibe_monitor polling_rate tmux_console startup_service; do
   assert_file_contains "$TMP_DIR/list.out" "$ID" "--list-components should list $ID"
 done
+assert_eq "$(awk -F '\t' '$1 == "vibe_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \
+  "--list-components should mark vibe_monitor opt-in"
 assert_eq "$(awk -F '\t' '$1 == "cursor_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \
   "--list-components should mark cursor_monitor opt-in"
 assert_eq "$(awk -F '\t' '$1 == "grok_monitor" {print $3}' "$TMP_DIR/list.out")" "off" \

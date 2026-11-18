@@ -1017,3 +1017,36 @@ acs_install_harbor_watch() {
   fi
   printf 'None\n'
 }
+
+# Enable the Vibe usage monitor.
+# Parameters: none.
+# Returns: config write status.
+acs_install_vibe() {
+  printf 'parameters=none\n' >&2
+  local status=0
+  _acs_enable_cli vibe || status=$?
+  printf '%s\n' "$status" >&2
+  return "$status"
+}
+
+# Disable the Vibe usage monitor.
+# Parameters: none.
+# Returns: config write status.
+acs_uninstall_vibe() {
+  printf 'parameters=none\n' >&2
+  local status=0
+  _acs_disable_cli vibe || status=$?
+  printf '%s\n' "$status" >&2
+  return "$status"
+}
+
+# Check whether Vibe usage monitoring is enabled.
+# Parameters: none.
+# Returns: monitor detection status.
+acs_detect_vibe() {
+  printf 'parameters=none\n' >&2
+  local status=0
+  _acs_detect_cli vibe || status=$?
+  printf '%s\n' "$status" >&2
+  return "$status"
+}

@@ -44,6 +44,7 @@ const CLI_TAGS = [
   ['opencode_go', 'OG'],
   ['openrouter', 'OR'],
   ['cursor', 'CRS'],
+  ['vibe', 'VB'],
 ];
 
 // Poller-side default enablement, mirroring `default_config()` in src/config.rs.
@@ -57,6 +58,7 @@ const DEFAULT_CLI_ENABLED = {
   opencode_go: false,
   openrouter: false,
   cursor: false,
+  vibe: false,
 };
 
 // Percent-LEFT gradient stops. Every rendered percentage gets its own
@@ -1163,6 +1165,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       opencode_go: 'OpenCode Go',
       openrouter: 'OpenRouter',
       cursor: 'Cursor',
+      vibe: 'Mistral Vibe',
     };
     for (const [cliId, tag] of CLI_TAGS) {
       const snapshot = cliId === 'codex' ? codexSnapshot : status.clis?.[cliId];

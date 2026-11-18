@@ -27,6 +27,7 @@ pub const CLI_IDS: &[&str] = &[
     "opencode_go",
     "openrouter",
     "cursor",
+    "vibe",
 ];
 
 pub const DEFAULT_POLL_INTERVAL_SECONDS: i64 = 5;
@@ -134,6 +135,11 @@ pub fn default_config() -> Value {
                 "fetch_min_interval_seconds": OPENROUTER_FETCH_MIN_INTERVAL_SECONDS,
                 "model_slug": OPENROUTER_MODEL_SLUG_DEFAULT,
                 "daily_limit": OPENROUTER_DAILY_LIMIT_DEFAULT,
+            },
+            "vibe": {
+                "enabled": false,
+                "source": "headless",
+                "stale_after_seconds": 1800,
             },
             // Opt-in: Cursor is not a CLI. The CRS segment scrapes the
             // spending page and stays off until credentials are set up.
@@ -294,7 +300,7 @@ pub fn load_config(path: Option<&Path>) -> Value {
         let default_cli = defaults["clis"][cli_id].clone();
         {
             let cli = cli_object(&mut config, cli_id);
-            if *cli_id == "openrouter" || *cli_id == "cursor" {
+            if matches!(*cli_id, "openrouter" | "cursor" | "vibe") {
                 if cli.get("source").and_then(Value::as_str) != Some("headless") {
                     logging::warn(format!(
                         "cli {cli_id} only supports headless collection; forcing headless"
@@ -600,7 +606,7 @@ mod tests {
         for cli in CLI_IDS {
             let enabled = cfg["clis"][cli]["enabled"].as_bool().unwrap();
             assert_eq!(enabled, default_on.contains(cli), "{cli}");
-            let expected_source = if *cli == "openrouter" || *cli == "cursor" {
+            let expected_source = if matches!(*cli, "openrouter" | "cursor" | "vibe") {
                 "headless"
             } else {
                 "auto"

@@ -34,3 +34,6 @@ pub use opencode_go::collect_opencode_go;
 pub use openrouter::collect_openrouter;
 pub use pane::{codex_status_send_failed, parse_pane};
 pub use util::{tail_lines, to_epoch, to_percent, TAIL_READ_BYTES};
+
+pub mod vibe;
+pub use vibe::collect_vibe;
