@@ -61,7 +61,7 @@ const Pointer = class {
 };
 const completed = [];
 const focused = [];
-const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', 'St', 'Main', 'Clutter', 'global', 'print', 'PopupMenu', 'Shell', 'Pango',
+const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', 'St', 'Main', 'Clutter', 'global', 'print', 'PopupMenu', 'Shell', 'Pango', 'Gio',
     `${source}\nreturn {Button: AccModelStatusButton, buildPanelTaskCell, completionCommand};`)(
     {registerClass: value => value}, {Button: class {}}, class {},
     {BoxPointer: Pointer, PopupAnimation: {NONE: 0}},
@@ -69,7 +69,7 @@ const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', '
     {layoutManager: {addChrome: () => {}},
         pushModal: actor => { const grab = {actor}; grabs.push(grab); return grab; },
         popModal: grab => { grabs.splice(grabs.indexOf(grab), 1); }},
-    Clutter, {stage}, print, {PopupBaseMenuItem: Actor}, {ActionMode: {NORMAL: 1}}, {EllipsizeMode: {END: 3}});
+    Clutter, {stage}, print, {PopupBaseMenuItem: Actor}, {ActionMode: {NORMAL: 1}}, {EllipsizeMode: {END: 3}}, Gio);
 const button = new Button.Button();
 button.menu = {isOpen: false};
 button._agentMenuItem = (agent, provider, count, track) => new Actor({agent, provider, count, track});
@@ -255,3 +255,23 @@ liveDispatch._completeAgent({...recoveredAgent, session_id: ''});
 check(dispatches.length === beforeMissingId && dispatchRefreshes === beforeFailureRefresh,
     'missing session id still rejects before starting a subprocess');
 print('PASS: native output pipes, precise failures, missing-id rejection and success-only refresh.');
+
+// Hover the real task row with Vibe's legacy generic provider metadata.
+delete button._agentMenuItem;
+button.menu.isOpen = false;
+button._iconsDir = Gio.File.new_for_path(`${root}/acc-model-status@local/icons`);
+const genericIcon = new Gio.FileIcon({file: button._iconsDir.get_child('acc-provider-generic-symbolic.svg')});
+button._icon = () => genericIcon;
+const projectAgent = {...agent, project_tag: 'ACC'};
+const hoverTarget = {hover: true};
+for (const [kind, expected] of [['vibe', 'mistral.svg'], ['unknown', 'acc-provider-generic-symbolic.svg']]) {
+    button._syncTaskHover(hoverTarget, {...projectAgent, kind}, {
+        kind, icon: 'acc-provider-generic-symbolic',
+    }, 1);
+    const stack = popups.at(-1).children[0].children[0];
+    const [tag, logo, badge] = stack.children[1].children[0].children;
+    check(tag.text === 'ACC' && logo.gicon.get_file().get_basename() === expected && badge.text === 'DONE',
+        `hover for ${kind} places ${expected} between the project tag and phase`);
+    check(logo.gicon.get_file().query_exists(null), `hover asset exists for ${kind}`);
+}
+button._hideTaskHover();

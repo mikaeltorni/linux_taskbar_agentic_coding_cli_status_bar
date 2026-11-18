@@ -2400,8 +2400,12 @@ class AccModelStatusButton extends PanelMenu.Button {
             }));
         }
 
+        const isVibe = (agent.kind || provider.kind) === 'vibe';
+        const icon = isVibe
+            ? new Gio.FileIcon({file: this._iconsDir.get_child('mistral.svg')})
+            : this._icon(provider.icon);
         row.add_child(new St.Icon({
-            gicon: this._icon(provider.icon),
+            gicon: icon,
             style_class: 'ams-menu-provider-icon system-status-icon',
             accessible_name: `${provider.label || provider.kind || 'Agent'}`,
             y_align: Clutter.ActorAlign.CENTER,

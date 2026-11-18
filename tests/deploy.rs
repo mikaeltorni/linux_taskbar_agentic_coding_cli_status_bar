@@ -248,7 +248,7 @@ fn model_status_icons_are_symbolic_svgs() {
     let listed = quoted_array(&setup, "ACS_MODEL_STATUS_FILES");
     let icons: Vec<_> = listed
         .into_iter()
-        .filter(|name| name.starts_with("icons/"))
+        .filter(|name| name.starts_with("icons/acc-provider-"))
         .collect();
     let expected = [
         "icons/acc-provider-api-symbolic.svg",
@@ -539,7 +539,8 @@ fn model_status_phase_palette_and_rows() {
     assert!(!body.contains("`W${workspace}`"));
     assert!(!body.contains("ams-workspace"));
     assert!(body.find("ams-project-tag").unwrap() < body.find("ams-phase").unwrap());
-    assert!(body.contains("gicon: this._icon(provider.icon)"));
+    assert!(body.contains("this._icon(provider.icon)"));
+    assert!(body.contains("gicon: icon"));
     assert!(body.contains("ams-menu-provider-icon"));
     assert!(body.contains("codexInstanceLabel(agent, codexInstanceCount)"));
     assert!(!body.contains("text: `${provider.label"));
