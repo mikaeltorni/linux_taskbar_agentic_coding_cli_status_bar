@@ -383,10 +383,12 @@ the terminal indicator. For active goals, only the progress fill and track pulse
 the runtime text and teal focus edges stay steady. Stale goal bars still use the usual dimmed appearance. A finished, unopened instance keeps full opacity while
 its green fill smoothly turns white and back over the same three-second cycle.
 Ready bars stay at least as bright as their original green rather than fading.
-Other idle bars stay steady, and stale snapshots stay dimmed. Each bar centers
-its harness logo inside the 50×8 track, behind the translucent progress fill.
-The mark is clearest in the unfilled portion. At 100%, the solid fill covers
-the track. Codex, Vibe and the other bundled harnesses use their own artwork.
+Other idle bars stay steady, and stale snapshots stay dimmed. Each progress
+cell centers a large, subdued harness logo behind its runtime, progress track,
+instance number and remaining estimate. The logo is clearest through the
+unfilled track. At 100%, the solid fill covers the middle of the logo while
+the artwork remains visible behind the labels. Codex, Vibe and the other
+bundled harnesses use their own artwork.
 Unrecognized harnesses use a generic mark. [Vibe product artwork](https://mistral.ai/products/vibe/)
 Status refreshes reuse the bars so they remain visible throughout the pulse.
 Updates continue while the drop-down is open. The focused terminal's bar gets
