@@ -86,11 +86,21 @@
   margin-top: 1px;
 }
 
+.ams-panel-task-footer {
+  spacing: 1px;
+  margin: 0 1px 1px;
+}
+
+.ams-panel-agent-instance {
+  font-size: 11px;
+  font-family: monospace;
+  color: #9ebfec;
+}
+
 .ams-panel-agent-estimate {
   font-size: 13.5px;
   font-family: monospace;
   color: #c4c7cf;
-  margin-bottom: 1px;
 }
 
 .ams-panel-workspace-group {
