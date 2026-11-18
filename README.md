@@ -106,6 +106,7 @@ poller's own components remove. To go back to the default, set it explicitly:
 | Grok CLI | `billing: fetched credits config` records in `~/.grok/logs/unified.jsonl` (historically `*.log`) — `creditUsagePercent` + weekly period + tier. Post-reset records omit `creditUsagePercent` (no usage yet) and are read as 0% used. The billing log is authoritative over the tmux `/usage` pane (its `Weekly limit left` border freezes between refreshes); a newer `balance exhausted` 402 error record with no later billing fetch reports 0% left | `/usage` |
 | OpenCode Go | Headless scrape of the workspace `/go` page on `opencode.ai` (same embedded `rollingUsage`/`weeklyUsage`/`monthlyUsage` JSON as the [`opencode-go-usage`](https://npmx.dev/package/opencode-go-usage) plugin). Credentials from `OPENCODE_GO_WORKSPACE_ID`/`OPENCODE_GO_AUTH_COOKIE` or `~/.config/opencode/opencode-go-usage.json`. Self-throttled to ≥300 s | `/ogc-usage` |
 | OpenRouter | Management API `POST /api/v1/analytics/query` (read-only; not chat/completions). Daily window for the configured free-model slug (default `stealth/ox-alpha`, limit 1000). Key from `OPENROUTER_MANAGEMENT_API_KEY` or `~/.config/agentic-cli-status/.env`. Self-throttled to ≥60 s | — |
+| Mistral Vibe | Native `vibe-app-server` account read using the Vibe login. Reads the monthly included allowance and its reset, at most once every five minutes during normal polling with a refresh at rollover. | — |
 | Cursor | Headless scrape of the spending dashboard's own usage endpoints (`/api/usage-summary` + `/api/dashboard/get-sand-usage-status`). The HTML `/dashboard/spending` URL 307-loops through a web bootstrap and is not fetched. Session cookie from `CRS_AUTH_COOKIE` or `~/.config/agentic-cli-status/cursor-spending.json` (percent-decoded). Included Pro pools only: Cursor Models, Other Models, Grok Bot, usage-limit reset. On-demand is never collected. Self-throttled independently of the bar tick (`CRS_FETCH_INTERVAL_SECONDS` or config, default 30 s), including after errors | — |
 
 For Codex, a recognized plan in a fresh `/status` capture replaces an older rollout plan for the matching account. Business is displayed as Team; if the status omits a recognized plan, the rollout plan is retained.
@@ -192,6 +193,7 @@ default config) always runs; keep `~/.local/bin` on `PATH`. The components are:
 | `grok_monitor` | **off (opt-in)** | Grok CLI monitoring; same options. Grok is off by default for now and can be enabled with `bash install.sh --select grok_monitor` |
 | `opencode_go_monitor` | **off (opt-in)** | OpenCode Go monitoring; registers `opencode-go-usage` in `~/.config/opencode/opencode.json` and walks through workspace ID + auth cookie setup (paste, edit `~/.config/opencode/opencode-go-usage.json`, or read from a file) |
 | `openrouter_monitor` | **off (opt-in)** | OpenRouter free-model daily usage; enabling it adds the OR segment and walks through the management API key + monitored model slug. While off, no OR segment is shown and no analytics query is made |
+| `vibe_monitor` | **off (opt-in)** | Vibe Code monthly allowance and reset. Enable the `VB` segment with `bash install.sh --select vibe_monitor`. |
 | `cursor_monitor` | **off (opt-in)** | Cursor spending-page scrape (not a CLI); enabling it adds the CRS segment. Single-command setup: `CRS_AUTH_COOKIE=… [CRS_FETCH_INTERVAL_SECONDS=30] crs setup` |
 | `polling_rate` | on | How often limits are checked — **always in seconds** (5–3600, default 5) |
 | `tmux_console` | on | The background tmux debug console / refresher |
@@ -313,6 +315,37 @@ the poller honors `Retry-After` and keeps showing the last good reading.
 
 All options live in `~/.config/agentic-cli-status/config.json`; the poller
 re-reads it every tick, so changes apply without a service restart.
+
+### Mistral Vibe monthly allowance
+
+Sign in once with Vibe (or ACC's `va`). In this checkout, enable or disable the
+monitor with:
+
+```bash
+bash install.sh --select vibe_monitor
+systemctl --user restart agentic-cli-status.service
+# To turn off monitoring:
+bash install.sh --uninstall vibe_monitor
+```
+
+The `VB` segment shows the rounded percentage of the monthly allowance
+remaining. Open the taskbar indicator menu for the Mistral Vibe row and its
+local reset date. ACC's AFK display also shows the local reset time.
+
+The monitor uses Vibe 3.1.2's native account read, which uses the signed-in
+organization's billing metadata. It sends no model prompts and needs no
+browser cookies. The row appears after a successful reading. If Mistral
+provides an allowance without a reset date, the display has no reset to show.
+The account must have permission to view usage.
+
+In an interactive Vibe session, use `/status` for session token counts and
+`/context` for context window usage. Programmatic runs support `--output-dir`
+for run totals in `export.json`. Vibe 3.1.2 also records input, cached input,
+output and total tokens in its local unified session journal under
+`${VIBE_HOME:-$HOME/.vibe}/logs/session/unified/`. These are session counts.
+The monthly allowance shown by the monitor comes from billing. See the
+[Mistral Vibe CLI guide](https://docs.mistral.ai/vibe/code/cli/work-with-cli)
+and [Enterprise organization usage metrics](https://docs.mistral.ai/admin/admin-api/usage-metrics).
 
 ### Optional: Agent Command Center model status bar
 
