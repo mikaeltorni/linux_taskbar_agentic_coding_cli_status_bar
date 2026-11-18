@@ -15,7 +15,7 @@ use crate::collectors::openrouter::OpenRouterFetch;
 use crate::collectors::{
     codex_home_authenticated, codex_status_send_failed, collect_claude, collect_codex_accounts,
     collect_codex_reset_forecast, collect_cursor, collect_grok, collect_opencode_go,
-    collect_openrouter, load_codex_account_registry, parse_pane, selected_codex_home,
+    collect_openrouter, collect_vibe, load_codex_account_registry, parse_pane, selected_codex_home,
 };
 use crate::config::{
     load_config, slash_command, state_dir, CLI_IDS, CODEX_RESET_FORECAST_STALE_AFTER_SECONDS,
@@ -33,7 +33,7 @@ pub const STATUS_FILE_NAME: &str = "status.json";
 pub const PANE_DIR_NAME: &str = "panes";
 pub const TMUX_REFRESH_MIN_INTERVAL_SECONDS: f64 = 60.0;
 pub const REMOTE_HEADLESS_CLI_IDS: &[&str] =
-    &["claude_code", "opencode_go", "openrouter", "cursor"];
+    &["claude_code", "opencode_go", "openrouter", "cursor", "vibe"];
 
 /// Job id used to run the Codex reset forecast through the same background
 /// worker as the remote CLI collectors. It is not a CLI, so it is kept out of
@@ -46,6 +46,7 @@ pub const REMOTE_HEADLESS_JOB_IDS: &[&str] = &[
     "opencode_go",
     "openrouter",
     "cursor",
+    "vibe",
     CODEX_RESET_FORECAST_JOB_ID,
 ];
 
@@ -416,6 +417,7 @@ fn collect_headless(
             cli_config.get("daily_limit").and_then(Value::as_i64),
             hooks.openrouter_fetch.clone(),
         ),
+        "vibe" => collect_vibe(home, last, now),
         "cursor" => collect_cursor(
             home,
             last,
@@ -826,7 +828,11 @@ fn collect_cli(
     // instance ACC has selected, so once `caN` moves the selection the previous
     // tick describes a *different* ChatGPT login and must not be carried onto
     // the new one.
-    let account_last = codex_same_account_last(cli_id, &snapshot, last);
+    let account_last = if cli_id == "vibe" {
+        None
+    } else {
+        codex_same_account_last(cli_id, &snapshot, last)
+    };
     snapshot = carry_fresher_reading(snapshot, account_last);
     if cli_id == "codex" {
         snapshot = carry_codex_reset_metadata(snapshot, account_last);
@@ -2044,6 +2050,52 @@ mod tests {
             on_disk["clis"]["codex"]["windows"][0]["used_percent"],
             json!(57.0)
         );
+        println!("()");
+    }
+
+    #[test]
+    fn poll_once_publishes_vibe_monthly_usage_from_prompt_free_rpc() {
+        // Publish the monthly balance through the regular status producer.
+        // Parameters: none.
+        // Returns: () after the assertions pass.
+        println!("parameters=none");
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = Sandbox::new();
+        configure(false);
+        let mut cfg = load_config(None);
+        cfg["clis"]["vibe"]["enabled"] = json!(true);
+        save_config(&cfg, None).unwrap();
+        let path = sandbox.home.join(".local/bin/vibe-app-server");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"#!/usr/bin/env python3
+import json, sys
+steps = ["initialize", "initialized", "session/start", "account/read"]
+for method, line in zip(steps, sys.stdin, strict=True):
+    req = json.loads(line)
+    assert req["method"] == method, req["method"]
+    params = req["params"]
+    if method == "session/start":
+        assert params["kind"] == "ephemeral" and "firstTurn" not in params
+    if method == "account/read":
+        assert params["sessionId"] == "ephemeral-id"
+    results = {
+        "initialize": {},
+        "session/start": {"state": {"session": {"id": "ephemeral-id"}}},
+        "account/read": {"account": {"budget": {"usagePercentage": 17.5, "resetAt": "2026-12-01T00:00:00Z", "paygEnabled": True}}},
+    }
+    if "id" in req:
+        print(json.dumps({"id": req["id"], "result": results[method]}), flush=True)
+"#).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let status = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &PollHooks::default());
+        let vibe = &status["clis"]["vibe"];
+        assert_eq!(vibe["windows"][0]["label"], json!("month"));
+        assert_eq!(vibe["windows"][0]["resets_at"], json!(1796083200));
+        assert_eq!(vibe["windows"][0]["used_percent"], json!(17.5));
+        assert_eq!(vibe["payg_enabled"], json!(true));
+        fs::write(path, "#!/bin/sh\nexit 0\n").unwrap();
+        let missing = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &PollHooks::default());
+        assert_eq!(missing["clis"]["vibe"]["windows"], json!([]));
         println!("()");
     }
 

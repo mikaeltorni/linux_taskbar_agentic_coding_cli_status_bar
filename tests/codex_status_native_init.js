@@ -40,6 +40,6 @@ const Button = new Function('GObject', 'PanelMenu', 'Extension', 'St', 'Clutter'
     `${source}\nreturn AgenticCliStatusButton;`)(GObject, {Button: Parent}, class {},
     {BoxLayout: Actor, Label: Actor}, {ActorAlign: {CENTER: 0}});
 const button = new Button();
-if (!(button._codexTracking instanceof Map) || button._segments.size !== 6)
+if (!(button._codexTracking instanceof Map) || button._segments.size !== 7 || !button._segments.has('vibe'))
     throw Error('Codex tracking and all status labels must initialize on a native button');
 print('PASS: Codex status button initializes on a real GObject parent.');
