@@ -1218,6 +1218,7 @@ print(JSON.stringify({
     na: formatHarnessRateText({kind: 'grok', label: 'Grok', tokens_per_second: null}),
     compact: {
         small: formatCompactTokens(12),
+        fractional_k: formatCompactTokens(1500),
         k: formatCompactTokens(130681),
         m: formatCompactTokens(6758015),
     },
@@ -1255,6 +1256,7 @@ print(JSON.stringify({
     );
     assert_eq!(js["na"], "Grok n/a");
     assert_eq!(js["compact"]["small"], "12");
+    assert_eq!(js["compact"]["fractional_k"], "2k");
     assert_eq!(js["compact"]["k"], "131k");
     assert_eq!(js["compact"]["m"], "6.8M");
     assert_eq!(js["huge"], "Codex 131k/s  946k/min  6.8M/h");
