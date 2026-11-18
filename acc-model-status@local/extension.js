@@ -1248,9 +1248,21 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
         can_focus: Boolean(focusAgent && String(agent.note_id || '').trim()),
         track_hover: Boolean(focusAgent && String(agent.note_id || '').trim()),
     });
+    // The Cairo track is eight pixels tall, slightly above the drawing area's center.
+    const logoBackground = new St.Widget({
+        layout_manager: new Clutter.BinLayout(),
+        height: 8,
+        x_expand: true,
+        y_expand: true,
+        x_align: Clutter.ActorAlign.FILL,
+        y_align: Clutter.ActorAlign.CENTER,
+        translation_y: -1,
+        clip_to_allocation: true,
+        reactive: false,
+    });
     const logo = new St.Icon({
         style_class: 'ams-panel-task-logo',
-        icon_size: 8,
+        icon_size: 9,
         x_expand: true,
         y_expand: true,
         x_align: Clutter.ActorAlign.CENTER,
@@ -1317,7 +1329,8 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
     bar._amsInstanceLabel = instance;
     bar._amsEstimateLabel = estimate;
     bar._amsRuntimeLabel = runtime;
-    cell.add_child(logo);
+    logoBackground.add_child(logo);
+    cell.add_child(logoBackground);
     cell.add_child(bar);
     footer.add_child(instance);
     footer.add_child(estimate);
