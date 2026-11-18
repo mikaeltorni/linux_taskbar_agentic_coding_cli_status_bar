@@ -928,6 +928,7 @@ ACS_MODEL_STATUS_FILES=(
   "icons/acc-provider-openrouter-symbolic.svg"
   "icons/acc-provider-qwen-symbolic.svg"
   "icons/acc-provider-vibe-symbolic.svg"
+  "icons/mistral.svg"
 )
 
 # acs_model_status_dir - Echo the installed extension directory in the target
