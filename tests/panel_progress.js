@@ -171,21 +171,23 @@ const brandProvider = {kind: 'codex', agents: [brandAgent]};
 button._updatePanelProgress({providers: [brandProvider]}, false);
 const brandBar = button._panelProgressBars.get('branding');
 const brandCell = brandBar.get_parent();
-const brandBackground = brandCell.children[0];
 const brandLogo = brandBar._amsLogo;
-check(brandBackground.get_children()[0] === brandLogo &&
-    brandCell.children[1] === brandBar && brandLogo.gicon.get_file().get_basename() === 'acc-provider-codex-symbolic.svg',
-    'Codex mark is inside the background layer painted behind the fill');
-check(brandBackground.clip_to_allocation && brandBackground.height === 8 &&
-    brandBackground.y_align === Clutter.ActorAlign.CENTER && brandBackground.translation_y === -1 &&
-    brandLogo.icon_size === 9 && brandLogo.y_align === Clutter.ActorAlign.CENTER,
-    'logo fills the height of the painted bar and is clipped to its background');
+check(brandCell.children[0] === brandLogo &&
+    brandCell.children[1] === brandBar &&
+    brandCell.children[2] === brandBar._amsEstimateLabel.get_parent() &&
+    brandCell.children[3] === brandBar._amsRuntimeLabel &&
+    brandLogo.gicon.get_file().get_basename() === 'acc-provider-codex-symbolic.svg',
+    'Codex artwork is behind the progress fill, footer and runtime');
+check(brandCell.clip_to_allocation && brandLogo.icon_size === brandCell.width &&
+    brandLogo.x_align === Clutter.ActorAlign.CENTER && brandLogo.y_align === Clutter.ActorAlign.CENTER &&
+    !brandLogo.reactive && brandLogo.opacity > 0 && brandLogo.opacity < 128,
+    'full-cell artwork spans the time labels while staying within the cell and subdued');
 check(brandLogo.visible && brandBar.draws.at(-1).color[3] === .22, 'empty bar reveals the mark through the track');
 brandAgent.kind = brandProvider.kind = 'vibe';
 brandProvider.icon = 'acc-provider-generic-symbolic';
 brandAgent.workflow = {available: false};
 button._updatePanelProgress({providers: [brandProvider]}, false);
-check(brandBar === button._panelProgressBars.get('branding') && brandBackground === brandCell.children[0] && brandLogo === brandBar._amsLogo,
+check(brandBar === button._panelProgressBars.get('branding') && brandCell.children[0] === brandLogo && brandLogo === brandBar._amsLogo,
     'harness change retains the cell, bar and logo actors');
 check(brandLogo.gicon.get_file().get_basename() === 'acc-provider-vibe-symbolic.svg' &&
     brandLogo.visible && brandBar.draws.at(-1).color[3] < 1, 'Vibe resolves even with a legacy generic icon and unknown progress');
@@ -193,12 +195,16 @@ brandAgent.kind = brandProvider.kind = 'claude';
 brandAgent.workflow = {fraction: 1};
 button._updatePanelProgress({providers: [brandProvider]}, false);
 check(brandLogo.gicon.get_file().get_basename() === 'acc-provider-claude-symbolic.svg' &&
-    !brandLogo.visible && brandBar.draws.at(-1).color[3] === 1, 'another harness resolves and complete fill is opaque');
+    brandLogo.visible && brandBar.draws.at(-1).color[3] === 1, 'completion covers the middle of the logo with opaque fill while leaving the full-cell background');
 brandAgent.kind = brandProvider.kind = 'future';
 brandAgent.workflow = {fraction: .5};
 button._updatePanelProgress({providers: [brandProvider]}, false);
 check(brandLogo.visible && brandLogo.gicon.get_file().get_basename() === 'acc-provider-generic-symbolic.svg',
     'an unknown harness still has a fallback mark');
+const freshLogoOpacity = brandLogo.opacity;
+button._updatePanelProgress({providers: [brandProvider]}, true);
+check(brandLogo.visible && brandLogo.opacity > 0 && brandLogo.opacity < freshLogoOpacity,
+    'stale data dims the background without removing the artwork');
 button._updatePanelProgress(payload, false);
 bars = visibleBars(button._panelProgress);
 
