@@ -1248,21 +1248,9 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
         can_focus: Boolean(focusAgent && String(agent.note_id || '').trim()),
         track_hover: Boolean(focusAgent && String(agent.note_id || '').trim()),
     });
-    // The Cairo track is eight pixels tall, slightly above the drawing area's center.
-    const logoBackground = new St.Widget({
-        layout_manager: new Clutter.BinLayout(),
-        height: 8,
-        x_expand: true,
-        y_expand: true,
-        x_align: Clutter.ActorAlign.FILL,
-        y_align: Clutter.ActorAlign.CENTER,
-        translation_y: -1,
-        clip_to_allocation: true,
-        reactive: false,
-    });
     const logo = new St.Icon({
         style_class: 'ams-panel-task-logo',
-        icon_size: 9,
+        icon_size: cell.width,
         x_expand: true,
         y_expand: true,
         x_align: Clutter.ActorAlign.CENTER,
@@ -1329,8 +1317,8 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
     bar._amsInstanceLabel = instance;
     bar._amsEstimateLabel = estimate;
     bar._amsRuntimeLabel = runtime;
-    logoBackground.add_child(logo);
-    cell.add_child(logoBackground);
+    // Keep the watermark below the fill and both rows of labels.
+    cell.add_child(logo);
     cell.add_child(bar);
     footer.add_child(instance);
     footer.add_child(estimate);
@@ -2667,8 +2655,8 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
             bar._amsLogo.gicon = this._icon(icon);
             bar._amsLogoName = icon;
         }
-        bar._amsLogo.visible = panelTaskProgressValue(entry.agent) !== 1;
-        bar._amsLogo.opacity = entryStale ? 128 : 255;
+        bar._amsLogo.visible = true;
+        bar._amsLogo.opacity = entryStale ? 31 : 62;
         cell.reactive = Boolean(String(entry.agent.note_id || '').trim());
         cell.can_focus = cell.reactive;
         cell.track_hover = cell.reactive;
