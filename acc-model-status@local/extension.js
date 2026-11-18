@@ -1004,6 +1004,7 @@ function panelProgressHostOpacity(agent, now, stale, ready) {
  * Returns: undefined after releasing the Cairo drawing context.
  */
 function paintPanelTaskProgress(area) {
+    print(`area=${area}`);
     const [width, height] = area.get_surface_size();
     const context = area.get_context();
     const fillWidth = Math.max(0, width - 2);
@@ -1014,11 +1015,11 @@ function paintPanelTaskProgress(area) {
         panelProgressOpacity(true, area._amsPulseAt ?? Date.now(), false, ready) / 255 : 1;
     const color = panelProgressColor(fraction, ready, area._amsPulseAt ?? Date.now(), area._amsAgent)
         .map(channel => channel / 255);
-    context.setSourceRGBA(...color, (fraction === null ? 1 : 0.22) * fillAlpha);
+    context.setSourceRGBA(...color, (fraction === null ? 0.45 : 0.22) * fillAlpha);
     context.rectangle(1, 1, fillWidth, fillHeight);
     context.fill();
     if (fraction !== null && fraction > 0) {
-        context.setSourceRGBA(...color, fillAlpha);
+        context.setSourceRGBA(...color, fraction === 1 ? 1 : 0.72 * fillAlpha);
         context.rectangle(1, 1, fillWidth * fraction, fillHeight);
         context.fill();
     }
@@ -1030,6 +1031,7 @@ function paintPanelTaskProgress(area) {
         context.stroke();
     }
     context.$dispose();
+    print(undefined);
 }
 
 /**
@@ -1198,6 +1200,7 @@ const panelAgentRuntimeColor = (agent, now = Date.now(), stale = false) => {
  * Returns: a fixed-width instance click and hover target with its bar, lower estimate and upper runtime label.
  */
 function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
+    print(`agent=${agent} focusAgent=${focusAgent} confirmAgent=${confirmAgent}`);
     const cell = new St.Widget({
         style_class: 'ams-panel-task-cell',
         layout_manager: new Clutter.BinLayout(),
@@ -1208,6 +1211,16 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
         reactive: Boolean(focusAgent && String(agent.note_id || '').trim()),
         can_focus: Boolean(focusAgent && String(agent.note_id || '').trim()),
         track_hover: Boolean(focusAgent && String(agent.note_id || '').trim()),
+    });
+    const logo = new St.Icon({
+        style_class: 'ams-panel-task-logo',
+        icon_size: 8,
+        x_expand: true,
+        y_expand: true,
+        x_align: Clutter.ActorAlign.CENTER,
+        y_align: Clutter.ActorAlign.CENTER,
+        reactive: false,
+        visible: false,
     });
     const bar = buildPanelTaskProgress(agent);
     const estimate = new St.Label({
@@ -1247,11 +1260,15 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
             focusAgent(noteId);
         return Clutter.EVENT_STOP;
     });
+    cell._amsBar = bar;
+    bar._amsLogo = logo;
     bar._amsEstimateLabel = estimate;
     bar._amsRuntimeLabel = runtime;
+    cell.add_child(logo);
     cell.add_child(bar);
     cell.add_child(estimate);
     cell.add_child(runtime);
+    print(cell);
     return cell;
 }
 
@@ -2496,6 +2513,7 @@ class AccModelStatusButton extends PanelMenu.Button {
  * Returns: undefined after refreshing all tasks in their shared workspace groups.
  */
 AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) {
+    print(`this=${this} payload=${payload} stale=${stale}`);
     if (!this._panelProgress) {
         this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
         this._panelProgressBars = new Map();
@@ -2539,7 +2557,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                 previousMonitor = monitor;
                 const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId),
                     (target, agent, provider, count) => this._showTaskConfirmation(target, agent, provider, count));
-                const bar = cell.get_children()[0];
+                const bar = cell._amsBar;
                 cell.connect('notify::hover', () => this._syncTaskHover(
                     cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
                 cell.connect('destroy', () => {
@@ -2572,6 +2590,16 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         bar._amsProvider = entry.provider;
         bar._amsInstanceCount = payload?.codexInstanceCount;
         const cell = bar.get_parent();
+        const kind = entry.agent.kind || entry.provider.kind;
+        const publishedIcon = kind === entry.provider.kind ? entry.provider.icon : null;
+        const icon = publishedIcon && publishedIcon !== FALLBACK_ICON ? publishedIcon :
+            kind ? `acc-provider-${kind}-symbolic` : FALLBACK_ICON;
+        if (bar._amsLogoName !== icon) {
+            bar._amsLogo.gicon = this._icon(icon);
+            bar._amsLogoName = icon;
+        }
+        bar._amsLogo.visible = panelTaskProgressValue(entry.agent) !== 1;
+        bar._amsLogo.opacity = entryStale ? 128 : 255;
         cell.reactive = Boolean(String(entry.agent.note_id || '').trim());
         cell.can_focus = cell.reactive;
         cell.track_hover = cell.reactive;
@@ -2608,6 +2636,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
     }
     this._panelProgress.visible = entries.length > 0;
     this._syncPanelPulseTimer();
+    print(undefined);
 };
 
 
