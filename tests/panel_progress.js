@@ -171,15 +171,21 @@ const brandProvider = {kind: 'codex', agents: [brandAgent]};
 button._updatePanelProgress({providers: [brandProvider]}, false);
 const brandBar = button._panelProgressBars.get('branding');
 const brandCell = brandBar.get_parent();
-const brandLogo = brandCell.children[0];
-check(brandLogo !== brandBar && brandLogo.gicon.get_file().get_basename() === 'acc-provider-codex-symbolic.svg',
-    'Codex logo is stacked behind the drawing area');
+const brandBackground = brandCell.children[0];
+const brandLogo = brandBar._amsLogo;
+check(brandBackground.get_children()[0] === brandLogo &&
+    brandCell.children[1] === brandBar && brandLogo.gicon.get_file().get_basename() === 'acc-provider-codex-symbolic.svg',
+    'Codex mark is inside the background layer painted behind the fill');
+check(brandBackground.clip_to_allocation && brandBackground.height === 8 &&
+    brandBackground.y_align === Clutter.ActorAlign.CENTER && brandBackground.translation_y === -1 &&
+    brandLogo.icon_size === 9 && brandLogo.y_align === Clutter.ActorAlign.CENTER,
+    'logo fills the height of the painted bar and is clipped to its background');
 check(brandLogo.visible && brandBar.draws.at(-1).color[3] === .22, 'empty bar reveals the mark through the track');
 brandAgent.kind = brandProvider.kind = 'vibe';
 brandProvider.icon = 'acc-provider-generic-symbolic';
 brandAgent.workflow = {available: false};
 button._updatePanelProgress({providers: [brandProvider]}, false);
-check(brandBar === button._panelProgressBars.get('branding') && brandLogo === brandCell.children[0],
+check(brandBar === button._panelProgressBars.get('branding') && brandBackground === brandCell.children[0] && brandLogo === brandBar._amsLogo,
     'harness change retains the cell, bar and logo actors');
 check(brandLogo.gicon.get_file().get_basename() === 'acc-provider-vibe-symbolic.svg' &&
     brandLogo.visible && brandBar.draws.at(-1).color[3] < 1, 'Vibe resolves even with a legacy generic icon and unknown progress');
