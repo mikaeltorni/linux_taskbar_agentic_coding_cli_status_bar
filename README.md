@@ -383,11 +383,15 @@ the terminal indicator. For active goals, only the progress fill and track pulse
 the runtime text and teal focus edges stay steady. Stale goal bars still use the usual dimmed appearance. A finished, unopened instance keeps full opacity while
 its green fill smoothly turns white and back over the same three-second cycle.
 Ready bars stay at least as bright as their original green rather than fading.
-Other idle bars stay steady; stale snapshots stay dimmed.
+Other idle bars stay steady, and stale snapshots stay dimmed. Each bar centers
+its harness logo inside the 50×8 track, behind the translucent progress fill.
+The mark is clearest in the unfilled portion. At 100%, the solid fill covers
+the track. Codex, Vibe and the other bundled harnesses use their own artwork.
+Unrecognized harnesses use a generic mark. [Vibe product artwork](https://mistral.ai/products/vibe/)
 Status refreshes reuse the bars so they remain visible throughout the pulse.
 Updates continue while the drop-down is open. The focused terminal's bar gets
 a subtle **one-pixel teal outline** (`#00ffe6`, matching the CLI selection cue).
-The outline sits one pixel outside the unchanged 50×8 fill, using a 52×10
+The outline sits one pixel outside the 50×8 fill, using a 52×11
 drawing area so it never covers progress pixels. Bars within each workspace
 have a six-pixel gap between their drawing areas. At each monitor change
 within a workspace, a thin teal vertical line spans the centered half of the
@@ -506,10 +510,12 @@ completed active-duration measurement when its start is unavailable. Unknown
 or invalid timing is omitted. Stale completed timers stay dim and stop flashing,
 matching their bars.
 
-The lower label shows that running agent's own remaining estimate in 13.5px
-monospace text, 1.5 times its original size. It keeps only the duration, such
-as `~3m` or `~1h30m`; hour/minute components are compact and any text after the
-duration unit is omitted. It disappears when the agent stops running, when a
+The lower right shows the running agent's remaining estimate in 13.5px
+monospace text. The lower left shows the account number when multiple Codex
+accounts are registered. Otherwise, when a project has multiple open sessions
+of the same harness, their published project-local instance numbers appear
+there. The estimate shows only the compact duration, such as `~3m` or
+`~1h30m`. It disappears when the agent stops running, when a
 launch countdown is showing, or when no estimate is available. A rate-limited
 wait does not put time left under the bar. The far-right aggregate time estimate is removed. Timing labels
 stay readable while the progress fill pulses, update in place with the menu
