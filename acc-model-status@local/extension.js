@@ -416,7 +416,7 @@ function formatCompactTokens(value) {
         scaled /= 1000;
         index += 1;
     }
-    const text = scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '');
+    const text = index === 0 || scaled >= 10 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '');
     return `${text}${suffixes[index]}`;
 }
 
