@@ -238,8 +238,12 @@ fn model_status_copy_list_matches_extension_files() {
     assert_eq!(listed, rel);
 }
 
+/// Check the complete set of bundled provider marks and their symbolic SVG format.
+/// Parameters: none.
+/// Returns: None after verifying every deployed icon.
 #[test]
 fn model_status_icons_are_symbolic_svgs() {
+    println!("parameters=none");
     let setup = read("lib/status_setup.sh");
     let listed = quoted_array(&setup, "ACS_MODEL_STATUS_FILES");
     let icons: Vec<_> = listed
@@ -257,6 +261,7 @@ fn model_status_icons_are_symbolic_svgs() {
         "icons/acc-provider-opencode-symbolic.svg",
         "icons/acc-provider-openrouter-symbolic.svg",
         "icons/acc-provider-qwen-symbolic.svg",
+        "icons/acc-provider-vibe-symbolic.svg",
     ];
     assert_eq!(icons, expected);
     let icon_re = Regex::new(r"^icons/acc-provider-[a-z0-9]+-symbolic\.svg$").unwrap();
@@ -265,6 +270,7 @@ fn model_status_icons_are_symbolic_svgs() {
         let svg = read(&format!("acc-model-status@local/{icon}"));
         assert!(svg.contains("<svg"), "{icon}");
     }
+    println!("None");
 }
 
 #[test]

@@ -1,0 +1,13 @@
+<!-- Vibe product mark from https://mistral.ai/images/logos/logo-vibe.svg -->
+<svg width="16" height="16" viewBox="20 16 140 140" xmlns="http://www.w3.org/2000/svg">
+  <rect x="40" y="36" width="20" height="20" fill="#2e3436"/>
+  <rect x="120" y="36" width="20" height="20" fill="#2e3436"/>
+  <rect x="80" y="96" width="20" height="20" fill="#2e3436"/>
+  <rect x="40" y="96" width="20" height="20" fill="#2e3436"/>
+  <rect x="120" y="96" width="20" height="20" fill="#2e3436"/>
+  <rect x="40" y="56" width="40" height="20" fill="#2e3436"/>
+  <rect x="20" y="116" width="60" height="20" fill="#2e3436"/>
+  <rect x="100" y="116" width="60" height="20" fill="#2e3436"/>
+  <rect x="40" y="76" width="100" height="20" fill="#2e3436"/>
+  <rect x="100" y="56" width="40" height="20" fill="#2e3436"/>
+</svg>

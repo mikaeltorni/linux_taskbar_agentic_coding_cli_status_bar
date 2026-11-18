@@ -75,6 +75,10 @@
   spacing: 6px;
 }
 
+.ams-panel-task-logo {
+  color: #e4e7ed;
+}
+
 .ams-panel-agent-runtime {
   font-size: 13.5px;
   font-family: monospace;

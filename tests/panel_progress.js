@@ -104,7 +104,7 @@ class Actor {
     });
 }
 
-const St = {BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Widget: Actor};
+const St = {Icon: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Widget: Actor};
 const Clutter = {ModifierType: {CONTROL_MASK: 4}, ActorAlign: {CENTER: 0, FILL: 1, END: 2, START: 3}, BinLayout: class {}};
 const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
@@ -136,8 +136,9 @@ const services = {readPayload: () => snapshot, scopePayloadToWindows: value => v
     ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
     saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [{workspace: 5, count: 1, current: false, label: 'W5:1'}], panelHarnessRateRows: () => [],
 };
-const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', 'Harbor', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
+const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', 'Harbor', 'Gio', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
 ${snippets.join('\n')}
+    const FALLBACK_ICON = 'acc-provider-generic-symbolic';
     const {harborCountText, formatHarborEstimate} = Harbor;
     const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
         ageSeconds, STALE_SECONDS,
@@ -145,23 +146,55 @@ ${snippets.join('\n')}
     class Destroyer extends St.BoxLayout { _hideTaskConfirmation = () => {}; ${declaration('_hideTaskHover', true)} ${declaration('destroy', true)} }
     return {agentPhaseBadgeColor, panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer, paintPanelWorkspaceSeparator,
-        updater: {${['_hideTaskHover', '_refresh', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
+        updater: {${['_hideTaskHover', '_refresh', '_icon', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _updatePanelTaskEstimate(') ? ['_updatePanelTaskEstimate'] : []),
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
-const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor);
+const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor, Gio);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
-    child.style_class === 'ams-panel-workspace-group' ? child.children[1].children.filter(cell => cell.style_class === 'ams-panel-task-cell').map(cell => cell.children[0]) : []);
+    child.style_class === 'ams-panel-workspace-group' ? child.children[1].children.filter(cell => cell.style_class === 'ams-panel-task-cell').map(cell => cell._amsBar) : []);
 const a = {session_id: 'a', phase: 'RUNNING', run_active: true, workflow: {available: true, fraction: 0.25}};
 const b = {session_id: 'b', phase: 'STOPPED', workflow: {available: true, fraction: 0.6}};
 const payload = {providers: [{kind: 'codex', agents: [a]}, {kind: 'claude', agents: [b]}]};
-const button = Object.assign({_box: new Actor(), _syncTaskHover: () => {}}, owners.updater);
+const iconsDir = Gio.File.new_for_path(`${root}/acc-model-status@local/icons`);
+const button = Object.assign({_iconsDir: iconsDir, _box: new Actor(), _syncTaskHover: () => {}}, owners.updater);
 button._updatePanelProgress(payload, false);
 let bars = visibleBars(button._panelProgress);
 check(bars.length === 2, 'one bar for every open agent');
 check(bars.every(bar => bar.width === 52 && bar.height === 11), '52x11 drawing room preserves the 50x8 fill and outside outline');
 check(bars[0].draws.at(-1).rect[2] === 12.5, 'actual 25% fill');
 check(bars[1].draws.at(-1).rect[2] === 30, 'actual 60% fill');
+check(bars[1].draws.at(-1).color[3] === .72, 'partial fill must show the mark underneath');
+const brandAgent = {session_id: 'branding', kind: 'codex', workflow: {fraction: 0}};
+const brandProvider = {kind: 'codex', agents: [brandAgent]};
+button._updatePanelProgress({providers: [brandProvider]}, false);
+const brandBar = button._panelProgressBars.get('branding');
+const brandCell = brandBar.get_parent();
+const brandLogo = brandCell.children[0];
+check(brandLogo !== brandBar && brandLogo.gicon.get_file().get_basename() === 'acc-provider-codex-symbolic.svg',
+    'Codex logo is stacked behind the drawing area');
+check(brandLogo.visible && brandBar.draws.at(-1).color[3] === .22, 'empty bar reveals the mark through the track');
+brandAgent.kind = brandProvider.kind = 'vibe';
+brandProvider.icon = 'acc-provider-generic-symbolic';
+brandAgent.workflow = {available: false};
+button._updatePanelProgress({providers: [brandProvider]}, false);
+check(brandBar === button._panelProgressBars.get('branding') && brandLogo === brandCell.children[0],
+    'harness change retains the cell, bar and logo actors');
+check(brandLogo.gicon.get_file().get_basename() === 'acc-provider-vibe-symbolic.svg' &&
+    brandLogo.visible && brandBar.draws.at(-1).color[3] < 1, 'Vibe resolves even with a legacy generic icon and unknown progress');
+brandAgent.kind = brandProvider.kind = 'claude';
+brandAgent.workflow = {fraction: 1};
+button._updatePanelProgress({providers: [brandProvider]}, false);
+check(brandLogo.gicon.get_file().get_basename() === 'acc-provider-claude-symbolic.svg' &&
+    !brandLogo.visible && brandBar.draws.at(-1).color[3] === 1, 'another harness resolves and complete fill is opaque');
+brandAgent.kind = brandProvider.kind = 'future';
+brandAgent.workflow = {fraction: .5};
+button._updatePanelProgress({providers: [brandProvider]}, false);
+check(brandLogo.visible && brandLogo.gicon.get_file().get_basename() === 'acc-provider-generic-symbolic.svg',
+    'an unknown harness still has a fallback mark');
+button._updatePanelProgress(payload, false);
+bars = visibleBars(button._panelProgress);
+
 const retained = bars[0];
 a.workflow.fraction = 0.8;
 button._updatePanelProgress(payload, false);
@@ -450,20 +483,20 @@ for (const [state, expected] of [
     const fill = bar.draws.at(-1);
     check(JSON.stringify(fill.color.slice(0, 3).map(channel => Math.round(channel * 255))) === JSON.stringify(expected),
         `state color follows ${JSON.stringify(state)}`);
-    check(bar.draws[0].color[3] === .22 && fill.color[3] === 1,
-        'state colors preserve track and fill alpha');
+    check(bar.draws[0].color[3] === .22 && fill.color[3] === (state.phase === 'DONE' ? 1 : .72),
+        'state colors use translucent partial fill and opaque completion');
     check(fill.rect[2] === (state.phase === 'DONE' ? 50 : 25), 'state color preserves measured width');
 }
 for (const state of [{phase: 'RATE'}, {phase: 'RUNNING', run_active: true, goal_active: true}]) {
     const bar = owners.buildPanelTaskProgress({...state, workflow: {available: false}});
     bar._amsPulseAt = 0;
     bar.queue_repaint();
-    check(bar.draws.length === 1 && bar.draws[0].color[3] === 1,
-        'unavailable state preserves neutral track and alpha');
+    check(bar.draws.length === 1 && bar.draws[0].color[3] === .45,
+        'unavailable state keeps the neutral track translucent');
     check(JSON.stringify(bar.draws[0].color.slice(0, 3).map(channel => Math.round(channel * 255))) === '[48,52,64]',
         'unavailable workflow stays neutral');
 }
-print('PASS: goal and RATE fills match state colors without changing progress or opacity.');
+print('PASS: goal and RATE fills match state colors and preserve measured progress.');
 
 check(/\.ams-panel-workspace\s*\{[^}]*spacing:\s*6px;/.test(css),
     'same-workspace bars have a slightly wider six-pixel actor gap');
@@ -477,10 +510,10 @@ for (const [fraction, expected] of [[0,[239,68,68]], [.25,[188,100,75]], [.5,[13
     const painted = bar.draws.at(-1);
     check(JSON.stringify(painted.color.slice(0, 3).map(channel => Math.round(channel * 255))) === JSON.stringify(expected),
         'ordinary active progress transitions red to green at every fraction');
-    check(painted.color[3] === (fraction > 0 ? 1 : .22), 'ordinary gradient preserves alpha');
+    check(painted.color[3] === (fraction === 1 ? 1 : fraction > 0 ? .72 : .22), 'ordinary gradient preserves alpha');
     check(painted.rect[2] === (fraction > 0 ? fraction * 50 : 50), 'ordinary gradient preserves track/fill width');
 }
-print('PASS: ordinary active bars transition red to green without changing measured widths or opacity.');
+print('PASS: ordinary active bars transition red to green with measured widths and translucent partial fill.');
 
 // Goal identity moves to the timer; progress keeps its measured gradient and focus outline.
 for (const focused of [false, true]) {
@@ -524,7 +557,7 @@ for (const [now, expectedAlpha] of [[0,1], [750,166/255], [1500,77/255], [3000,1
     button._applyPanelProgressPulse(now);
     check(steadyGoalBar.opacity === 255, 'goal host remains fully opaque throughout pulse');
     check(steadyGoalBar.strokes.length === 0, 'goal pulses never repaint a purple stripe');
-    check(steadyGoalBar.draws.at(-1).color[3] === expectedAlpha &&
+    check(steadyGoalBar.draws.at(-1).color[3] === .72*expectedAlpha &&
         steadyGoalBar.draws.at(-2).color[3] === .22*expectedAlpha,
         'goal track and fill retain their previous effective opacity pulse');
 }
@@ -684,7 +717,7 @@ print('PASS: W1 blue → W8 violet gradient applies to every label, with stable 
 
 // The leading workspace label follows the existing provider/token summary.
 const tokenCounter = new Actor({text: '64/s', style_class: 'ams-rate'});
-const inlineButton = Object.assign({_box: new Actor()}, owners.updater);
+const inlineButton = Object.assign({_iconsDir: iconsDir, _box: new Actor()}, owners.updater);
 inlineButton._box.add_child(tokenCounter);
 inlineButton._updatePanelProgress({providers: [{kind: 'codex', agents: [
     {session_id: 'inline-w2', workspace: 2, monitor: 0},
@@ -693,7 +726,7 @@ inlineButton._updatePanelProgress({providers: [{kind: 'codex', agents: [
 check(inlineButton._box.children[0] === tokenCounter && inlineButton._box.children[1] === inlineButton._panelProgress,
     'workspace strip follows token counter in the real panel update path');
 const inlineGroup = inlineButton._panelProgress.children[0];
-check(inlineGroup.children[0].text === 'W2' && inlineGroup.children[1].children[0].children[0]._amsAgent.session_id === 'inline-w2',
+check(inlineGroup.children[0].text === 'W2' && inlineGroup.children[1].children[0]._amsBar._amsAgent.session_id === 'inline-w2',
     'W2 is between the token counter and first bar');
 check(inlineButton._panelProgress.children[2].children[0].text === 'W5', 'later workspace labels also precede their groups');
 inlineButton._updatePanelProgress(null, false);
@@ -723,10 +756,11 @@ const estimateCells = estimateRow.children;
 check(estimateCells.every(cell => cell.style_class === 'ams-panel-task-cell' && cell.width === 52 &&
     cell.layout_manager instanceof Clutter.BinLayout && cell.y_expand === true && cell.y_align === Clutter.ActorAlign.FILL && !cell.reactive),
     'each bar/time cell retains the drawing width and full-height panel allocation');
-check(JSON.stringify(estimateCells.map(cell => cell.children[1].text)) === '["~2m","~1h1m",""]',
+check(JSON.stringify(estimateCells.map(cell => cell._amsBar._amsEstimateLabel.text)) === '["~2m","~1h1m",""]',
     'each running bar gets its own compact forecast, completed bar gets none');
 for (const cell of estimateCells) {
-    const [bar, estimate] = cell.children;
+    const bar = cell._amsBar;
+    const estimate = bar._amsEstimateLabel;
     check(bar.style_class === 'ams-panel-progress-bar' && bar.width === 52 && bar.height === 11,
         'per-agent estimates preserve existing bar dimensions and pulse owner');
     check(estimate.style_class === 'ams-panel-agent-estimate' && estimate.x_align === Clutter.ActorAlign.CENTER &&
@@ -734,12 +768,12 @@ for (const cell of estimateCells) {
         'forecast is centered below its own bar, independent of bar opacity');
 }
 const retainedEstimateCell = estimateCells[0];
-const retainedEstimateBar = retainedEstimateCell.children[0];
-const retainedEstimateLabel = retainedEstimateCell.children[1];
+const retainedEstimateBar = retainedEstimateCell._amsBar;
+const retainedEstimateLabel = retainedEstimateCell._amsBar._amsEstimateLabel;
 estimateAgents[0].task_time_estimate.label = '~1m left';
 button._updatePanelProgress(estimatePayload, false);
-check(estimateRow.children[0] === retainedEstimateCell && retainedEstimateCell.children[0] === retainedEstimateBar &&
-    retainedEstimateCell.children[1] === retainedEstimateLabel && retainedEstimateLabel.text === '~1m',
+check(estimateRow.children[0] === retainedEstimateCell && retainedEstimateCell._amsBar === retainedEstimateBar &&
+    retainedEstimateCell._amsBar._amsEstimateLabel === retainedEstimateLabel && retainedEstimateLabel.text === '~1m',
     'estimate refresh retains cell, bar and label actors');
 button._applyPanelProgressPulse(1500);
 check(retainedEstimateBar.opacity === 77 && retainedEstimateLabel.opacity === 255, 'forecast stays readable while running bar pulses');
@@ -759,7 +793,7 @@ for (const state of [
     Object.assign(estimateAgents[0], state);
     button._updatePanelProgress(estimatePayload, false);
     check(retainedEstimateLabel.text === '' && !retainedEstimateLabel.visible, 'no estimate for inactive or unavailable forecast state');
-    check(estimateCells[1].children[1].text === '~1h1m' && estimateCells[1].children[1].visible,
+    check(estimateCells[1]._amsBar._amsEstimateLabel.text === '~1h1m' && estimateCells[1]._amsBar._amsEstimateLabel.visible,
         'one missing forecast never changes another running agent estimate');
 }
 Object.assign(estimateAgents[0], {phase: 'RUNNING', run_active: true,
@@ -805,7 +839,7 @@ for (const phase of ['DRAFT', ' draft ']) {
             }
             check(track.color[3] === .22 && track.rect[2] === 50, 'draft retains faint full-width track');
             check(fill.rect[2] === (fraction > 0 ? 50 * fraction : 50), 'draft preserves measured fill width');
-            check(fill.color[3] === (fraction > 0 ? 1 : .22), 'zero-progress draft invents no opaque fill');
+            check(fill.color[3] === (fraction === 1 ? 1 : fraction > 0 ? .72 : .22), 'zero-progress draft invents no opaque fill');
             check(bar.opacity === 255 && timers.size === 0, 'draft stays steady without running or ready pulses');
         }
         button._updatePanelProgress({providers: [{agents: [draft]}]}, true);
@@ -843,7 +877,7 @@ button.menu.isOpen = false;
 button._refresh();
 check(button._box.children.every(child => child.style_class !== 'ams-panel-estimate'), 'far-right aggregate estimate actor is completely removed');
 const localEstimateCell = button._panelProgress.children[0].children[1].children[0];
-check(localEstimateCell.children[1].text === '~3m', 'removing aggregate keeps the running agent estimate');
+check(localEstimateCell._amsBar._amsEstimateLabel.text === '~3m', 'removing aggregate keeps the running agent estimate');
 for (const isOpen of [true, false]) {
     button.menu.isOpen = isOpen;
     for (const value of [estimatePayload, null, {providers: []}, estimatePayload]) {
@@ -872,17 +906,17 @@ const runtimePayload = {providers: [{kind: 'codex', agents: runtimeAgents}]};
 button._updatePanelProgress(runtimePayload, false);
 const runtimeRow = button._panelProgress.children[0].children[1];
 const runtimeCells = runtimeRow.children;
-check(runtimeCells.every(cell => cell.children.length === 3), 'each cell contains bar, lower forecast and upper runtime');
-const liveRuntime = runtimeCells[0].children[2];
-const doneRuntime = runtimeCells[1].children[2];
+check(runtimeCells.every(cell => cell.children.length === 4), 'each cell contains a logo, bar, lower forecast and upper runtime');
+const liveRuntime = runtimeCells[0]._amsBar._amsRuntimeLabel;
+const doneRuntime = runtimeCells[1]._amsBar._amsRuntimeLabel;
 check(liveRuntime.text === '01:01' && doneRuntime.text === '' && !doneRuntime.visible, 'live timer formats hours:minutes and completed measurement does not show a timer');
 for (const cell of runtimeCells) {
-    const runtime = cell.children[2];
+    const runtime = cell._amsBar._amsRuntimeLabel;
     check(runtime.style_class === 'ams-panel-agent-runtime' && runtime.x_align === Clutter.ActorAlign.CENTER &&
         runtime.y_align === Clutter.ActorAlign.START && runtime.x_expand === true && runtime.y_expand === true && !runtime.reactive,
         'runtime sits at the top centered above the retained bar');
 }
-check(runtimeCells[0].children[1].text === '~3m' && !runtimeCells[1].children[1].visible,
+check(runtimeCells[0]._amsBar._amsEstimateLabel.text === '~3m' && !runtimeCells[1]._amsBar._amsEstimateLabel.visible,
     'running forecast remains below while completed runtime has no remaining estimate');
 button._applyPanelProgressPulse(runtimeReference + 60 * 1000);
 check(liveRuntime.text === '01:02' && doneRuntime.text === '' && !doneRuntime.visible, 'live minute ticks keep completed timer hidden');
@@ -938,20 +972,20 @@ Object.assign(runtimeAgents[0], {phase: 'DONE', run_active: false, run_started_a
     task_time_estimate: {status: 'complete', observed_active_seconds: 3720}});
 button._updatePanelProgress(runtimePayload, false);
 check(runtimeRow.children[0] === runtimeCells[0] && liveRuntime.text === '' && !liveRuntime.visible &&
-    !runtimeCells[0].children[1].visible, 'finishing run immediately clears runtime and remaining estimate on same actors');
+    !runtimeCells[0]._amsBar._amsEstimateLabel.visible, 'finishing run immediately clears runtime and remaining estimate on same actors');
 button._applyPanelProgressPulse(runtimeReference + 3600000);
 check(liveRuntime.text === '' && !liveRuntime.visible, 'completed runtime stays hidden on later animation ticks');
 // Rebuild with the same completed payload, as after an extension reload.
 button._updatePanelProgress(null, false);
 button._updatePanelProgress(runtimePayload, false);
-check(button._panelProgress.children[0].children[1].children[0].children[2].text === '' &&
-    !button._panelProgress.children[0].children[1].children[0].children[2].visible,
+check(button._panelProgress.children[0].children[1].children[0]._amsBar._amsRuntimeLabel.text === '' &&
+    !button._panelProgress.children[0].children[1].children[0]._amsBar._amsRuntimeLabel.visible,
     'completed timer remains hidden after rebuilding from its published measurement');
 snapshot = runtimePayload;
 button.menu.isOpen = true;
 button._refresh();
-check(button._panelProgress.children[0].children[1].children[0].children[2].text === '' &&
-    !button._panelProgress.children[0].children[1].children[0].children[2].visible, 'open-menu refresh keeps completed timer hidden');
+check(button._panelProgress.children[0].children[1].children[0]._amsBar._amsRuntimeLabel.text === '' &&
+    !button._panelProgress.children[0].children[1].children[0]._amsBar._amsRuntimeLabel.visible, 'open-menu refresh keeps completed timer hidden');
 button.menu.isOpen = false;
 button._updatePanelProgress(null, false);
 Date.now = savedDateNow;
@@ -1081,10 +1115,10 @@ const resetPayload = {providers: [{kind: 'codex', agents: resetAgents}]};
 button._updatePanelProgress(resetPayload, false);
 const resetCell = button._panelProgressBars.get('reset-rate').get_parent();
 const runningCell = button._panelProgressBars.get('reset-running').get_parent();
-const resetUpper = resetCell.children[2];
-const resetLower = resetCell.children[1];
-const runningUpper = runningCell.children[2];
-const runningLower = runningCell.children[1];
+const resetUpper = resetCell._amsBar._amsRuntimeLabel;
+const resetLower = resetCell._amsBar._amsEstimateLabel;
+const runningUpper = runningCell._amsBar._amsRuntimeLabel;
+const runningLower = runningCell._amsBar._amsEstimateLabel;
 check(resetUpper.style_class === 'ams-panel-agent-runtime' && resetUpper.y_align === Clutter.ActorAlign.START &&
     resetUpper.visible && resetUpper.text === '-02:45' && resetUpper.style === 'color: #b5d747;',
     'rate-limited launch countdown sits above the bar like the run timer');
