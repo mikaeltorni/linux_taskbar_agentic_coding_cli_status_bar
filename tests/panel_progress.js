@@ -45,6 +45,7 @@ class Actor {
         this.repaints = 0;
         print(undefined);
     }
+    clutter_text = {};
     add_child = child => { child._parent = this; this.children.push(child); };
     remove_child = child => {
         // An actor leaving the stage loses hover throughout its subtree.
@@ -109,7 +110,7 @@ const Clutter = {ModifierType: {CONTROL_MASK: 4}, ActorAlign: {CENTER: 0, FILL: 
 const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator', 'taskEstimateText',
-    ...(source.includes('function buildPanelTaskCell(') ? ['panelAgentEstimateText', 'buildPanelTaskCell'] : []),
+    ...(source.includes('function buildPanelTaskCell(') ? ['panelAgentEstimateText', 'panelInstanceNumbers', 'buildPanelTaskCell'] : []),
     ...(source.includes('function panelResetRemainingSeconds(') ? ['panelResetRemainingSeconds'] : []),
     ...(source.includes('function taskMarkedDone(') ? ['taskMarkedDone'] : []),
     ...(source.includes('function displayedPhase(') ? ['displayedPhase'] : []),
@@ -136,7 +137,7 @@ const services = {readPayload: () => snapshot, scopePayloadToWindows: value => v
     ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
     saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [{workspace: 5, count: 1, current: false, label: 'W5:1'}], panelHarnessRateRows: () => [],
 };
-const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', 'Harbor', 'Gio', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
+const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', 'Harbor', 'Gio', 'Pango', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
 ${snippets.join('\n')}
     const FALLBACK_ICON = 'acc-provider-generic-symbolic';
     const {harborCountText, formatHarborEstimate} = Harbor;
@@ -149,7 +150,7 @@ ${snippets.join('\n')}
         updater: {${['_hideTaskHover', '_refresh', '_icon', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _updatePanelTaskEstimate(') ? ['_updatePanelTaskEstimate'] : []),
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
-const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor, Gio);
+const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor, Gio, imports.gi.Pango);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
     child.style_class === 'ams-panel-workspace-group' ? child.children[1].children.filter(cell => cell.style_class === 'ams-panel-task-cell').map(cell => cell._amsBar) : []);
@@ -763,10 +764,69 @@ for (const cell of estimateCells) {
     const estimate = bar._amsEstimateLabel;
     check(bar.style_class === 'ams-panel-progress-bar' && bar.width === 52 && bar.height === 11,
         'per-agent estimates preserve existing bar dimensions and pulse owner');
-    check(estimate.style_class === 'ams-panel-agent-estimate' && estimate.x_align === Clutter.ActorAlign.CENTER &&
-        estimate.y_align === Clutter.ActorAlign.END && estimate.x_expand === true && estimate.y_expand === true && !estimate.reactive,
-        'forecast is centered below its own bar, independent of bar opacity');
+    check(estimate.style_class === 'ams-panel-agent-estimate' && estimate.x_align === Clutter.ActorAlign.END &&
+        estimate.y_align === Clutter.ActorAlign.END && estimate.x_expand === true && !estimate.reactive,
+        'forecast is right-aligned below its own bar, independent of bar opacity');
 }
+
+// Account and project-local instance numbers share the footer with the estimate.
+const numberedBase = {project: 'sample', workspace: 2, phase: 'RUNNING', run_active: true,
+    task_time_estimate: {status: 'estimated', label: '~1h 1m left'}, workflow: {fraction: .4}};
+const numberedCodex = [
+    {...numberedBase, session_id: 'cx-one', kind: 'codex', codex_instance: 1, instance: '3'},
+    {...numberedBase, session_id: 'cx-two', kind: 'codex', codex_instance: 2, instance: '8'},
+    {...numberedBase, session_id: 'cx-unknown', kind: 'codex', instance: '6'},
+];
+const numberedVibe = [
+    {...numberedBase, session_id: 'va-one', kind: 'vibe', instance: '1'},
+    {...numberedBase, session_id: 'va-ten', kind: 'vibe', instance: '10'},
+    {...numberedBase, session_id: 'va-invalid', kind: 'vibe', instance: 'none'},
+    {...numberedBase, session_id: 'va-other', kind: 'vibe', instance: '2', project: 'different'},
+];
+const numberedPayload = {codexInstanceCount: 2, providers: [
+    {kind: 'codex', agents: numberedCodex}, {kind: 'vibe', agents: numberedVibe},
+    {kind: 'claude', agents: [{...numberedBase, session_id: 'cc-only', instance: '1'}]},
+]};
+const numberedButton = Object.assign({_iconsDir: iconsDir, _box: new Actor()}, owners.updater);
+numberedButton._updatePanelProgress(numberedPayload, false);
+for (const [key, expected] of [
+    ['cx-one', '1'], ['cx-two', '2'], ['cx-unknown', ''],
+    ['va-one', '1'], ['va-ten', '10'], ['va-invalid', ''], ['va-other', ''], ['cc-only', ''],
+]) {
+    const bar = numberedButton._panelProgressBars.get(key);
+    const instance = bar._amsInstanceLabel;
+    const estimate = bar._amsEstimateLabel;
+    const footer = estimate.get_parent();
+    check(footer !== bar.get_parent() && footer.y_align === Clutter.ActorAlign.END &&
+        footer.x_align === Clutter.ActorAlign.FILL, 'full-width footer sits below the bar');
+    check(instance.text === expected && instance.visible === Boolean(expected),
+        `published instance number for ${key} is ${expected}`);
+    check(footer.children[0] === instance && instance.x_align === Clutter.ActorAlign.START &&
+        footer.children[1] === estimate && estimate.x_align === Clutter.ActorAlign.END,
+        'instance stays on the left and ETA is anchored to the right within the same footer');
+}
+const numberedBar = numberedButton._panelProgressBars.get('cx-two');
+const numberedLabel = numberedBar._amsInstanceLabel;
+numberedCodex[1].codex_instance = 1;
+numberedCodex[1].run_active = false;
+numberedButton._updatePanelProgress(numberedPayload, true);
+check(numberedButton._panelProgressBars.get('cx-two') === numberedBar && numberedBar._amsInstanceLabel === numberedLabel &&
+    numberedLabel.text === '1' && numberedLabel.opacity === 128 && !numberedBar._amsEstimateLabel.visible,
+    'retargeting updates the number in place and a missing ETA leaves it visible');
+numberedButton._updatePanelProgress({codexInstanceCount: 1, providers: [
+    {kind: 'codex', agents: [numberedCodex[1]]},
+]}, false);
+check(!numberedButton._panelProgressBars.get('cx-two')._amsInstanceLabel.visible,
+    'a single Codex login and session needs no instance label');
+numberedButton._updatePanelProgress({codexInstanceCount: 1, providers: [
+    {kind: 'codex', agents: [numberedCodex[0], numberedCodex[1]]},
+]}, false);
+check(numberedButton._panelProgressBars.get('cx-one')._amsInstanceLabel.text === '3' &&
+    numberedButton._panelProgressBars.get('cx-two')._amsInstanceLabel.text === '8',
+    'multiple tracked sessions sharing one login show project-local instance numbers');
+numberedButton._updatePanelProgress(null, false);
+
+
 const retainedEstimateCell = estimateCells[0];
 const retainedEstimateBar = retainedEstimateCell._amsBar;
 const retainedEstimateLabel = retainedEstimateCell._amsBar._amsEstimateLabel;
@@ -1278,7 +1338,8 @@ button.menu.isOpen = false;
 button._updatePanelProgress(null, false);
 const forecastStyle = stylesheet.match(/\.ams-panel-agent-estimate\s*\{([^}]+)\}/)?.[1] || '';
 check(/font-size:\s*13\.5px;/.test(forecastStyle), 'remaining estimate grows from 9px to 13.5px');
-check(/font-family:\s*monospace;/.test(forecastStyle) && /margin-bottom:\s*1px;/.test(forecastStyle),
+const footerStyle = stylesheet.match(/\.ams-panel-task-footer\s*\{([^}]+)\}/)?.[1] || '';
+check(/font-family:\s*monospace;/.test(forecastStyle) && /margin:\s*0 1px 1px;/.test(footerStyle),
     'larger compact forecast fits below its bar with consistent timer typography');
 print('PASS: 1.5x lower forecast text contains only duration, across suffixes and retained refreshes.');
 

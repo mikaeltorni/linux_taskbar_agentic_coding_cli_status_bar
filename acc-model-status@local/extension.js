@@ -1193,11 +1193,47 @@ const panelAgentRuntimeColor = (agent, now = Date.now(), stale = false) => {
 };
 
 /**
- * Stack runtime, a retained progress bar and a forecast in the allocated panel height.
+ * Resolve the published instance numbers that distinguish open bars.
+ * Parameters: entries - scoped agent and provider pairs; codexInstanceCount - registered Codex accounts.
+ * Returns: a map from each numbered bar's key to its display number.
+ */
+function panelInstanceNumbers(entries, codexInstanceCount) {
+    print(`entries=${entries} codexInstanceCount=${codexInstanceCount}`);
+    const projectGroups = new Map();
+    const result = new Map();
+    for (const {agent, provider, key} of entries) {
+        const kind = agent.kind || provider.kind;
+        const showAccount = kind === 'codex' && codexInstanceCount > 1;
+        const number = Number(showAccount ? agent.codex_instance : agent.instance);
+        const displayNumber = Number.isSafeInteger(number) && number > 0 ? number : null;
+        if (showAccount) {
+            if (displayNumber !== null)
+                result.set(key, displayNumber);
+        } else if (!agent.harbor) {
+            const groupKey = JSON.stringify([kind, agent.project || '']);
+            if (!projectGroups.has(groupKey))
+                projectGroups.set(groupKey, []);
+            projectGroups.get(groupKey).push({key, displayNumber});
+        }
+    }
+    for (const group of projectGroups.values()) {
+        if (group.length > 1) {
+            for (const {key, displayNumber} of group) {
+                if (displayNumber !== null)
+                    result.set(key, displayNumber);
+            }
+        }
+    }
+    print(result);
+    return result;
+}
+
+/**
+ * Stack runtime, branded progress and the instance and forecast footer in the panel height.
  * Parameters: agent - scoped open-window agent whose bar and timing are displayed;
  * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering;
  * confirmAgent - callback arming task completion, or null when unavailable.
- * Returns: a fixed-width instance click and hover target with its bar, lower estimate and upper runtime label.
+ * Returns: a fixed-width click and hover target with retained progress and labels.
  */
 function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
     print(`agent=${agent} focusAgent=${focusAgent} confirmAgent=${confirmAgent}`);
@@ -1223,16 +1259,32 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
         visible: false,
     });
     const bar = buildPanelTaskProgress(agent);
+    const footer = new St.BoxLayout({
+        style_class: 'ams-panel-task-footer',
+        x_expand: true,
+        y_expand: true,
+        x_align: Clutter.ActorAlign.FILL,
+        y_align: Clutter.ActorAlign.END,
+        reactive: false,
+    });
+    const instance = new St.Label({
+        style_class: 'ams-panel-agent-instance',
+        text: '',
+        visible: false,
+        x_align: Clutter.ActorAlign.START,
+        y_align: Clutter.ActorAlign.END,
+        reactive: false,
+    });
     const estimate = new St.Label({
         style_class: 'ams-panel-agent-estimate',
         text: '',
         visible: false,
         x_expand: true,
-        y_expand: true,
-        x_align: Clutter.ActorAlign.CENTER,
+        x_align: Clutter.ActorAlign.END,
         y_align: Clutter.ActorAlign.END,
         reactive: false,
     });
+    estimate.clutter_text.ellipsize = Pango.EllipsizeMode.END;
     const runtime = new St.Label({
         style_class: 'ams-panel-agent-runtime',
         text: '',
@@ -1262,11 +1314,14 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
     });
     cell._amsBar = bar;
     bar._amsLogo = logo;
+    bar._amsInstanceLabel = instance;
     bar._amsEstimateLabel = estimate;
     bar._amsRuntimeLabel = runtime;
     cell.add_child(logo);
     cell.add_child(bar);
-    cell.add_child(estimate);
+    footer.add_child(instance);
+    footer.add_child(estimate);
+    cell.add_child(footer);
     cell.add_child(runtime);
     print(cell);
     return cell;
@@ -2583,6 +2638,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         }
         this._panelProgressKey = key;
     }
+    const instanceNumbers = panelInstanceNumbers(entries, payload?.codexInstanceCount);
     for (const entry of entries) {
         const entryStale = entry.agent.harbor ? false : stale;
         const bar = this._panelProgressBars.get(entry.key);
@@ -2607,6 +2663,10 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         estimate.text = panelAgentEstimateText(entry.agent);
         estimate.visible = Boolean(estimate.text);
         estimate.opacity = entryStale ? 128 : 255;
+        const instance = bar._amsInstanceLabel;
+        instance.text = String(instanceNumbers.get(entry.key) ?? '');
+        instance.visible = Boolean(instance.text);
+        instance.opacity = estimate.opacity;
         const now = Date.now();
         const publishedAt = Date.parse(payload?.updatedAt || '');
         const runtimeAt = entryStale ? (Number.isFinite(publishedAt) ? publishedAt : bar._amsRuntimeAt ?? now) : now;
