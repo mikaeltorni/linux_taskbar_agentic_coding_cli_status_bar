@@ -105,7 +105,28 @@ class Actor {
     });
 }
 
-const St = {Icon: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Widget: Actor};
+const recoveryPointers = [];
+class RecoveryPointer extends Actor {
+    /** Capture the real recovery popup's Shell placement and lifecycle.
+     * Parameters: this - popup; side - arrow edge; options - actor properties.
+     * Returns: undefined.
+     */
+    constructor(side, options) {
+        super(options);
+        print(`this=${this} side=${side} options=${JSON.stringify(options)}`);
+        this.side = side;
+        this.bin = {set_child: this.add_child};
+        recoveryPointers.push(this);
+        print(undefined);
+    }
+    setPosition = group => { this.group = group; };
+    setSourceAlignment = alignment => { this.sourceAlignment = alignment; };
+    setArrowActor = label => { this.anchor = label; };
+    open = () => { this.visible = true; };
+}
+const BoxPointer = {BoxPointer: RecoveryPointer, PopupAnimation: {NONE: 0}};
+const Main = {layoutManager: {addChrome: popup => { popup.chrome = true; }}};
+const St = {Side: {BOTTOM: 3}, Icon: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Widget: Actor};
 const Clutter = {ModifierType: {CONTROL_MASK: 4}, ActorAlign: {CENTER: 0, FILL: 1, END: 2, START: 3}, BinLayout: class {}};
 const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
@@ -143,7 +164,7 @@ const services = {readPayload: () => snapshot, scopePayloadToWindows: value => v
     ageSeconds: () => 0, STALE_SECONDS: 180, unreadCompletionCount: () => 0,
     saveUnreadStates: () => {}, log: () => {}, workspaceAttentionCounts: () => [{workspace: 5, count: 1, current: false, label: 'W5:1'}], panelHarnessRateRows: () => [],
 };
-const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', 'Harbor', 'Gio', 'Pango', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
+const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', 'Harbor', 'Gio', 'Pango', 'BoxPointer', 'Main', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
 ${snippets.join('\n')}
     const FALLBACK_ICON = 'acc-provider-generic-symbolic';
     const {harborCountText, formatHarborEstimate} = Harbor;
@@ -153,10 +174,10 @@ ${snippets.join('\n')}
     class Destroyer extends St.BoxLayout { _hideTaskConfirmation = () => {}; ${declaration('_hideTaskHover', true)} ${declaration('destroy', true)} }
     return {agentPhaseBadgeColor, panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer, paintPanelWorkspaceSeparator,
-        updater: {${['_hideTaskHover', '_refresh', '_icon', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
+        updater: {${['_hideTaskHover', '_setPanelTaskHidden', '_togglePanelRecovery', '_showPanelRecovery', '_destroyPanelRecoveryPopup', '_refresh', '_icon', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _updatePanelTaskEstimate(') ? ['_updatePanelTaskEstimate'] : []),
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
-const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor, Gio, imports.gi.Pango);
+const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor, Gio, imports.gi.Pango, BoxPointer, Main);
 const check = (condition, message) => { if (!condition) throw Error(message); };
 const visibleBars = container => container.children.flatMap(child =>
     child.style_class === 'ams-panel-workspace-group' ? child.children[1].children.filter(cell => cell.style_class === 'ams-panel-task-cell').map(cell => cell._amsBar) : []);
@@ -774,7 +795,7 @@ button._updatePanelProgress(estimatePayload, false);
 const estimateRow = button._panelProgress.children[0].children[1];
 const estimateCells = estimateRow.children;
 check(estimateCells.every(cell => cell.style_class === 'ams-panel-task-cell' && cell.width === 52 &&
-    cell.layout_manager instanceof Clutter.BinLayout && cell.y_expand === true && cell.y_align === Clutter.ActorAlign.FILL && !cell.reactive),
+    cell.layout_manager instanceof Clutter.BinLayout && cell.y_expand === true && cell.y_align === Clutter.ActorAlign.FILL && !cell.can_focus),
     'each bar/time cell retains the drawing width and full-height panel allocation');
 check(JSON.stringify(estimateCells.map(cell => cell._amsBar._amsEstimateLabel.text)) === '["~2m","~1h1m",""]',
     'each running bar gets its own compact forecast, completed bar gets none');
@@ -1139,9 +1160,9 @@ for (const mouseButton of [2, 3, 8]) {
     check(selectedNotes.length === before, 'rejected selection leaves prior focus calls unchanged');
     check(selectionCell('select-b') === retainedSelectionCell, 'rejected selection preserves rendered cells');
 }
-check(selectionCell('select-unlinked').reactive === false, 'no selection target means no misleading clickable cell');
+check(selectionCell('select-unlinked').can_focus === false, 'unlinked cells cannot focus a terminal');
 button._updatePanelProgress({providers: [{agents: selectionAgents.map(agent => ({...agent, note_id: ''}))}]}, false);
-check(retainedSelectionCell.reactive === false, 'retained cell stops accepting clicks when note identity disappears');
+check(retainedSelectionCell.can_focus === false, 'retained cell stops offering terminal focus when note identity disappears');
 button._updatePanelProgress(null, false);
 check(retainedSelectionCell.destroyed && button._panelProgressBars.size === 0, 'closing instances destroys their click targets');
 print('PASS: individual instance left-click selection, current identity, all phases, other-button rejection and cleanup.');
@@ -1586,3 +1607,89 @@ button._harborEntries = [];
 button._updatePanelProgress(null, false);
 check(visibleBars(button._panelProgress).length === 0, 'ended Harbor membership leaves no separate panel strip');
 print('PASS: Harbor shares workspace headings, normal cell/fill typography and geometry; only its count is pink.');
+
+// Ctrl+left-click hides one exact instance while retaining its workspace label.
+const hideButton = Object.assign({_iconsDir: iconsDir, _box: new Actor(), _syncTaskHover: () => {}}, owners.updater);
+const hideTasks = [
+    {session_id: 'hide-a', note_id: 'hide-note', workspace: 2, phase: 'DONE'},
+    {session_id: 'hide-b', workspace: 4, phase: 'DONE'},
+];
+const hidePayload = {providers: [{kind: 'codex', agents: hideTasks}]};
+hideButton._focusAgent = () => { throw Error('hide must not focus a terminal'); };
+hideButton._updatePanelProgress(hidePayload, false);
+const ctrlClick = {get_button: () => 1, get_state: () => Clutter.ModifierType.CONTROL_MASK};
+const hiddenCell = hideButton._panelProgressBars.get('hide-a').get_parent();
+check(hiddenCell['button-press-event'](hiddenCell, ctrlClick) === Clutter.EVENT_STOP, 'Ctrl+click consumes the task event');
+check(visibleBars(hideButton._panelProgress).map(bar => bar._amsAgent.session_id).join() === 'hide-b',
+    'Ctrl+click removes just the selected instance from the bar');
+check(hideButton._panelProgress.children[0].children[0].text === 'W2', 'workspace label remains when its last task is hidden');
+hideButton._updatePanelProgress(hidePayload, true);
+check(visibleBars(hideButton._panelProgress).length === 1, 'regular refresh keeps the selected instance hidden');
+const unlinkedCell = hideButton._panelProgressBars.get('hide-b').get_parent();
+check(unlinkedCell.reactive, 'unlinked instance accepts Ctrl+click');
+unlinkedCell['button-press-event'](unlinkedCell, ctrlClick);
+check(visibleBars(hideButton._panelProgress).length === 0 && hideButton._panelProgress.visible,
+    'all-hidden panel still shows workspace labels');
+print('PASS: hide one instance by Ctrl+click, preserve sibling tasks and workspace labels, and retain state through refresh.');
+
+// Reveal only the selected workspace above the bar and restore through its task cell.
+const workspaceLabel = (target, number) => target._panelProgress.children
+    .find(group => group._amsWorkspace === number)?.children[0];
+const leftClick = {get_button: () => 1, get_state: () => 0};
+const recoveryLabel = workspaceLabel(hideButton, 2);
+check(recoveryLabel.reactive && recoveryLabel['button-press-event'](recoveryLabel, leftClick) === Clutter.EVENT_STOP,
+    'ordinary workspace label click opens recovery and consumes the bar event');
+let recovery = recoveryPointers.at(-1);
+check(recovery.visible && recovery.side === St.Side.BOTTOM && recovery.chrome && recovery.group._amsWorkspace === 2 &&
+    recovery.group.y_align === Clutter.ActorAlign.FILL && recovery.anchor.text === 'W2',
+    'recovery opens above the bar anchored to W2 in Shell chrome');
+check(recovery.children[0].children.map(cell => cell._amsBar._amsAgent.session_id).join() === 'hide-a',
+    'recovery shows only hidden W2 tasks');
+check(visibleBars(hideButton._panelProgress).length === 0, 'opening recovery leaves individual cells hidden from the bar');
+hideButton._updatePanelProgress(hidePayload, false);
+check(recoveryPointers.at(-1) === recovery && !recovery.destroyed, 'metadata refresh keeps recovery open');
+recovery.anchor['button-press-event'](recovery.anchor, leftClick);
+check(recovery.destroyed && visibleBars(hideButton._panelProgress).length === 0,
+    'clicking the same label closes recovery without restoring its tasks');
+const reopened = workspaceLabel(hideButton, 2);
+reopened['button-press-event'](reopened, leftClick);
+recovery = recoveryPointers.at(-1);
+const recoveredCell = recovery.children[0].children[0];
+check(recoveredCell['button-press-event'](recoveredCell, ctrlClick) === Clutter.EVENT_STOP, 'Ctrl+click in recovery consumes the task event');
+check(recovery.destroyed && visibleBars(hideButton._panelProgress).map(bar => bar._amsAgent.session_id).join() === 'hide-a',
+    'Ctrl+click restores the task to the bar and dismisses empty recovery');
+check(!workspaceLabel(hideButton, 2).reactive, 'restored workspace label has no empty recovery menu');
+print('PASS: workspace click toggle, above-panel placement, refresh stability and Ctrl+click restore.');
+
+const w4Recovery = workspaceLabel(hideButton, 4);
+check(w4Recovery['button-press-event'](w4Recovery, {get_button: () => 3}) === Clutter.EVENT_PROPAGATE,
+    'right-click on recovery label remains available to the details menu');
+w4Recovery['button-press-event'](w4Recovery, leftClick);
+const activeOnDisable = recoveryPointers.at(-1);
+hideButton._panelProgress.destroy();
+check(activeOnDisable.destroyed, 'disabling the panel releases its recovery popup chrome');
+
+// Switching between two workspaces closes the previous popup without restoring its tasks.
+const switchButton = Object.assign({_iconsDir: iconsDir, _box: new Actor(), _syncTaskHover: () => {}}, owners.updater);
+switchButton._updatePanelProgress(hidePayload, false);
+for (const task of hideTasks) {
+    const taskCell = switchButton._panelProgressBars.get(task.session_id).get_parent();
+    taskCell['button-press-event'](taskCell, ctrlClick);
+}
+for (const [workspace, session] of [[2, 'hide-a'], [4, 'hide-b'], [2, 'hide-a']]) {
+    const previouslyOpen = recoveryPointers.filter(popup => !popup.destroyed);
+    const workspaceTarget = workspaceLabel(switchButton, workspace);
+    workspaceTarget['button-press-event'](workspaceTarget, leftClick);
+    const current = recoveryPointers.filter(popup => !popup.destroyed);
+    check(current.length === 1 && current[0].anchor === workspaceLabel(switchButton, workspace),
+        `W${workspace} replaces any previous workspace popup`);
+    check(previouslyOpen.every(popup => popup.destroyed), `W${workspace} destroys previous popup chrome`);
+    check(current[0].children[0].children[0]._amsBar._amsAgent.session_id === session,
+        `W${workspace} still has its exact hidden task after switching`);
+}
+check(visibleBars(switchButton._panelProgress).length === 0, 'popup switching never restores either task');
+const openAfterSwitch = recoveryPointers.at(-1);
+switchButton._updatePanelProgress({providers: [{kind: 'codex', agents: [hideTasks[1]]}]}, false);
+check(openAfterSwitch.destroyed && recoveryPointers.every(popup => popup.destroyed),
+    'closing the last hidden task in an open workspace removes its popup');
+print('PASS: W2 to W4 to W2 switches one popup while preserving hidden state.');

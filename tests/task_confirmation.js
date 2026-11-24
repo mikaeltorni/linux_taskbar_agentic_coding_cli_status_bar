@@ -76,11 +76,11 @@ button._agentMenuItem = (agent, provider, count, track) => new Actor({agent, pro
 button._completeAgent = agent => completed.push(agent);
 const agent = {note_id: 'note-a', session_id: 'session-a', title: 'Fix test run behavior', phase: 'DONE'};
 const provider = {kind: 'codex'};
-const cell = Button.buildPanelTaskCell(agent, id => focused.push(id),
-    (target, current) => button._showTaskConfirmation(target, current, provider, 3));
+const cell = Button.buildPanelTaskCell(agent, id => focused.push(id));
+const arm = () => button._showTaskConfirmation(cell, agent, provider, 3);
 const click = (actor, buttonNumber, ctrl = false) => (actor.signals['button-press-event'] || actor.signals['captured-event'])(actor,
     {type: () => 1, get_button: () => buttonNumber, get_state: () => ctrl ? 4 : 0});
-check(click(cell, 1, true) === Clutter.EVENT_STOP, 'Ctrl+left-click consumes the panel event');
+arm();
 check(focused.length === 0 && completed.length === 0, 'arming neither focuses nor completes');
 check(popups.length === 1 && popups[0].anchor === cell && popups[0].side === 3, 'confirmation sits above the exact instance');
 check(grabs.length === 1 && grabs[0].actor === stage, 'confirmation grabs pointer and keyboard so outside clicks and Escape reach Shell');
@@ -98,28 +98,25 @@ click(cell, 3);
 check(completed.length === 1, 'a second right-click never repeats completion');
 click(cell, 1);
 check(focused.at(-1) === 'note-a', 'ordinary left-click retains terminal selection');
-click(cell, 1, true);
+arm();
 click(popups.at(-1).children[0], 3);
 check(completed.length === 2, 'right-click on the confirmation also works');
-click(cell, 1, true);
+arm();
 const cancelled = popups.at(-1);
 stage.signals['captured-event'](stage, {type: () => 2, get_key_symbol: () => 27});
 check(cancelled.destroyed && completed.length === 2, 'Escape cancels without completion');
-click(cell, 1, true);
+arm();
 const outside = popups.at(-1);
 stage.signals['captured-event'](stage, {type: () => 1, get_source: () => new Actor()});
 check(outside.destroyed && completed.length === 2, 'outside click cancels without completion');
-click(cell, 1, true);
+arm();
 button._syncTaskHover({...cell, hover: false}, agent, provider, 3);
 check(!popups.at(-1).destroyed, 'pointer leave does not dismiss the armed confirmation');
 button._hideTaskConfirmation();
 button._hideTaskConfirmation();
 check(grabs.length === 0, 'cancellation releases modal input grab');
 check(Object.keys(stage.signals).length === 0, 'cancellation releases stage input handler');
-const missing = Button.buildPanelTaskCell({}, id => focused.push(id), () => { throw Error('must not arm missing task'); });
-click(missing, 1, true);
-check(completed.length === 2, 'missing task identity cannot arm confirmation');
-print('PASS: Ctrl+click, anchored task details, right-click confirmation, other-button rejection, cancellation and ordinary selection.');
+print('PASS: anchored task details, right-click confirmation, other-button rejection, cancellation and ordinary selection.');
 
 const registry = {sessions: {'session-a': {id: 'session-a', launch_env: {PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID: 'note-a', PHRASE_AUTOMATION_NOTES_FILE: '/tmp/isolated-notes.json'}}}};
 const command = Button.completionCommand(agent, registry);
