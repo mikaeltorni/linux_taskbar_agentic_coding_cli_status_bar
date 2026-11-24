@@ -789,7 +789,7 @@ for (const cell of estimateCells) {
 }
 
 const instanceStyle = stylesheet.match(/\.ams-panel-agent-instance\s*\{([^}]+)\}/)?.[1] || '';
-check(/font-size:\s*16\.5px;/.test(instanceStyle), 'panel instance numbers grow from 11px to 16.5px');
+check(/font-size:\s*13\.75px;/.test(instanceStyle), 'panel instance numbers grow from 11px to 13.75px');
 check(/color:\s*#9ebfec;/.test(instanceStyle), 'the default panel instance number color stays blue');
 
 // Account and project-local instance numbers share the footer with the estimate.
