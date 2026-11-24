@@ -220,20 +220,23 @@ hidden when there is no valid consensus. The popup has a plain
 rows show every published horizon; WhenReset links to reset history without
 adding a percentage to the consensus.
 
-Each Codex account's 5-hour and weekly rows show an estimate of when the
-remaining allowance will be exhausted at the observed usage rate while that
-account has a live ACC-tracked session. The estimate is hidden when no session
-is live on that account or the tracker publication is unavailable or stale.
-The poller compares readings for the same account and reset window, refreshes its status
-on the configured polling interval (five seconds by default), and updates the
-countdown without sending prompts. It shows an estimating/unavailable message
-until it has enough fresh data; when the extrapolated time falls after the
-window resets, the menu says exhaustion is not expected before reset. These
-are projections from observed usage, not guaranteed deadlines.
 The 24h/48h percentages come from Codex Reset Monitor (`codexreset.org`).
 Clicking or pressing Enter on a source row opens its public page in the
 desktop's default browser. Each source can be disabled with its
 `codex_reset_forecast.sites.<id>.enabled` setting.
+
+The taskbar menu shows a projected limit for a Codex account while ACC
+reports a running agent on that account and two recent readings from the same
+reset window show rising usage. A newly started run needs its own readings.
+The projection disappears when the account goes idle, an updated reading shows
+flat usage, or the activity or usage data expires. The allowance and reset
+time are still visible. If the current rate would exhaust the allowance only
+after reset, the menu says “not expected before reset.”
+
+The poller checks on its configured interval (five seconds by default) without
+sending prompts. It uses activity reports up to 30 seconds old and quota readings
+up to two minutes apart. Run `agentic-cli-status --show` to inspect the
+published account windows and available projections.
 
 Polymarket is discovered through its public Gamma search API. An open Codex
 reset market appears in the forecast menu with its current Yes prices; weekly
