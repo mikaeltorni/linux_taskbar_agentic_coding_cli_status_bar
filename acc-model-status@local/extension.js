@@ -1281,7 +1281,7 @@ function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRec
     const cell = new St.Widget({
         style_class: 'ams-panel-task-cell',
         layout_manager: new Clutter.BinLayout(),
-        width: inRecovery ? 70 : 52,
+        width: inRecovery ? 58 : 52,
         y_expand: true,
         y_align: Clutter.ActorAlign.FILL,
         clip_to_allocation: true,
@@ -2733,7 +2733,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
             const recoveryBox = this._recoveryWorkspace === group.workspace
                 ? new St.BoxLayout({
                     style_class: 'popup-menu-content ams-panel-recovery',
-                    height: 80,
+                    height: 68,
                 }) : null;
             let previousMonitor = null;
             for (const entry of group.entries) {
