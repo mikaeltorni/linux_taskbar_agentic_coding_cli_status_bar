@@ -457,9 +457,10 @@ The panel reads each account's usage from the local poller's snapshot. All
 footer instance numbers use a 13.75 px monospace font.
 
 **Ctrl+left-click** an instance on the taskbar to hide it temporarily. Its
-task keeps running while it is hidden. Click the workspace label, such as
+task keeps running while it is hidden. Click the workspace label area, such as
 **W2** or **W4**, to show that workspace's hidden instances in a popup above
-the bar. Click the same label again to close the popup, or click another
+the bar. The target includes the padding around the label across the full
+taskbar height. Click the same area again to close the popup, or click another
 workspace label with hidden tasks to switch to its popup.
 **Ctrl+left-click** an instance in the popup to put it back on the bar. The
 workspace label stays available when its last instance is hidden. Hidden state
