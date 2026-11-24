@@ -1124,50 +1124,45 @@ function formatPanelRunDuration(seconds) {
 }
 
 /**
- * Retain the displayed task start when ACC clears its active clock at completion.
- * Parameters: agent - current scoped payload row; previous - prior observation for this session.
- * Returns: copied presentation row with the same task's start, without changing the payload.
- */
-function panelRuntimeObservation(agent, previous) {
-    const result = {...agent};
-    if (String(agent.phase || '').toUpperCase() === 'DONE' && !agent.run_started_at &&
-        previous && (panelProgressUnderway(previous) ||
-            agent.ready_completed_at === previous.ready_completed_at))
-        result.run_started_at = previous.run_started_at;
-    return result;
-}
-
-/**
- * Read the upper cell label: measured Harbor count or live/frozen agent runtime.
- * A future queued reset uses the same upper HH:MM slot, prefixed so it counts down to launch.
- * Parameters: agent - common panel task with timestamps, measured duration or Harbor counts;
+ * Format the upper label for a Harbor job or ACC task.
+ * Parameters: agent - panel task with run and finish timestamps or Harbor counts;
  * now - reference epoch milliseconds, defaulting to the current clock.
- * Returns: Harbor completed/total, agent runtime, negative launch countdown, or empty text.
+ * Returns: Harbor counts, runtime, launch countdown, completion age, or empty text.
  */
 const panelAgentRuntimeText = (agent, now = Date.now()) => {
     if (agent.harbor)
         return harborCountText(agent.harbor);
     const remaining = panelLaunchWaitSeconds(agent, now);
-    if (remaining !== null) {
-        const countdown = `-${formatPanelRunDuration(remaining < 60 ? 60 : remaining)}`;
-        return countdown;
-    }
-    let seconds = null;
+    if (remaining !== null)
+        return `-${formatPanelRunDuration(Math.max(remaining, 60))}`;
     if (panelProgressUnderway(agent)) {
         const started = Date.parse(agent.run_started_at || '');
-        seconds = Number.isFinite(started)
+        const seconds = Number.isFinite(started)
             ? Math.max(0, (now - started) / 1000)
             : agent.task_time_estimate?.observed_active_seconds;
-    } else if (String(agent.phase || '').toUpperCase() === 'DONE' && agent.unread_completion === true) {
-        const started = Date.parse(agent.run_started_at || '');
-        const completed = Date.parse(agent.ready_completed_at || '');
-        if (Number.isFinite(started) && Number.isFinite(completed) && completed >= started)
-            seconds = (completed - started) / 1000;
-        else if (!agent.run_started_at && Number.isFinite(completed) && agent.task_time_estimate?.status === 'complete')
-            seconds = agent.task_time_estimate.observed_active_seconds;
+        return formatPanelRunDuration(seconds);
     }
-    const text = formatPanelRunDuration(seconds);
-    return text;
+    return panelCompletionAgeText(Date.parse(agent.ready_completed_at || ''), now,
+        String(agent.phase || '').trim().toUpperCase() === 'DONE' && agent.workflow?.task_complete !== false);
+};
+
+/**
+ * Match the CLI's compact completion age for a confirmed Ready task.
+ * Parameters: completedAt - parsed completion epoch milliseconds; now - reference epoch milliseconds;
+ * ready - whether this turn finished the task.
+ * Returns: compact completion age or empty text.
+ */
+const panelCompletionAgeText = (completedAt, now, ready) => {
+    if (!ready || !Number.isFinite(completedAt) || completedAt > now)
+        return '';
+    const seconds = Math.floor((now - completedAt) / 1000);
+    if (seconds < 60)
+        return `${seconds}s ago`;
+    if (seconds < 3600)
+        return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400)
+        return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
 };
 
 /**
@@ -2085,28 +2080,42 @@ class AccModelStatusButton extends PanelMenu.Button {
     }
 
     /**
-     * Keep one animation source while a fresh agent is underway or unread.
+     * Share one source for animation and completion ages.
      * Parameters: this - status button owning the bar actors and GLib source.
      * Returns: undefined.
      */
     _syncPanelPulseTimer() {
-        const active = [...this._panelProgressBars.values()].some(bar =>
-            (bar._amsUnderway || bar._amsReady || bar._amsResetCountdown) && !bar._amsStale);
-        if (!active) {
-            if (this._panelPulseId) {
-                GLib.source_remove(this._panelPulseId);
-                this._panelPulseId = 0;
-            }
-        } else if (!this._panelPulseId) {
-            this._panelPulseId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
-                this._applyPanelProgressPulse();
+        print(`this=${this}`);
+        const fresh = [...this._panelProgressBars.values()].filter(bar => !bar._amsStale);
+        const animated = fresh.some(bar => bar._amsUnderway || bar._amsReady || bar._amsResetCountdown);
+        const interval = animated ? 33 : fresh.some(bar => bar._amsCompletionAge) ? 1000 : 0;
+        if (this._panelPulseId && interval !== this._panelPulseInterval) {
+            GLib.source_remove(this._panelPulseId);
+            this._panelPulseId = 0;
+        }
+        if (interval && !this._panelPulseId) {
+            this._panelPulseInterval = interval;
+            let lastAgeSecond;
+            this._panelPulseId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, interval, () => {
+                const now = Date.now();
+                if (animated)
+                    this._applyPanelProgressPulse(now);
+                const second = Math.floor(now / 1000);
+                if (second !== lastAgeSecond) {
+                    for (const bar of this._panelProgressBars.values()) {
+                        if (bar._amsCompletionAge && !bar._amsReady && !bar._amsStale)
+                            bar._amsRuntimeLabel.text = panelAgentRuntimeText(bar._amsRuntimeAgent, now);
+                    }
+                    lastAgeSecond = second;
+                }
                 return GLib.SOURCE_CONTINUE;
             });
         }
+        print(undefined);
     }
 
     /**
-     * Update live and frozen runtimes with bar opacity and completion color pulses.
+     * Update live clocks and unread completion ages with their bar pulses.
      * Parameters: this - status button; now - optional epoch milliseconds.
      * Returns: undefined.
      */
@@ -2633,8 +2642,6 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                 this._box.set_child_below_sibling(child, this._panelProgress);
         }
     }
-    if (!this._panelRuntimeStates)
-        this._panelRuntimeStates = new Map();
     const entries = (payload?.providers || []).flatMap(provider =>
         (provider.agents || []).map((agent, index) => ({provider, agent,
             key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)}))).concat(this._harborEntries || []);
@@ -2731,12 +2738,12 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         const publishedAt = Date.parse(payload?.updatedAt || '');
         const runtimeAt = entryStale ? (Number.isFinite(publishedAt) ? publishedAt : bar._amsRuntimeAt ?? now) : now;
         bar._amsRuntimeAt = runtimeAt;
-        const runtimeAgent = panelRuntimeObservation(entry.agent, this._panelRuntimeStates.get(entry.key));
-        this._panelRuntimeStates.set(entry.key, runtimeAgent);
-        bar._amsRuntimeAgent = runtimeAgent;
-        bar._amsResetCountdown = panelLaunchWaitSeconds(runtimeAgent, runtimeAt) !== null;
+        bar._amsRuntimeAgent = entry.agent;
+        bar._amsResetCountdown = panelLaunchWaitSeconds(entry.agent, runtimeAt) !== null;
         const runtime = bar._amsRuntimeLabel;
-        runtime.text = panelAgentRuntimeText(runtimeAgent, runtimeAt);
+        runtime.text = panelAgentRuntimeText(entry.agent, runtimeAt);
+        bar._amsCompletionAge = runtime.text.endsWith(' ago');
+        runtime.style_class = bar._amsCompletionAge ? 'ams-panel-agent-runtime ams-panel-agent-age' : 'ams-panel-agent-runtime';
         runtime.style = `color: ${panelAgentRuntimeColor(entry.agent, now, entryStale)};`;
         runtime.visible = Boolean(runtime.text);
         runtime.opacity = entryStale ? 128 : 255;
@@ -2748,11 +2755,6 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         bar.queue_repaint();
         if (cell.hover)
             this._syncTaskHover(cell, entry.agent, entry.provider, payload?.codexInstanceCount);
-    }
-    const liveKeys = new Set(entries.map(entry => entry.key));
-    for (const key of this._panelRuntimeStates.keys()) {
-        if (!liveKeys.has(key))
-            this._panelRuntimeStates.delete(key);
     }
     this._panelProgress.visible = entries.length > 0;
     this._syncPanelPulseTimer();
