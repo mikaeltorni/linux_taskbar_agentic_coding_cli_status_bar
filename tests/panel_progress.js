@@ -1650,10 +1650,10 @@ const paddedWorkspaceTarget = openTarget.children[0] === recovery.anchor && !rec
     openTarget.reactive && openTarget.y_expand && openTarget.y_align === Clutter.ActorAlign.FILL &&
     Number(targetPadding) >= 6;
 const recoveryLogoSize = recovery.children[0].children[0]._amsBar._amsLogo.icon_size;
-const largerRecoveryLogo = recoveryLogoSize >= panelLogoSize + 12 &&
+const largerRecoveryLogo = recoveryLogoSize > panelLogoSize && recoveryLogoSize <= panelLogoSize + 8 &&
     recovery.children[0].height >= recoveryLogoSize + 10;
 check(paddedWorkspaceTarget && largerRecoveryLogo,
-    `recovery needs a full-height padded hit area (${paddedWorkspaceTarget}) and room for a larger icon (${largerRecoveryLogo})`);
+    `recovery needs a full-height padded hit area (${paddedWorkspaceTarget}) and room for a moderately larger icon (${largerRecoveryLogo})`);
 check(recovery.children[0].style_class.split(' ').includes('popup-menu-content'),
     'recovery cells sit on a native Shell menu background');
 check(recovery.children[0].children.map(cell => cell._amsBar._amsAgent.session_id).join() === 'hide-a',
