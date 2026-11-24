@@ -782,6 +782,10 @@ for (const cell of estimateCells) {
         'forecast is right-aligned below its own bar, independent of bar opacity');
 }
 
+const instanceStyle = stylesheet.match(/\.ams-panel-agent-instance\s*\{([^}]+)\}/)?.[1] || '';
+check(/font-size:\s*16\.5px;/.test(instanceStyle), 'panel instance numbers grow from 11px to 16.5px');
+check(/color:\s*#9ebfec;/.test(instanceStyle), 'the default panel instance number color stays blue');
+
 // Account and project-local instance numbers share the footer with the estimate.
 const numberedBase = {project: 'sample', workspace: 2, phase: 'RUNNING', run_active: true,
     task_time_estimate: {status: 'estimated', label: '~1h 1m left'}, workflow: {fraction: .4}};
