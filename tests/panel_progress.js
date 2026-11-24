@@ -117,7 +117,7 @@ const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'pa
     ...(source.includes('function panelLaunchWaitSeconds(') ? ['panelLaunchWaitSeconds'] : []),
     ...((source.includes('function panelAgentRuntimeText(') || source.includes('const panelAgentRuntimeText = (')) ? ['formatPanelRunDuration', 'panelAgentRuntimeText'] : []),
     ...((source.includes('function panelAgentRuntimeColor(') || source.includes('const panelAgentRuntimeColor = (')) ? ['panelAgentRuntimeColor'] : []),
-    ...(source.includes('function panelRuntimeObservation(') ? ['panelRuntimeObservation'] : []),
+    'panelCompletionAgeText',
     ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
     ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
@@ -128,7 +128,12 @@ const Harbor = new Function(`${harborSource}; return {harborPanelEntries, harbor
 const timers = new Map();
 let nextTimer = 1;
 const GLib = {PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true,
-    timeout_add: (_priority, _delay, callback) => { const id = nextTimer++; timers.set(id, callback); return id; },
+    timeout_add: (_priority, delay, callback) => {
+        const id = nextTimer++;
+        callback.delay = delay;
+        timers.set(id, callback);
+        return id;
+    },
     source_remove: id => timers.delete(id),
 };
 let snapshot = null;
@@ -388,7 +393,8 @@ check(Math.round(readyBar.draws.at(-1).color[0] * 255) === 34, 'stale completion
 ready.unread_completion = false;
 button._updatePanelProgress({providers: [{agents: [ready]}]}, false);
 button._applyPanelProgressPulse(1500);
-check(timers.size === 0 && readyBar.opacity === 255, 'acknowledged completion is steady');
+check(timers.size === 1 && [...timers.values()][0].delay === 1000 && readyBar.opacity === 255,
+    'acknowledged completion replaces animation with a steady second-by-second age clock');
 check(Math.round(readyBar.draws.at(-1).color[0] * 255) === 34, 'acknowledgement restores the steady green fill');
 ready.unread_completion = true;
 button._updatePanelProgress({providers: [{agents: [ready]}]}, false);
@@ -962,7 +968,7 @@ for (const isOpen of [true, false]) {
 check(visibleBars(button._panelProgress).some(bar => bar._amsEstimateLabel.text === '~3m'), 'own-agent forecasts survive refresh and recovery');
 print('PASS: trailing estimate removed in every refresh state; per-bar forecast remains.');
 
-// Runtime is an HH:MM clock above active runs; confirmed finishes retain their duration.
+// Runtime is an HH:MM clock above active runs; confirmed finishes show their age.
 const savedDateNow = Date.now;
 const runtimeReference = Date.parse('2026-10-13T10:00:00Z');
 Date.now = () => runtimeReference;
@@ -981,24 +987,24 @@ const runtimeCells = runtimeRow.children;
 check(runtimeCells.every(cell => cell.children.length === 4), 'each cell contains a logo, bar, lower forecast and upper runtime');
 const liveRuntime = runtimeCells[0]._amsBar._amsRuntimeLabel;
 const doneRuntime = runtimeCells[1]._amsBar._amsRuntimeLabel;
-check(liveRuntime.text === '01:01' && doneRuntime.text === '' && !doneRuntime.visible, 'live timer formats hours:minutes and completed measurement does not show a timer');
+check(liveRuntime.text === '01:01' && doneRuntime.text === '1h ago' && doneRuntime.visible, 'live timer formats hours:minutes and finish age comes from the confirmed timestamp');
 for (const cell of runtimeCells) {
     const runtime = cell._amsBar._amsRuntimeLabel;
-    check(runtime.style_class === 'ams-panel-agent-runtime' && runtime.x_align === Clutter.ActorAlign.CENTER &&
+    check(runtime.style_class.split(' ').includes('ams-panel-agent-runtime') && runtime.x_align === Clutter.ActorAlign.CENTER &&
         runtime.y_align === Clutter.ActorAlign.START && runtime.x_expand === true && runtime.y_expand === true && !runtime.reactive,
         'runtime sits at the top centered above the retained bar');
 }
 check(runtimeCells[0]._amsBar._amsEstimateLabel.text === '~3m' && !runtimeCells[1]._amsBar._amsEstimateLabel.visible,
     'running forecast remains below while completed runtime has no remaining estimate');
 button._applyPanelProgressPulse(runtimeReference + 60 * 1000);
-check(liveRuntime.text === '01:02' && doneRuntime.text === '' && !doneRuntime.visible, 'live minute ticks keep completed timer hidden');
+check(liveRuntime.text === '01:02' && doneRuntime.text === '1h ago' && doneRuntime.visible, 'live minute ticks retain the completion age');
 check(liveRuntime.opacity === 255 && doneRuntime.opacity === 255, 'runtime labels do not pulse with progress fill');
 for (const [seconds, expected] of [[0, '00:00'], [59, '00:00'], [60, '00:01'], [3599, '00:59'],
     [3600, '01:00'], [3660, '01:01'], [90000, '25:00'], [360000, '100:00']]) {
     runtimeAgents[0].run_started_at = new Date(runtimeReference - seconds * 1000).toISOString();
     runtimeAgents[1].task_time_estimate.observed_active_seconds = seconds;
     button._updatePanelProgress(runtimePayload, false);
-    check(liveRuntime.text === expected && doneRuntime.text === '' && !doneRuntime.visible, 'active HH:MM truncates partial minutes and keeps completed timer hidden');
+    check(liveRuntime.text === expected && doneRuntime.text === '1h ago' && doneRuntime.visible, 'active HH:MM truncates partial minutes independently of the completion age');
 }
 runtimeAgents[0].run_started_at = new Date(runtimeReference + 60000).toISOString();
 button._updatePanelProgress(runtimePayload, false);
@@ -1008,8 +1014,8 @@ for (const value of [null, -1, NaN, Infinity, '120']) {
     runtimeAgents[0].task_time_estimate.observed_active_seconds = value;
     runtimeAgents[1].task_time_estimate.observed_active_seconds = value;
     button._updatePanelProgress(runtimePayload, false);
-    check(liveRuntime.text === '' && !liveRuntime.visible && doneRuntime.text === '' && !doneRuntime.visible,
-        'invalid active duration stays blank and completed timers remain hidden');
+    check(liveRuntime.text === '' && !liveRuntime.visible && doneRuntime.text === '1h ago' && doneRuntime.visible,
+        'invalid active duration stays blank and does not affect the completion age');
 }
 for (const phase of ['DRAFT', 'STOPPED', 'ATTN', 'RATE', 'INTERRUPTED']) {
     runtimeAgents[1].phase = phase;
@@ -1020,7 +1026,7 @@ for (const phase of ['DRAFT', 'STOPPED', 'ATTN', 'RATE', 'INTERRUPTED']) {
 Object.assign(runtimeAgents[1], {phase: 'DONE', run_started_at: '2026-10-13T07:45:00Z',
     ready_completed_at: '2026-10-13T09:00:00Z', unread_completion: true, task_time_estimate: null});
 button._updatePanelProgress(runtimePayload, false);
-check(doneRuntime.text === '01:15' && doneRuntime.visible, 'confirmed completion freezes the clock at finish time');
+check(doneRuntime.text === '1h ago' && doneRuntime.visible, 'confirmed completion ignores the previous running clock');
 runtimeAgents[1].ready_completed_at = 'invalid';
 button._updatePanelProgress(runtimePayload, false);
 check(doneRuntime.text === '' && !doneRuntime.visible, 'malformed completion timestamp is omitted');
@@ -1355,7 +1361,7 @@ check(/font-family:\s*monospace;/.test(forecastStyle) && /margin:\s*0 1px 1px;/.
     'larger compact forecast fits below its bar with consistent timer typography');
 print('PASS: 1.5x lower forecast text contains only duration, across suffixes and retained refreshes.');
 
-// A completed task keeps its final runtime and shares the exact ready-bar pulse.
+// A completed task shows its finish age and shares the exact ready-bar pulse.
 const completionClockNow = Date.parse('2026-10-14T10:00:00Z');
 const completionClockAgent = {session_id: 'completion-clock', phase: 'RUNNING', run_active: true,
     run_started_at: '2026-10-14T08:45:00Z', note_id: 'completion-note',
@@ -1370,13 +1376,16 @@ Object.assign(completionClockAgent, {phase: 'DONE', run_active: false, unread_co
     ready_completed_at: '2026-10-14T10:00:00Z'});
 button._updatePanelProgress(completionClockPayload, false);
 check(button._panelProgressBars.get('completion-clock') === completionClockBar &&
-    completionClockLabel.text === '01:15' && completionClockLabel.visible,
-    'completion retains the timer on the same taskbar actor');
-for (const [offset, expected] of [[0, [34,197,94]], [750, [145,226,175]],
-    [1500, [255,255,255]], [2250, [145,226,175]], [3000, [34,197,94]], [3600000, [34,197,94]]]) {
+    completionClockLabel.text === '0s ago' && completionClockLabel.visible &&
+    completionClockLabel.style_class.includes('ams-panel-agent-age'),
+    'finish age replaces the running clock on the same taskbar actor');
+for (const [offset, expected, age] of [[0, [34,197,94], '0s ago'], [750, [145,226,175], '0s ago'],
+    [1500, [255,255,255], '1s ago'], [2250, [145,226,175], '2s ago'], [3000, [34,197,94], '3s ago'],
+    [57000, [34,197,94], '57s ago'], [60000, [34,197,94], '1m ago'],
+    [3600000, [34,197,94], '1h ago'], [86400000, [34,197,94], '1d ago']]) {
     button._applyPanelProgressPulse(completionClockNow + offset);
-    check(completionClockLabel.text === '01:15' && completionClockLabel.visible,
-        'completed timer never accrues waiting time');
+    check(completionClockLabel.text === age && completionClockLabel.visible,
+        `completion age uses the confirmed finish at offset ${offset}`);
     check(completionClockLabel.style === `color: rgb(${expected.join(', ')});`,
         'timer flashes green to white on the same three-second wave as its bar');
     const fill = completionClockBar.draws.at(-1).color.slice(0, 3).map(channel => Math.round(channel * 255));
@@ -1389,16 +1398,17 @@ check(completionClockLabel.style === 'color: rgb(34, 197, 94);' && completionClo
     'stale completed timer stops flashing and dims with its bar');
 button._applyPanelProgressPulse(completionClockNow + 2250);
 check(completionClockLabel.style === 'color: rgb(34, 197, 94);', 'stale animation ticks cannot flash the timer');
-for (const [start, finish] of [['invalid', '2026-10-14T10:00:00Z'],
-    ['2026-10-14T08:45:00Z', 'invalid'], ['2026-10-14T10:01:00Z', '2026-10-14T10:00:00Z']]) {
-    Object.assign(completionClockAgent, {run_started_at: start, ready_completed_at: finish});
+for (const [finish, taskComplete] of [['', true], ['invalid', true],
+    ['2026-10-14T10:01:00Z', true], ['2026-10-14T10:00:00Z', false]]) {
+    completionClockAgent.ready_completed_at = finish;
+    completionClockAgent.workflow.task_complete = taskComplete;
     button._updatePanelProgress(completionClockPayload, false);
     check(!completionClockLabel.visible && completionClockLabel.text === '',
-        'invalid or reversed completion clocks never invent a duration');
+        'unknown or future finishes and incomplete workflows have no age label');
 }
 button._updatePanelProgress(null, false);
 Date.now = savedDateNow;
-print('PASS: completed taskbar clock freezes duration and flashes in sync with the ready progress bar.');
+print('PASS: completed taskbar clock counts from the finish and flashes in sync with the ready progress bar.');
 
 // Completion visibility follows the real unread/focus state, independently per session.
 const applyCompletionState = new Function('print', `${declaration('unreadCompletionCount')}\nreturn unreadCompletionCount;`)(print);
@@ -1418,53 +1428,66 @@ check(applyCompletionState(acknowledgementPayload, acknowledgementStates, acknow
 button._updatePanelProgress(acknowledgementPayload, false);
 const firstAcknowledgedBar = button._panelProgressBars.get('first');
 const secondAcknowledgedBar = button._panelProgressBars.get('second');
-check(firstAcknowledgedBar._amsRuntimeLabel.text === '00:15' && secondAcknowledgedBar._amsRuntimeLabel.text === '00:15',
-    'both completed sessions keep their last running timers');
+check(firstAcknowledgedBar._amsRuntimeLabel.text === '0s ago' && secondAcknowledgedBar._amsRuntimeLabel.text === '0s ago',
+    'both completed sessions show their confirmed finish age');
 acknowledgementAgents[0].focused = true;
 check(applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow) === 1,
     'focusing a finished session acknowledges only that session');
 button._updatePanelProgress(acknowledgementPayload, false);
-check(firstAcknowledgedBar._amsRuntimeLabel.text === '' && !firstAcknowledgedBar._amsRuntimeLabel.visible,
-    'acknowledgement immediately hides the completed timer');
-check(secondAcknowledgedBar._amsRuntimeLabel.visible && secondAcknowledgedBar._amsRuntimeLabel.text === '00:15',
+check(firstAcknowledgedBar._amsRuntimeLabel.text === '0s ago' && firstAcknowledgedBar._amsRuntimeLabel.visible,
+    'acknowledgement leaves the finish age on the same actor');
+check(secondAcknowledgedBar._amsRuntimeLabel.visible && secondAcknowledgedBar._amsRuntimeLabel.text === '0s ago',
     'acknowledging one session preserves another unread timer');
 button._applyPanelProgressPulse(acknowledgementNow + 1500);
-check(!firstAcknowledgedBar._amsRuntimeLabel.visible && firstAcknowledgedBar.opacity === 255,
-    'animation ticks keep an acknowledged timer hidden and its bar steady');
+check(firstAcknowledgedBar._amsRuntimeLabel.style === 'color: rgb(34, 197, 94);' && firstAcknowledgedBar.opacity === 255,
+    'acknowledgement ends the pulse on the age label and its bar');
 check(secondAcknowledgedBar._amsRuntimeLabel.style === 'color: rgb(255, 255, 255);',
     'the other unread session keeps flashing');
 acknowledgementAgents[0].focused = false;
-applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow + 10000);
+Date.now = () => acknowledgementNow + 10000;
+applyCompletionState(acknowledgementPayload, acknowledgementStates, Date.now());
 button._updatePanelProgress(acknowledgementPayload, false);
-check(!firstAcknowledgedBar._amsRuntimeLabel.visible, 'leaving a checked session cannot replay its timer');
+check(!acknowledgementAgents[0].unread_completion && firstAcknowledgedBar._amsRuntimeLabel.visible,
+    'leaving a checked session preserves the age without marking it unread again');
 // Reordering/rebuilding cells for a workspace move must not discard an unread clock.
 acknowledgementAgents[1].workspace = 2;
 button._updatePanelProgress(acknowledgementPayload, false);
-check(button._panelProgressBars.get('second')._amsRuntimeLabel.text === '00:15',
+check(button._panelProgressBars.get('second')._amsRuntimeLabel.text === '10s ago',
     'workspace regrouping preserves the completed session timer');
 Object.assign(acknowledgementAgents[0], {phase: 'RUNNING', run_active: true,
-    ready_completed_at: '', run_started_at: '2026-10-14T10:58:00Z'});
-applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow);
+    ready_completed_at: '', run_started_at: '2026-10-14T10:58:10Z'});
+applyCompletionState(acknowledgementPayload, acknowledgementStates, Date.now());
 button._updatePanelProgress(acknowledgementPayload, false);
 check(button._panelProgressBars.get('first')._amsRuntimeLabel.text === '00:02',
     'a new task restores the timer using its own start');
 Object.assign(acknowledgementAgents[0], {phase: 'DONE', run_active: false, run_started_at: '',
-    ready_completed_at: '2026-10-14T11:00:01Z'});
-applyCompletionState(acknowledgementPayload, acknowledgementStates, acknowledgementNow + 1000);
+    ready_completed_at: '2026-10-14T11:00:11Z'});
+Date.now = () => acknowledgementNow + 11000;
+applyCompletionState(acknowledgementPayload, acknowledgementStates, Date.now());
 button._updatePanelProgress(acknowledgementPayload, false);
-check(button._panelProgressBars.get('first')._amsRuntimeLabel.text === '00:02',
-    'a later completion rearms the timer for its new duration');
-// Persisted acknowledgement suppresses old clocks after rebuilding; unread measured durations remain available.
+check(button._panelProgressBars.get('first')._amsRuntimeLabel.text === '0s ago',
+    'a later completion bases the age on the new finish');
+// Both read and unread completion ages can be rebuilt from the payload alone.
 button._updatePanelProgress(null, false);
-Object.assign(acknowledgementAgents[0], {focused: true, run_started_at: '2026-10-14T10:58:00Z'});
+Object.assign(acknowledgementAgents[0], {focused: true, run_started_at: '2026-10-14T10:58:10Z'});
 Object.assign(acknowledgementAgents[1], {task_time_estimate: {status: 'complete', observed_active_seconds: 900}});
 const restoredAcknowledgements = new Map(JSON.parse(JSON.stringify([...acknowledgementStates])));
-applyCompletionState(acknowledgementPayload, restoredAcknowledgements, acknowledgementNow + 1000);
+applyCompletionState(acknowledgementPayload, restoredAcknowledgements, acknowledgementNow + 11000);
 button._updatePanelProgress(acknowledgementPayload, false);
-check(!button._panelProgressBars.get('first')._amsRuntimeLabel.visible,
-    'restored completed session stays hidden after acknowledgement');
-check(button._panelProgressBars.get('second')._amsRuntimeLabel.text === '00:15',
-    'persisted unread completion can use its published measured task duration after reload');
+check(button._panelProgressBars.get('first')._amsRuntimeLabel.text === '0s ago' &&
+    !acknowledgementAgents[0].unread_completion, 'restored acknowledged session has an age without a pulse');
+check(button._panelProgressBars.get('second')._amsRuntimeLabel.text === '11s ago',
+    'restored unread age comes from the published finish despite a different measured runtime');
+acknowledgementAgents[1].focused = true;
+applyCompletionState(acknowledgementPayload, restoredAcknowledgements, Date.now());
+button._updatePanelProgress(acknowledgementPayload, false);
+Date.now = () => acknowledgementNow + 12000;
+check(timers.size === 1, 'acknowledged completions share one clock update source');
+for (const tick of timers.values())
+    tick();
+check(button._panelProgressBars.get('first')._amsRuntimeLabel.text === '1s ago' &&
+    button._panelProgressBars.get('second')._amsRuntimeLabel.text === '12s ago',
+    'acknowledged ages advance in place even when every task is idle');
 for (const agent of acknowledgementAgents)
     Object.assign(agent, {phase: 'STOPPED', run_active: false, unread_completion: false});
 button._updatePanelProgress(acknowledgementPayload, false);
@@ -1472,7 +1495,7 @@ check([...button._panelProgressBars.values()].every(bar => !bar._amsRuntimeLabel
     'stopped sessions expose neither runtime labels nor completion animation');
 button._updatePanelProgress(null, false);
 Date.now = savedDateNow;
-print('PASS: acknowledgement hides only its own timer; unread sessions, new tasks and restored state retain correct timing.');
+print('PASS: completion ages persist through acknowledgement, workspace changes and reload.');
 
 // Harbor uses the actual existing workspace grouping and cell/fill owners.
 button._updatePanelProgress(null, false);
