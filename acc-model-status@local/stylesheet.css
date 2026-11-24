@@ -118,7 +118,16 @@
   color: #9a9996;
 }
 
-.ams-panel-workspace-label:hover {
+.ams-panel-workspace-target {
+  padding: 0 8px;
+  border-radius: 4px;
+}
+
+.ams-panel-workspace-target:hover {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+.ams-panel-workspace-target:hover .ams-panel-workspace-label {
   text-decoration: underline;
 }
 
