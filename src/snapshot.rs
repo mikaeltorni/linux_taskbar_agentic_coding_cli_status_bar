@@ -67,7 +67,7 @@ pub fn carry_reset_metadata(snapshot: Value, last: Option<&Value>) -> Value {
     if let Some(last) = last {
         for (marker, keys) in [
             ("resets_available", &["resets_available", "resets_checked_at", "reset_probe_at"][..]),
-            ("timer_windows", &["timer_windows", "timer_observed_at", "timer_home"][..]),
+            ("timer_windows", &["timer_windows", "timer_observed_at", "timer_home", "timer_confirm_after"][..]),
         ] {
             if carried.get(marker).is_none() {
                 for key in keys {

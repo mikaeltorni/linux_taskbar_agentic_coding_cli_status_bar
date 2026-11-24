@@ -259,7 +259,7 @@ fn instance_snapshot(row: &CodexAccountInstance, collected: Value, selected_id: 
         "credits": collected.get("credits").cloned().unwrap_or(Value::Null),
         "error": collected.get("error").cloned().unwrap_or(Value::Null),
     });
-    for key in ["resets_available", "resets_checked_at", "reset_probe_at", "timer_windows", "timer_observed_at", "timer_home"] {
+    for key in ["resets_available", "resets_checked_at", "reset_probe_at", "timer_windows", "timer_observed_at", "timer_home", "timer_confirm_after"] {
         if let Some(value) = collected.get(key) {
             snap[key] = value.clone();
         }
@@ -390,6 +390,22 @@ pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value
     combined
 }
 
+/// Check for an account deadline or one requested follow-up before the regular cadence.
+/// Parameters: row - verified metadata snapshot; codex_home - account directory; now - epoch seconds.
+/// Returns: true when a rollover read is due.
+fn codex_rollover_read_due(row: &Value, codex_home: &Path, now: f64) -> bool {
+    eprintln!("row={row} codex_home={codex_home:?} now={now}");
+    let result = row["timer_home"].as_str().is_some_and(|home| Path::new(home) == codex_home)
+        && row["timer_observed_at"].as_f64().is_some_and(|observed| {
+            row["timer_confirm_after"].as_f64().is_some_and(|due| due <= now)
+                || row["timer_windows"].as_array().is_some_and(|windows| windows.iter().any(|window| {
+                    window["resets_at"].as_f64().is_some_and(|reset| observed < reset && reset <= now)
+                }))
+        });
+    eprintln!("{result}");
+    result
+}
+
 /// Refresh manual-reset availability from Codex's read-only account metadata.
 /// The account ID from each home's auth file is checked against the response by
 /// `read`, so a selected-login change cannot attach one account's credits to
@@ -432,6 +448,7 @@ pub fn refresh_codex_reset_counts(
         if row["reset_probe_at"]
             .as_f64()
             .is_some_and(|last| now - last < CODEX_RESET_CREDITS_MIN_INTERVAL_SECONDS)
+            && !codex_rollover_read_due(row, codex_home, now)
         {
             eprintln!("None");
             return;

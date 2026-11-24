@@ -695,7 +695,7 @@ fn merge_cli_pane(
             .and_then(Value::as_f64)
             .unwrap_or(0.0);
     let mut prior_reset_metadata = json!({});
-    for key in ["resets_available", "resets_checked_at", "reset_probe_at", "timer_windows", "timer_observed_at", "timer_home"] {
+    for key in ["resets_available", "resets_checked_at", "reset_probe_at", "timer_windows", "timer_observed_at", "timer_home", "timer_confirm_after"] {
         if let Some(value) = snapshot.get(key) {
             prior_reset_metadata[key] = value.clone();
         }
@@ -1315,6 +1315,25 @@ pub fn next_tick_delay(started_at: f64, interval: i64, now: f64) -> f64 {
     (started_at + interval as f64 - now).max(0.0)
 }
 
+/// Detect a transition from an expired window to an ambiguous full window.
+/// Parameters: row - prior account metadata; fresh - latest timer windows; now - epoch seconds.
+/// Returns: true when a short follow-up can establish whether the timer is sliding.
+fn needs_codex_rollover_confirmation(row: &Value, fresh: &Value, now: f64) -> bool {
+    eprintln!("row={row} fresh={fresh} now={now}");
+    let result = row["timer_windows"].as_array().zip(fresh.as_array()).is_some_and(|(old, new)| {
+        new.iter().any(|window| {
+            window["used_percent"].as_f64() == Some(0.0)
+                && window["resets_at"].as_f64().is_some_and(|reset| reset > now)
+                && old.iter().any(|previous| {
+                    previous["label"] == window["label"]
+                        && previous["resets_at"].as_f64().is_some_and(|reset| reset <= now)
+                })
+        })
+    });
+    eprintln!("{result}");
+    result
+}
+
 /// Attach verified timer observations to the corresponding Codex account only.
 /// Parameters: snapshot - collected Codex accounts; records - per-home metadata results; home - user home; now - observation time.
 /// Returns: the snapshot with fresh account-specific metadata.
@@ -1322,7 +1341,14 @@ fn attach_codex_timer_metadata(mut snapshot: Value, records: &HashMap<PathBuf, O
     println!("snapshot={snapshot}, records={records:?}, home={home:?}, now={now}");
     let apply = |row: &mut Value, path: &Path| {
         if let Some(metadata) = records.get(path) {
-            row["timer_windows"] = metadata.as_ref().and_then(|data| data.get("timer_windows")).cloned().unwrap_or(json!([]));
+            let windows = metadata.as_ref().and_then(|data| data.get("timer_windows")).cloned().unwrap_or(json!([]));
+            let same_home = row["timer_home"].as_str().is_some_and(|home| Path::new(home) == path);
+            row["timer_confirm_after"] = if same_home && needs_codex_rollover_confirmation(row, &windows, now) {
+                json!(now + 5.0)
+            } else {
+                Value::Null
+            };
+            row["timer_windows"] = windows;
             row["timer_observed_at"] = if metadata.is_some() { json!(now) } else { Value::Null };
             row["timer_home"] = json!(path);
         }
@@ -1350,7 +1376,7 @@ fn attach_codex_timer_metadata(mut snapshot: Value, records: &HashMap<PathBuf, O
         }
         let selected = snapshot["selected"].as_i64();
         if let Some(row) = snapshot["instances"].as_array().and_then(|rows| rows.iter().find(|row| row["id"].as_i64() == selected)).cloned() {
-            for key in ["timer_windows", "timer_observed_at", "timer_home", "windows", "observed_at", "source", "error", "stale"] {
+            for key in ["timer_windows", "timer_observed_at", "timer_home", "timer_confirm_after", "windows", "observed_at", "source", "error", "stale"] {
                 if let Some(value) = row.get(key) { snapshot[key] = value.clone(); }
             }
         }
@@ -2502,6 +2528,46 @@ for method, line in zip(steps, sys.stdin, strict=True):
         let next = poll_once(Some(&sandbox.home), Some(&first_poll), Some(NOW + 10.0), None, None, &hooks);
         assert_eq!(next["clis"]["codex"]["instances"][0]["timer_windows"], first_poll["clis"]["codex"]["instances"][0]["timer_windows"]);
         assert_eq!(next["clis"]["codex"]["instances"][0]["timer_observed_at"], json!(NOW));
+        println!("None");
+    }
+
+    /// Read Codex at expiry, confirm the new full window once, then resume normal polling.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn public_poll_confirms_rollover_without_waiting_a_minute() {
+        println!("parameters=none");
+        let sandbox = Sandbox::new();
+        configure(false);
+        let home = sandbox.home.join(".codex");
+        write_instance_registry(&sandbox.home, &[(1, home.clone())], 1);
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("auth.json"), r#"{"tokens":{"account_id":"one"}}"#).unwrap();
+        for (label, duration) in [("5h", 18_000.0), ("week", 604_800.0)] {
+            let mut previous = None;
+            for (offset, expected, used, reset) in [
+                (0.0, 0.0, 7, NOW + 10.0),
+                (5.0, 0.0, 7, NOW + 10.0),
+                (10.0, 10.0, 0, NOW + duration + 10.0),
+                (12.0, 10.0, 0, NOW + duration + 10.0),
+                (15.0, 15.0, 0, NOW + duration + 15.0),
+                (20.0, 15.0, 0, NOW + duration + 15.0),
+                (75.0, 75.0, 1, NOW + duration + 15.0),
+            ] {
+                let hooks = PollHooks {
+                    codex_metadata_reader: Some(Arc::new(move |_, _| Ok(json!({
+                        "resets_available": 0,
+                        "timer_windows": [{"label":label, "used_percent": used, "resets_at": reset}]
+                    })))),
+                    ..PollHooks::default()
+                };
+                let next = poll_once(Some(&sandbox.home), previous.as_ref(), Some(NOW + offset), None, None, &hooks);
+                let row = &next["clis"]["codex"]["instances"][0];
+                assert_eq!(row["timer_observed_at"], json!(NOW + expected), "{label} at {offset}s");
+                assert_eq!(row["timer_windows"][0]["resets_at"], json!(reset), "{label} at {offset}s");
+                previous = Some(next);
+            }
+        }
         println!("None");
     }
 
