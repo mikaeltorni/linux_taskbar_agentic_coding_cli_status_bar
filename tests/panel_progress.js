@@ -1623,7 +1623,7 @@ const panelLogoSize = hiddenCell._amsBar._amsLogo.icon_size;
 check(hiddenCell['button-press-event'](hiddenCell, ctrlClick) === Clutter.EVENT_STOP, 'Ctrl+click consumes the task event');
 check(visibleBars(hideButton._panelProgress).map(bar => bar._amsAgent.session_id).join() === 'hide-b',
     'Ctrl+click removes just the selected instance from the bar');
-check(hideButton._panelProgress.children[0].children[0].children[0].text === 'W2', 'workspace label remains when its last task is hidden');
+check(hideButton._panelProgress.children[0].children[0].children[1].text === 'W2', 'workspace label remains when its last task is hidden');
 hideButton._updatePanelProgress(hidePayload, true);
 check(visibleBars(hideButton._panelProgress).length === 1, 'regular refresh keeps the selected instance hidden');
 const unlinkedCell = hideButton._panelProgressBars.get('hide-b').get_parent();
@@ -1646,7 +1646,7 @@ check(recovery.visible && recovery.side === St.Side.BOTTOM && recovery.chrome &&
     'recovery opens above the bar anchored to W2 in Shell chrome');
 const targetPadding = stylesheet.match(/\.ams-panel-workspace-target\s*\{[^}]*padding:\s*0\s+(\d+)px;/)?.[1];
 const openTarget = workspaceTarget(hideButton, 2);
-const paddedWorkspaceTarget = openTarget.children[0] === recovery.anchor && !recovery.anchor.reactive &&
+const paddedWorkspaceTarget = openTarget.children[1] === recovery.anchor && !recovery.anchor.reactive &&
     openTarget.reactive && openTarget.y_expand && openTarget.y_align === Clutter.ActorAlign.FILL &&
     Number(targetPadding) >= 6;
 const recoveryLogoSize = recovery.children[0].children[0]._amsBar._amsLogo.icon_size;
@@ -1696,7 +1696,7 @@ for (const [workspace, session] of [[2, 'hide-a'], [4, 'hide-b'], [2, 'hide-a']]
     const clickedTarget = workspaceTarget(switchButton, workspace);
     clickedTarget['button-press-event'](clickedTarget, leftClick);
     const current = recoveryPointers.filter(popup => !popup.destroyed);
-    check(current.length === 1 && current[0].anchor === workspaceTarget(switchButton, workspace).children[0],
+    check(current.length === 1 && current[0].anchor === workspaceTarget(switchButton, workspace).children[1],
         `W${workspace} replaces any previous workspace popup`);
     check(previouslyOpen.every(popup => popup.destroyed), `W${workspace} destroys previous popup chrome`);
     check(current[0].children[0].children[0]._amsBar._amsAgent.session_id === session,
@@ -1708,3 +1708,36 @@ switchButton._updatePanelProgress({providers: [{kind: 'codex', agents: [hideTask
 check(openAfterSwitch.destroyed && recoveryPointers.every(popup => popup.destroyed),
     'closing the last hidden task in an open workspace removes its popup');
 print('PASS: W2 to W4 to W2 switches one popup while preserving hidden state.');
+
+// Count hidden tasks independently for each workspace, including while recovery is open.
+const countButton = Object.assign({_iconsDir: iconsDir, _box: new Actor(), _syncTaskHover: () => {}}, owners.updater);
+const countTasks = [...hideTasks, {session_id: 'hide-c', workspace: 2, phase: 'DONE'}];
+const countPayload = {providers: [{kind: 'codex', agents: countTasks}]};
+const hiddenCount = (workspace) => workspaceTarget(countButton, workspace)?.children
+    .find(actor => actor.style_class === 'ams-panel-workspace-hidden-count')?.text;
+countButton._updatePanelProgress(countPayload, false);
+check(hiddenCount(2) === undefined && hiddenCount(4) === undefined, 'no badge appears at zero hidden tasks');
+for (const [key, w2Count, w4Count] of [['hide-a', '1', undefined], ['hide-c', '2', undefined], ['hide-b', '2', '1']]) {
+    const taskCell = countButton._panelProgressBars.get(key).get_parent();
+    taskCell['button-press-event'](taskCell, ctrlClick);
+    check(hiddenCount(2) === w2Count && hiddenCount(4) === w4Count,
+        `hiding ${key} updates only the relevant workspace count`);
+}
+const countedTarget = workspaceTarget(countButton, 2);
+check(countedTarget.vertical && countedTarget.children[0].text === '2' && !countedTarget.children[0].reactive &&
+    countedTarget.children[1].text === 'W2', 'the counter is above W2 within its existing click target');
+const countStyle = stylesheet.match(/\.ams-panel-workspace-hidden-count\s*\{([^}]+)\}/)?.[1] || '';
+check(/color:\s*#2dd4bf;/.test(countStyle) && /font-size:\s*10px;/.test(countStyle), 'count is small and teal');
+countedTarget['button-press-event'](countedTarget, leftClick);
+check(hiddenCount(2) === '2' && hiddenCount(4) === '1', 'opening recovery keeps both badges');
+const countedCell = countButton._panelProgressBars.get('hide-a').get_parent();
+countedCell['button-press-event'](countedCell, ctrlClick);
+check(hiddenCount(2) === '1' && hiddenCount(4) === '1', 'restoring one task in a workspace decrements its count');
+const lastCountedCell = countButton._panelProgressBars.get('hide-c').get_parent();
+lastCountedCell['button-press-event'](lastCountedCell, ctrlClick);
+check(hiddenCount(2) === undefined && hiddenCount(4) === '1', 'restoring the last hidden task removes only that badge');
+countButton._updatePanelProgress({providers: [{kind: 'codex', agents: countTasks.map(task => ({...task, workspace: 2}))}]}, false);
+check(hiddenCount(2) === '1' && hiddenCount(4) === undefined, 'moving a hidden task transfers its count to the new workspace');
+countButton._updatePanelProgress({providers: [{kind: 'codex', agents: [countTasks[0]]}]}, false);
+check(hiddenCount(2) === undefined, 'a removed hidden task no longer contributes to the count');
+print('PASS: small teal per-workspace counts track hiding, popup state, restoration and task moves.');

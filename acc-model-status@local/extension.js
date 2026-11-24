@@ -2707,9 +2707,13 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
             key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)}))).concat(this._harborEntries || []);
     const groups = groupWorkspaceEntries(entries);
     const hidden = this._hiddenPanelTasks;
-    const recoverable = new Set(groups.filter(group => group.entries.some(entry => hidden.has(entry.key)))
-        .map(group => group.workspace));
-    if (!recoverable.has(this._recoveryWorkspace))
+    const hiddenCounts = new Map();
+    for (const group of groups) {
+        const count = group.entries.filter(entry => hidden.has(entry.key)).length;
+        if (count > 0)
+            hiddenCounts.set(group.workspace, count);
+    }
+    if (!hiddenCounts.has(this._recoveryWorkspace))
         this._recoveryWorkspace = null;
     const key = JSON.stringify([this._recoveryWorkspace, groups.map(group => [group.workspace,
         group.entries.map(entry => [entry.key, monitorSortValue(entry.agent.monitor), hidden.has(entry.key)])])]);
@@ -2761,7 +2765,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                 this._panelProgressBars.set(entry.key, bar);
                 target.add_child(cell);
             }
-            const hasHidden = recoverable.has(group.workspace);
+            const hiddenCount = hiddenCounts.get(group.workspace);
             const label = new St.Label({
                 style_class: 'ams-panel-workspace-label',
                 style: `color: ${panelWorkspaceColor(group.workspace)};`,
@@ -2770,14 +2774,26 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                 y_align: Clutter.ActorAlign.CENTER,
                 reactive: false,
             });
-            if (hasHidden) {
+            if (hiddenCount) {
                 const labelTarget = new St.BoxLayout({
                     style_class: 'ams-panel-workspace-target',
+                    vertical: true,
                     y_expand: true,
                     y_align: Clutter.ActorAlign.FILL,
                     reactive: true,
                     track_hover: true,
                 });
+                labelTarget.add_child(new St.Label({
+                    style_class: 'ams-panel-workspace-hidden-count',
+                    text: String(hiddenCount),
+                    x_align: Clutter.ActorAlign.CENTER,
+                    y_align: Clutter.ActorAlign.END,
+                    y_expand: true,
+                    reactive: false,
+                }));
+                label.x_align = Clutter.ActorAlign.CENTER;
+                label.y_align = Clutter.ActorAlign.START;
+                label.y_expand = true;
                 labelTarget.add_child(label);
                 labelTarget.connect('button-press-event', (_target, event) => {
                     if (event.get_button() !== 1)
