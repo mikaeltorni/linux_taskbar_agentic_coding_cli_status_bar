@@ -24,9 +24,9 @@ const referenceForecastLaunches = [
 const rejectedForecastLaunch = openExternalUrl(
   'javascript:alert(1)', 'Unsafe');
 const results = {
-  exhaustion_estimate: exhaustionText({exhaustion_seconds: 480}),
-  exhaustion_unknown: exhaustionText({}),
-  exhaustion_after_reset: exhaustionText({exhaustion_state: "after_reset"}),
+  exhaustion_estimate: exhaustionText({exhaustion_state: "active", exhaustion_at: NOW + 480, exhaustion_valid_until: NOW + 20}, NOW),
+  exhaustion_unknown: exhaustionText({}, NOW),
+  exhaustion_after_reset: exhaustionText({exhaustion_state: "after_reset", exhaustion_at: NOW + 480, exhaustion_valid_until: NOW + 20}, NOW),
   missing_forecast_volume: formatForecastVolume(undefined),
   invalid_forecast_volume: formatForecastVolume(-5),
   clutter_markup_prefix: CLUTTER_MARKUP_PREFIX,

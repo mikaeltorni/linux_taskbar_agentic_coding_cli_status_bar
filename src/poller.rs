@@ -1500,7 +1500,7 @@ pub fn poll_once(
             }
         }
         if *cli_id == "codex" {
-            snapshot = forecast_codex_limits(snapshot, last_cli, now);
+            snapshot = forecast_codex_limits(snapshot, last_cli, home, now);
         }
         snapshot["enabled"] = json!(true);
         let available = snapshot.get("instances").and_then(Value::as_array)
@@ -1523,53 +1523,113 @@ pub fn poll_once(
     status
 }
 
+/// Maximum age of the tracker's running-state evidence.
+const FORECAST_ACTIVITY_MAX_AGE: f64 = 30.0;
+/// Allow for the minute cadence of the read-only Codex metadata collector.
+const FORECAST_SAMPLE_MAX_AGE: f64 = 120.0;
+
+/// Load the earliest current run for each tracked Codex instance.
+/// Parameters: home - user home for resolving tracker state; now - current epoch seconds.
+/// Returns: running instances and their start epochs, with the publication expiry epoch.
+fn codex_forecast_activity(home: &Path, now: f64) -> (HashMap<i64, f64>, f64) {
+    println!("home={home:?}, now={now}");
+    let path = crate::collectors::codex::tracker_state_dir(home).join("agent_status_snapshot.json");
+    let payload: Value = fs::read(path).ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(Value::Null);
+    let timestamp = |value: &Value| {
+        chrono::DateTime::parse_from_rfc3339(value.as_str()?).ok()
+            .map(|time| time.timestamp_micros() as f64 / 1_000_000.0)
+    };
+    let updated = timestamp(&payload["updated_at"]).unwrap_or(0.0);
+    let expires = updated + FORECAST_ACTIVITY_MAX_AGE;
+    let mut running = HashMap::<i64, f64>::new();
+    if updated > 0.0 && now < expires && updated <= now + 5.0 {
+        for row in payload["entries"].as_array().into_iter().flatten() {
+            if row["kind"] != "codex" || row["phase"] != "RUNNING" || row["run_active"] != true {
+                continue;
+            }
+            let id = row["codex_instance"].as_i64()
+                .or_else(|| row["codex_instance"].as_str()?.parse().ok());
+            let started = timestamp(&row["run_started_at"]).filter(|time| *time <= now.min(updated));
+            if let (Some(id), Some(started)) = (id.filter(|id| *id > 0), started) {
+                running.entry(id).and_modify(|first| *first = first.min(started)).or_insert(started);
+            }
+        }
+    }
+    let result = (running, expires);
+    println!("{result:?}");
+    result
+}
+
+/// Extrapolate a future quota deadline from a positive delta during the current run.
+/// Parameters: sample - current usage sample; baseline - earlier usage sample; started - running activity floor; now - current epoch seconds.
+/// Returns: the projected deadline, or None when the samples cannot establish a current rate.
+fn exhaustion_deadline(sample: &Value, baseline: &Value, started: f64, now: f64) -> Option<f64> {
+    println!("sample={sample}, baseline={baseline}, started={started}, now={now}");
+    let deadline = sample["observed_at"].as_f64().zip(sample["used_percent"].as_f64())
+        .zip(baseline["observed_at"].as_f64().zip(baseline["used_percent"].as_f64()))
+        .and_then(|((observed, used), (earlier, previous_used))| {
+            let elapsed = observed - earlier;
+            let increase = used - previous_used;
+            if earlier < started || elapsed <= 0.0 || elapsed > FORECAST_SAMPLE_MAX_AGE || increase <= 0.0 {
+                return None;
+            }
+            let deadline = observed + (100.0 - used) * elapsed / increase;
+            (deadline.is_finite() && deadline > now).then_some(deadline)
+        });
+    println!("{deadline:?}");
+    deadline
+}
+
 /// Estimate exhaustion independently for one account's rate-limit windows.
-/// Parameters: account - fresh account snapshot; previous - previous account snapshot; now - current epoch seconds.
+/// Parameters: account - current account snapshot; previous - previous account with the same identity; active_since - earliest currently running turn for this account; activity_expires - tracker publication expiry; now - current epoch seconds.
 /// Returns: account snapshot with per-window forecast metadata.
-fn forecast_account_limits(mut account: Value, previous: Option<&Value>, now: f64) -> Value {
-    println!("account={account}, previous={previous:?}, now={now}");
+fn forecast_account_limits(
+    mut account: Value,
+    previous: Option<&Value>,
+    active_since: Option<f64>,
+    activity_expires: f64,
+    now: f64,
+) -> Value {
+    println!("account={account}, previous={previous:?}, active_since={active_since:?}, activity_expires={activity_expires}, now={now}");
     let observed = account["observed_at"].as_f64().unwrap_or(0.0);
-    let stale = account["stale"].as_bool().unwrap_or(false);
+    let stale = account["stale"] == true;
+    let prior_windows = previous.filter(|row| row["source"] == account["source"])
+        .and_then(|row| row["windows"].as_array());
+    let sample_start = active_since.filter(|started| {
+        !stale && observed >= *started && observed <= now && now - observed < FORECAST_SAMPLE_MAX_AGE
+    });
     if let Some(windows) = account.get_mut("windows").and_then(Value::as_array_mut) {
         for window in windows {
-            let label = window["label"].as_str().unwrap_or("");
-            let used = window["used_percent"].as_f64();
-            let reset = window["resets_at"].as_f64();
-            let prior = previous.and_then(|p| p["windows"].as_array())
-                .and_then(|rows| rows.iter().find(|row| row["label"].as_str() == Some(label)));
-            let matching = prior.filter(|row| row["resets_at"].as_f64() == reset);
-            let baseline = matching.and_then(|row| row.get("usage_baseline")).cloned().or_else(|| {
-                matching.and_then(|row| Some(json!({"used_percent":row["used_percent"].as_f64()?, "observed_at":previous?["observed_at"].as_f64()?})))
-            });
-            let anchor = baseline.filter(|base| {
-                let old = base["used_percent"].as_f64().unwrap_or(-1.0);
-                let at = base["observed_at"].as_f64().unwrap_or(0.0);
-                used.is_some_and(|value| value >= old && value <= 100.0) && old >= 0.0 && at > 0.0 && observed >= at
-            }).unwrap_or_else(|| json!({"used_percent":used, "observed_at":observed}));
-            let old_used = anchor["used_percent"].as_f64().unwrap_or(0.0);
-            let old_time = anchor["observed_at"].as_f64().unwrap_or(0.0);
-            let mut eta = None;
-            let mut forecast_state = if stale { "stale" } else { "estimating" };
-            if !stale && observed > old_time && old_time > 0.0 {
-                if let Some(value) = used.filter(|value| value.is_finite() && *value > old_used && *value <= 100.0) {
-                    let deadline = observed + (100.0 - value) * (observed - old_time) / (value - old_used);
-                    if deadline.is_finite() {
-                        if reset.is_none_or(|limit| deadline <= limit) {
-                            eta = Some((deadline - now).max(0.0));
-                            forecast_state = "active";
-                        } else {
-                            forecast_state = "after_reset";
-                        }
+            let reset = window["resets_at"].as_f64().filter(|reset| *reset > now);
+            let used = window["used_percent"].as_f64().filter(|value| (0.0..100.0).contains(value));
+            let mut sample = Value::Null;
+            let mut baseline = Value::Null;
+            let mut deadline = None;
+            let mut valid_until = None;
+            let mut state = if active_since.is_none() { "idle" } else if stale { "stale" } else { "estimating" };
+            if let (Some(started), Some(reset), Some(used)) = (sample_start, reset, used) {
+                sample = json!({"used_percent": used, "observed_at": observed});
+                if let Some(prior) = prior_windows.and_then(|rows| rows.iter().find(|row| {
+                    row["label"] == window["label"] && row["resets_at"].as_f64() == Some(reset)
+                })) {
+                    let prior_sample = &prior["usage_sample"];
+                    let anchor = if prior_sample == &sample { &prior["usage_baseline"] } else { prior_sample };
+                    deadline = exhaustion_deadline(&sample, anchor, started, now);
+                    if let Some(at) = deadline {
+                        baseline = anchor.clone();
+                        valid_until = Some(activity_expires.min(observed + FORECAST_SAMPLE_MAX_AGE).min(reset).min(at));
+                        state = if at > reset { "after_reset" } else { "active" };
                     }
                 }
             }
-            if !stale && used.is_some_and(|value| value >= 100.0) {
-                eta = Some(0.0);
-                forecast_state = "active";
-            }
-            window["usage_baseline"] = anchor;
-            window["exhaustion_seconds"] = json!(eta);
-            window["exhaustion_state"] = json!(forecast_state);
+            window["usage_sample"] = sample;
+            window["usage_baseline"] = baseline;
+            window["exhaustion_at"] = json!(deadline);
+            window["exhaustion_valid_until"] = json!(valid_until);
+            window["exhaustion_seconds"] = json!(deadline.filter(|_| state == "active").map(|at| at - now));
+            window["exhaustion_state"] = json!(state);
         }
     }
     println!("{account}");
@@ -1577,22 +1637,26 @@ fn forecast_account_limits(mut account: Value, previous: Option<&Value>, now: f6
 }
 
 /// Attach account-scoped usage forecasts to the Codex snapshot.
-/// Parameters: snapshot - current Codex snapshot; previous - previous Codex snapshot; now - current epoch seconds.
+/// Parameters: snapshot - current Codex snapshot; previous - previous Codex snapshot; home - user home for resolving tracker state; now - current epoch seconds.
 /// Returns: snapshot with per-window forecast data.
-fn forecast_codex_limits(mut snapshot: Value, previous: Option<&Value>, now: f64) -> Value {
-    println!("snapshot={snapshot}, previous={previous:?}, now={now}");
+fn forecast_codex_limits(mut snapshot: Value, previous: Option<&Value>, home: &Path, now: f64) -> Value {
+    println!("snapshot={snapshot}, previous={previous:?}, home={home:?}, now={now}");
+    let (running, expires) = codex_forecast_activity(home, now);
     if let Some(rows) = snapshot.get_mut("instances").and_then(Value::as_array_mut) {
         for row in rows {
             let prior = previous.and_then(|p| p["instances"].as_array())
                 .and_then(|items| items.iter().find(|item| item["id"] == row["id"] && item["home"] == row["home"]));
-            *row = forecast_account_limits(row.clone(), prior, now);
+            let active_since = row["id"].as_i64().and_then(|id| running.get(&id)).copied();
+            *row = forecast_account_limits(row.clone(), prior, active_since, expires, now);
         }
         let selected = snapshot["selected"].as_i64();
         if let Some(row) = snapshot["instances"].as_array().and_then(|rows| rows.iter().find(|row| row["id"].as_i64() == selected)).cloned() {
             snapshot["windows"] = row["windows"].clone();
         }
     } else {
-        snapshot = forecast_account_limits(snapshot, previous, now);
+        let selected = snapshot["selected"].as_i64().unwrap_or(1);
+        let prior = previous.filter(|row| row["selected"].as_i64().unwrap_or(1) == selected);
+        snapshot = forecast_account_limits(snapshot, prior, running.get(&selected).copied(), expires, now);
     }
     println!("{snapshot}");
     snapshot
@@ -2300,6 +2364,21 @@ for method, line in zip(steps, sys.stdin, strict=True):
         .unwrap();
     }
 
+    /// Publish a tracker lifecycle sample for the public polling tests.
+    /// Parameters: home - isolated home; updated - publication epoch; entries - tracker rows.
+    /// Returns: None.
+    fn write_forecast_activity(home: &Path, updated: f64, entries: Value) {
+        println!("home={home:?}, updated={updated}, entries={entries}");
+        let dir = crate::collectors::codex::tracker_state_dir(home);
+        fs::create_dir_all(&dir).unwrap();
+        let updated = chrono::DateTime::from_timestamp(updated as i64, 0).unwrap().to_rfc3339();
+        fs::write(
+            dir.join("agent_status_snapshot.json"),
+            json!({"updated_at": updated, "entries": entries}).to_string(),
+        ).unwrap();
+        println!("None");
+    }
+
     /// Estimate exhaustion from two observations of the same Codex account window.
     /// Parameters: none.
     /// Returns: None.
@@ -2312,16 +2391,48 @@ for method, line in zip(steps, sys.stdin, strict=True):
         write_instance_registry(&sandbox.home, &[(1, account_home.clone())], 1);
         fs::create_dir_all(&account_home).unwrap();
         fs::write(account_home.join("auth.json"), json!({"tokens":{"account_id":"account-one"}}).to_string()).unwrap();
-        let first_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":10, "resets_at": NOW + 1000.0}]})))), ..PollHooks::default() };
-        let second_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":20, "resets_at": NOW + 1000.0}]})))), ..PollHooks::default() };
+        let first_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":10, "resets_at": NOW + 1000.0}, {"label":"week", "used_percent":50, "resets_at": NOW + 1000.0}]})))), ..PollHooks::default() };
+        let second_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":20, "resets_at": NOW + 1000.0}, {"label":"week", "used_percent":51, "resets_at": NOW + 1000.0}]})))), ..PollHooks::default() };
+        let running = |started: f64| json!([{
+            "kind": "codex", "codex_instance": "1", "phase": "RUNNING", "run_active": true,
+            "run_started_at": chrono::DateTime::from_timestamp(started as i64, 0).unwrap().to_rfc3339()
+        }]);
+        let window = |status: Value| status["clis"]["codex"]["instances"][0]["windows"][0].clone();
+
+        write_forecast_activity(&sandbox.home, NOW, running(NOW - 10.0));
         let first = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &first_hooks);
+        assert!(window(first.clone())["exhaustion_seconds"].is_null());
+
+        write_forecast_activity(&sandbox.home, NOW + 60.0, running(NOW - 10.0));
         let second = poll_once(Some(&sandbox.home), Some(&first), Some(NOW + 60.0), None, None, &second_hooks);
-        assert_eq!(second["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"], json!(480.0));
+        assert_eq!(window(second.clone())["exhaustion_seconds"], json!(480.0));
+
         let third = poll_once(Some(&sandbox.home), Some(&second), Some(NOW + 70.0), None, None, &second_hooks);
-        assert_eq!(third["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"], json!(470.0));
+        assert_eq!(window(third)["exhaustion_seconds"], json!(470.0));
+        write_forecast_activity(&sandbox.home, NOW + 71.0, json!([
+            {"kind":"codex", "codex_instance":"1", "phase":"DONE", "run_active":false}
+        ]));
+        let idle = poll_once(Some(&sandbox.home), Some(&second), Some(NOW + 71.0), None, None, &second_hooks);
+        assert!(window(idle)["exhaustion_seconds"].is_null());
+        assert_eq!(window(second.clone())["exhaustion_at"], json!(NOW + 540.0));
+        let weekly = &second["clis"]["codex"]["instances"][0]["windows"][1];
+        assert_eq!(weekly["exhaustion_state"], "after_reset");
+        assert_eq!(weekly["exhaustion_at"], json!(NOW + 3000.0));
+        assert!(weekly["exhaustion_seconds"].is_null());
+        assert_eq!(weekly["exhaustion_valid_until"], json!(NOW + 90.0));
+
+        write_forecast_activity(&sandbox.home, NOW + 120.0, running(NOW - 10.0));
+        let flat = poll_once(Some(&sandbox.home), Some(&second), Some(NOW + 120.0), None, None, &second_hooks);
+        assert!(window(flat.clone())["exhaustion_seconds"].is_null());
+
+        write_forecast_activity(&sandbox.home, NOW + 121.0, running(NOW + 121.0));
+        let resumed = poll_once(Some(&sandbox.home), Some(&flat), Some(NOW + 121.0), None, None, &second_hooks);
+        assert!(window(resumed)["exhaustion_seconds"].is_null());
+
         let reset_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":2, "resets_at": NOW + 5000.0}]})))), ..PollHooks::default() };
-        let reset = poll_once(Some(&sandbox.home), Some(&third), Some(NOW + 120.0), None, None, &reset_hooks);
-        assert!(reset["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"].is_null());
+        write_forecast_activity(&sandbox.home, NOW + 180.0, running(NOW - 10.0));
+        let reset = poll_once(Some(&sandbox.home), Some(&flat), Some(NOW + 180.0), None, None, &reset_hooks);
+        assert!(window(reset)["exhaustion_seconds"].is_null());
         println!("None");
     }
 
@@ -2341,8 +2452,18 @@ for method, line in zip(steps, sys.stdin, strict=True):
             fs::write(path.join("auth.json"), json!({"tokens":{"account_id":id}}).to_string()).unwrap();
         }
         let earlier = PollHooks { codex_metadata_reader: Some(Arc::new(|_, account| Ok(json!({"resets_available":1, "timer_windows":[{"label":"5h", "used_percent":if account == "one" {10} else {40}, "resets_at":NOW + 10000.0}]})))), ..PollHooks::default() };
-        let later = PollHooks { codex_metadata_reader: Some(Arc::new(|_, account| Ok(json!({"resets_available":1, "timer_windows":[{"label":"5h", "used_percent":if account == "one" {20} else {40}, "resets_at":NOW + 10000.0}]})))), ..PollHooks::default() };
+        let later = PollHooks { codex_metadata_reader: Some(Arc::new(|_, account| Ok(json!({"resets_available":1, "timer_windows":[{"label":"5h", "used_percent":if account == "one" {20} else {50}, "resets_at":NOW + 10000.0}]})))), ..PollHooks::default() };
+        let started = chrono::DateTime::from_timestamp(NOW as i64 - 10, 0).unwrap().to_rfc3339();
+        let entries = json!([
+            {"kind":"codex", "codex_instance":"1","phase":"RUNNING","run_active":true,"run_started_at":started},
+            {"kind":"codex", "codex_instance":"2","phase":"RATE_LIMITED","run_active":true,"run_started_at":started},
+            {"kind":"grok", "codex_instance":"2","phase":"RUNNING","run_active":true,"run_started_at":started}
+        ]);
+        write_forecast_activity(&sandbox.home, NOW, entries.clone());
         let first_poll = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &earlier);
+        let stale = poll_once(Some(&sandbox.home), Some(&first_poll), Some(NOW + 60.0), None, None, &later);
+        assert!(stale["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"].is_null());
+        write_forecast_activity(&sandbox.home, NOW + 60.0, entries);
         let next = poll_once(Some(&sandbox.home), Some(&first_poll), Some(NOW + 60.0), None, None, &later);
         assert_eq!(next["clis"]["codex"]["instances"][0]["windows"][0]["exhaustion_seconds"], json!(480.0));
         assert!(next["clis"]["codex"]["instances"][1]["windows"][0]["exhaustion_seconds"].is_null());
