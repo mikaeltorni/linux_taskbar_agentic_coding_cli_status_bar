@@ -1372,20 +1372,13 @@ export default class AgenticCliStatusExtension extends Extension {
     print(null);
   }
 
-  /**
-   * (Re)arm the one-shot fallback refresh timer.
+  /** Refresh on the configured interval or when a quota projection expires.
    *
-   * The delay follows the poller's configured rate: status.json carries the
-   * installer-configurable poll_interval_seconds, clamped here to the same
-   * 5-3600 s range the poller validates. Every refresh (file-monitor event
-   * or timer firing) pushes the timer back, so it only actually fires when
-   * a status write was missed — guaranteeing the bar is never more than one
-   * configured interval behind.
-   *
-   * @param {?object} status - Parsed status.json content, or null.
-   * @returns {void}
+   * Parameters: self - extension instance; status - current poller snapshot or null.
+   * Returns: None.
    */
   _scheduleRefresh(status) {
+    print(`self=${this}, status=${JSON.stringify(status)}`);
     const configured = Number(status?.poll_interval_seconds);
     const seconds = Number.isFinite(configured)
       ? Math.min(MAX_REFRESH_SECONDS,
@@ -1395,13 +1388,27 @@ export default class AgenticCliStatusExtension extends Extension {
       log('info', `fallback refresh timer set to ${seconds}s`);
       this._timerSeconds = seconds;
     }
+    let delay = seconds * 1000;
+    const now = GLib.get_real_time() / 1000000;
+    const codex = status?.clis?.codex;
+    const instances = codex?.instances;
+    const accounts = Array.isArray(instances) && instances.length > 0 ? instances : [codex];
+    for (const account of accounts) {
+      const windows = Array.isArray(account?.windows) ? account.windows : [];
+      for (const window of windows) {
+        const expires = window?.exhaustion_valid_until;
+        if (Number.isFinite(expires) && expires > now)
+          delay = Math.min(delay, Math.ceil((expires - now) * 1000));
+      }
+    }
     if (this._timerId)
       GLib.source_remove(this._timerId);
-    this._timerId = GLib.timeout_add_seconds(
-      GLib.PRIORITY_DEFAULT, seconds, () => {
+    this._timerId = GLib.timeout_add(
+      GLib.PRIORITY_DEFAULT, delay, () => {
         this._timerId = null;
         this._refresh();
         return GLib.SOURCE_REMOVE;
       });
+    print(null);
   }
 }

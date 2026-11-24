@@ -2724,3 +2724,41 @@ fn status_panel_routes_each_codex_account_to_its_menu() {
     assert_eq!(run_gjs(&[], &probe), serde_json::json!([["Codex 1","idle"],["Codex 2","active"]]));
     println!("None");
 }
+
+/// Refresh a displayed quota forecast when its validity expires between poll ticks.
+/// Parameters: none.
+/// Returns: None.
+#[test]
+fn status_panel_refreshes_at_projection_expiry() {
+    println!("parameters=none");
+    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
+    let method = extract_method(&source.replace("\n  _scheduleRefresh(", "\n    _scheduleRefresh("), "_scheduleRefresh");
+    let probe = format!(r#"
+      let now = 2000;
+      const timers = [];
+      const GLib = {{
+        PRIORITY_DEFAULT: 0,
+        get_real_time: () => now * 1000000,
+        timeout_add_seconds: (_, seconds) => timers.push(seconds * 1000),
+        timeout_add: (_, milliseconds) => timers.push(milliseconds),
+        source_remove: () => {{}},
+      }};
+      const MIN_REFRESH_SECONDS=5, DEFAULT_REFRESH_SECONDS=5, MAX_REFRESH_SECONDS=3600;
+      const log=()=>{{}};
+      class Extension {{ {method} }}
+      const extension = new Extension();
+      const status = {{poll_interval_seconds:600,clis:{{codex:{{instances:[
+        {{windows:[{{exhaustion_valid_until:2030}}]}},
+        {{windows:[{{exhaustion_valid_until:2010}}]}},
+      ]}}}}}};
+      extension._scheduleRefresh(status);
+      now=2010;
+      extension._scheduleRefresh(status);
+      now=2030;
+      extension._scheduleRefresh(status);
+      extension._scheduleRefresh({{clis:{{codex:{{instances:{{length:1}}, windows:{{}}}}}}}});
+      print(JSON.stringify(timers));
+    "#);
+    assert_eq!(run_gjs(&[], &probe), serde_json::json!([10000, 20000, 600000, 5000]));
+    println!("None");
+}
