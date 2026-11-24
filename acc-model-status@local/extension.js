@@ -1229,6 +1229,51 @@ function panelInstanceNumbers(entries, codexInstanceCount) {
 }
 
 /**
+ * Read the local usage poller's snapshot for the account badges.
+ * Parameters: file - agentic-cli-status status.json.
+ * Returns: the parsed snapshot, or null when unavailable.
+ */
+function readPanelQuotaSnapshot(file) {
+    print(`file=${file}`);
+    let snapshot = null;
+    try {
+        const [ok, bytes] = file.load_contents(null);
+        if (ok)
+            snapshot = JSON.parse(new TextDecoder().decode(bytes));
+    } catch (_error) {
+        // The optional usage poller may be absent or replacing its snapshot.
+    }
+    print(snapshot);
+    return snapshot;
+}
+
+/**
+ * Classify exhausted Codex logins from their own allowance and reset time.
+ * Parameters: snapshot - parsed usage poller document; now - epoch seconds.
+ * Returns: the set of exhausted account numbers.
+ */
+function exhaustedCodexAccounts(snapshot, now) {
+    print(`snapshot=${snapshot} now=${now}`);
+    const result = new Set();
+    const codex = snapshot?.clis?.codex;
+    if (codex?.enabled !== false && Array.isArray(codex?.instances)) {
+        for (const account of codex.instances) {
+            const id = account?.id;
+            if (!Number.isSafeInteger(id) || id < 1 || account.error)
+                continue;
+            const windows = Array.isArray(account.windows) ? account.windows : [];
+            if (account.credits?.blocked === true || windows.some(window =>
+                ['5h', 'week', 'month'].includes(window?.label) &&
+                Number.isFinite(window.used_percent) && window.used_percent >= 100 &&
+                Number.isFinite(window.resets_at) && window.resets_at > now))
+                result.add(id);
+        }
+    }
+    print([...result]);
+    return result;
+}
+
+/**
  * Stack runtime, branded progress and the instance and forecast footer in the panel height.
  * Parameters: agent - scoped open-window agent whose bar and timing are displayed;
  * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering;
@@ -2644,6 +2689,13 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         this._panelProgressKey = key;
     }
     const instanceNumbers = panelInstanceNumbers(entries, payload?.codexInstanceCount);
+    const showCodexAccounts = payload?.codexInstanceCount > 1;
+    let exhaustedAccounts = new Set();
+    if (showCodexAccounts && entries.some(({agent, provider}) => (agent.kind || provider.kind) === 'codex')) {
+        this._codexLimitFile ??= Gio.File.new_for_path(
+            GLib.build_filenamev([GLib.get_user_state_dir(), 'agentic-cli-status', 'status.json']));
+        exhaustedAccounts = exhaustedCodexAccounts(readPanelQuotaSnapshot(this._codexLimitFile), Date.now() / 1000);
+    }
     for (const entry of entries) {
         const entryStale = entry.agent.harbor ? false : stale;
         const bar = this._panelProgressBars.get(entry.key);
@@ -2669,7 +2721,10 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         estimate.visible = Boolean(estimate.text);
         estimate.opacity = entryStale ? 128 : 255;
         const instance = bar._amsInstanceLabel;
-        instance.text = String(instanceNumbers.get(entry.key) ?? '');
+        const instanceNumber = instanceNumbers.get(entry.key);
+        instance.text = String(instanceNumber ?? '');
+        instance.style = showCodexAccounts && kind === 'codex' && exhaustedAccounts.has(instanceNumber)
+            ? 'color: #ef4444;' : null;
         instance.visible = Boolean(instance.text);
         instance.opacity = estimate.opacity;
         const now = Date.now();

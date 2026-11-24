@@ -111,6 +111,7 @@ const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'pa
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator', 'taskEstimateText',
     ...(source.includes('function buildPanelTaskCell(') ? ['panelAgentEstimateText', 'panelInstanceNumbers', 'buildPanelTaskCell'] : []),
+    ...(source.includes('function exhaustedCodexAccounts(') ? ['readPanelQuotaSnapshot', 'exhaustedCodexAccounts'] : []),
     ...(source.includes('function panelResetRemainingSeconds(') ? ['panelResetRemainingSeconds'] : []),
     ...(source.includes('function taskMarkedDone(') ? ['taskMarkedDone'] : []),
     ...(source.includes('function displayedPhase(') ? ['displayedPhase'] : []),
@@ -788,6 +789,7 @@ const numberedCodex = [
     {...numberedBase, session_id: 'cx-one', kind: 'codex', codex_instance: 1, instance: '3'},
     {...numberedBase, session_id: 'cx-two', kind: 'codex', codex_instance: 2, instance: '8'},
     {...numberedBase, session_id: 'cx-unknown', kind: 'codex', instance: '6'},
+    {...numberedBase, session_id: 'cx-one-done', kind: 'codex', codex_instance: 1, phase: 'DONE'},
 ];
 const numberedVibe = [
     {...numberedBase, session_id: 'va-one', kind: 'vibe', instance: '1'},
@@ -799,10 +801,19 @@ const numberedPayload = {codexInstanceCount: 2, providers: [
     {kind: 'codex', agents: numberedCodex}, {kind: 'vibe', agents: numberedVibe},
     {kind: 'claude', agents: [{...numberedBase, session_id: 'cc-only', instance: '1'}]},
 ]};
-const numberedButton = Object.assign({_iconsDir: iconsDir, _box: new Actor()}, owners.updater);
+const quotaNow = Math.floor(Date.now() / 1000);
+const quotaAccounts = [
+    {id: 1, windows: [{label: '5h', used_percent: 100, resets_at: quotaNow + 600}]},
+    {id: 2, windows: [{label: 'week', used_percent: 99, resets_at: quotaNow + 600}]},
+];
+let quotaContents = () => JSON.stringify({clis: {codex: {instances: quotaAccounts}}});
+const quotaFile = {load_contents: () => [true, new TextEncoder().encode(quotaContents())]};
+const numberedButton = Object.assign({
+    _iconsDir: iconsDir, _box: new Actor(), _codexLimitFile: quotaFile,
+}, owners.updater);
 numberedButton._updatePanelProgress(numberedPayload, false);
 for (const [key, expected] of [
-    ['cx-one', '1'], ['cx-two', '2'], ['cx-unknown', ''],
+    ['cx-one', '1'], ['cx-one-done', '1'], ['cx-two', '2'], ['cx-unknown', ''],
     ['va-one', '1'], ['va-ten', '10'], ['va-invalid', ''], ['va-other', ''], ['cc-only', ''],
 ]) {
     const bar = numberedButton._panelProgressBars.get(key);
@@ -817,6 +828,27 @@ for (const [key, expected] of [
         footer.children[1] === estimate && estimate.x_align === Clutter.ActorAlign.END,
         'instance stays on the left and ETA is anchored to the right within the same footer');
 }
+const badgeFor = key => numberedButton._panelProgressBars.get(key)._amsInstanceLabel;
+check(badgeFor('cx-one').style === 'color: #ef4444;' &&
+    badgeFor('cx-one-done').style === 'color: #ef4444;',
+    'every badge for an exhausted Codex account is red regardless of task phase');
+check(!badgeFor('cx-two').style && !badgeFor('va-one').style,
+    'available Codex and unrelated project-local numbers keep their usual color');
+quotaAccounts[0].windows[0].resets_at = quotaNow - 1;
+quotaAccounts[1].windows[0].used_percent = 100;
+numberedButton._updatePanelProgress(numberedPayload, false);
+check(!badgeFor('cx-one').style && badgeFor('cx-two').style === 'color: #ef4444;',
+    'rollover restores the default color and a newly exhausted weekly limit turns red');
+quotaAccounts[0].windows = [{label: 'luna_reserve', used_percent: 100, resets_at: quotaNow + 600}];
+quotaAccounts[1].windows = [];
+quotaAccounts[1].credits = {blocked: true};
+numberedButton._updatePanelProgress(numberedPayload, false);
+check(!badgeFor('cx-one').style && badgeFor('cx-two').style === 'color: #ef4444;',
+    'a supplementary reserve alone leaves the badge normal, and a credit block colors its account red');
+quotaContents = () => '{broken';
+numberedButton._updatePanelProgress(numberedPayload, false);
+check(!badgeFor('cx-one').style && !badgeFor('cx-two').style,
+    'an unreadable quota snapshot leaves account colors at their default');
 const numberedBar = numberedButton._panelProgressBars.get('cx-two');
 const numberedLabel = numberedBar._amsInstanceLabel;
 numberedCodex[1].codex_instance = 1;
