@@ -394,33 +394,46 @@ pub fn collect_codex_accounts(home: &Path, now: Option<f64>, last: Option<&Value
 /// The account ID from each home's auth file is checked against the response by
 /// `read`, so a selected-login change cannot attach one account's credits to
 /// another. Failed reads hide old counts until the next retry.
+/// Parameters: snapshot - current status; user_home - user directory; now - epoch seconds; read - verified count reader.
+/// Returns: snapshot with the latest reset availability.
 pub fn refresh_codex_reset_counts(
     mut snapshot: Value,
     user_home: &Path,
     now: f64,
     read: &dyn Fn(&Path, &str) -> Result<i64, String>,
 ) -> Value {
+    eprintln!("snapshot={snapshot} user_home={user_home:?} now={now} read={read:p}");
+    /// Read the registered login identifier from Codex's auth file.
+    /// Parameters: codex_home - account directory.
+    /// Returns: account ID, or None if unavailable.
     fn account_id(codex_home: &Path) -> Option<String> {
-        let text = std::fs::read_to_string(codex_home.join("auth.json")).ok()?;
-        let auth: Value = serde_json::from_str(&text).ok()?;
-        auth.pointer("/tokens/account_id")?
-            .as_str()
-            .map(str::to_owned)
+        eprintln!("codex_home={codex_home:?}");
+        let result = std::fs::read_to_string(codex_home.join("auth.json")).ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|auth| auth.pointer("/tokens/account_id")?.as_str().map(str::to_owned));
+        eprintln!("{result:?}");
+        result
     }
 
+    /// Refresh one account's cached reset availability when due.
+    /// Parameters: row - account status; codex_home - account directory; now - epoch seconds; read - verified count reader.
+    /// Returns: None.
     fn refresh_one(
         row: &mut Value,
         codex_home: &Path,
         now: f64,
         read: &dyn Fn(&Path, &str) -> Result<i64, String>,
     ) {
+        eprintln!("row={row} codex_home={codex_home:?} now={now} read={read:p}");
         let Some(account_id) = account_id(codex_home) else {
+            eprintln!("None");
             return;
         };
         if row["reset_probe_at"]
             .as_f64()
             .is_some_and(|last| now - last < CODEX_RESET_CREDITS_MIN_INTERVAL_SECONDS)
         {
+            eprintln!("None");
             return;
         }
         row["reset_probe_at"] = json!(now);
@@ -453,6 +466,7 @@ pub fn refresh_codex_reset_counts(
                 ));
             }
         }
+        eprintln!("None");
     }
 
     if let Some(rows) = snapshot.get_mut("instances").and_then(Value::as_array_mut) {
@@ -476,6 +490,7 @@ pub fn refresh_codex_reset_counts(
     } else {
         refresh_one(&mut snapshot, &user_home.join(".codex"), now, read);
     }
+    eprintln!("{snapshot}");
     snapshot
 }
 
