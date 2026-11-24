@@ -463,8 +463,10 @@ the bar. The target includes the padding around the label across the full
 taskbar height. Click the same area again to close the popup, or click another
 workspace label with hidden tasks to switch to its popup.
 **Ctrl+left-click** an instance in the popup to put it back on the bar. The
-workspace label stays available when its last instance is hidden. Hidden state
-lasts until you restore the instance or the extension restarts.
+workspace label stays available when its last instance is hidden. A small
+teal number above the label shows how many instances are hidden in that
+workspace. It disappears when the count reaches zero. Hidden state lasts
+until you restore the instance or the extension restarts.
 
 To finish a visible task, **Ctrl+left-click** its row in the right-click
 details menu. The details menu closes and shows the task confirmation above
