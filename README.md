@@ -539,19 +539,14 @@ with `-` (for example `-02:45`). A partial minute stays visible as `-00:01`.
 The countdown is yellow-green (`#b5d747`), or red (`#ef4444`) when the session
 is interrupted. Finished work does not show this countdown.
 
-When a task finishes, its timer freezes at the final duration and flashes
-green to white with the completed bar on the same three-second cycle. It stays
-visible while that session is unread, until opening or focusing its terminal
-acknowledges the completion. Acknowledgement hides the timer and stops its
-flash; switching away does not bring it back. Other unread sessions retain
-their own timers. Starting another task shows a fresh running clock. Stopped,
-interrupted and other unfinished idle sessions have no timer.
-
-The taskbar retains the running start across completion and workspace moves.
-After an extension reload, an unread completion can use ACC's published
-completed active-duration measurement when its start is unavailable. Unknown
-or invalid timing is omitted. Stale completed timers stay dim and stop flashing,
-matching their bars.
+When a task is Ready and ACC publishes its confirmed finish, the upper label
+shows how long ago it finished, using the CLI's compact format such as
+`35s ago`, `8m ago`, or `2h ago`. Unread ages flash green to white with the
+completed bar on the same three-second cycle. Opening or focusing the terminal
+acknowledges the completion and leaves the age visible in steady green.
+Starting another task shows its own running clock. The confirmed finish is
+enough to restore the age after a workspace move or extension reload. An
+unknown or invalid finish leaves the age blank.
 
 The lower right shows the running agent's remaining estimate in 13.5px
 monospace text. The lower left shows the account number when multiple Codex
@@ -562,7 +557,7 @@ there. The estimate shows only the compact duration, such as `~3m` or
 launch countdown is showing, or when no estimate is available. A rate-limited
 wait does not put time left under the bar. The far-right aggregate time estimate is removed. Timing labels
 stay readable while the progress fill pulses, update in place with the menu
-open, and dim when the snapshot is stale; stale runtimes stop ticking.
+open, and freeze at reduced opacity when the snapshot is stale.
 All timings come from ACC's local `model_status_bar.json` data, with no AI
 requests or writes to history or notes. Install/update with
 `bash install.sh --select model_status_bar`. On Wayland, newly installed
