@@ -454,7 +454,7 @@ When multiple Codex logins are registered, each Codex bar shows its account
 number in the footer. The number turns red when that account's quota is
 exhausted and returns to its usual blue when quota becomes available again.
 The panel reads each account's usage from the local poller's snapshot. All
-footer instance numbers use a 16.5 px monospace font.
+footer instance numbers use a 13.75 px monospace font.
 
 **Ctrl+left-click** an instance bar, or its task row in the right-click details
 menu, to ask **“Close this task and mark Done? Right-click to confirm”**. The
