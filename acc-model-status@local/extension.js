@@ -2548,14 +2548,13 @@ class AccModelStatusButton extends PanelMenu.Button {
         print(undefined);
     }
 
-    /** Toggle the workspace's hidden-task popup.
+    /** Toggle the workspace's hidden-task popup, replacing any other workspace.
      * Parameters: this - status button; workspace - clicked workspace number.
      * Returns: undefined.
      */
     _togglePanelRecovery(workspace) {
         print(`this=${this} workspace=${workspace}`);
-        if (!this._openPanelRecovery.delete(workspace))
-            this._openPanelRecovery.add(workspace);
+        this._recoveryWorkspace = this._recoveryWorkspace === workspace ? null : workspace;
         this._updatePanelProgress(this._panelProgressPayload, this._panelProgressStale);
         print(undefined);
     }
@@ -2574,20 +2573,19 @@ class AccModelStatusButton extends PanelMenu.Button {
         popup.setPosition(group, 0.1);
         popup.setSourceAlignment(0);
         popup.setArrowActor(label);
-        this._panelRecoveryPopups.push(popup);
+        this._panelRecoveryPopup = popup;
         popup.open(BoxPointer.PopupAnimation.NONE);
         print(undefined);
     }
 
-    /** Release the current recovery popup actors before rebuilding or disabling the bar.
+    /** Release the current recovery popup before rebuilding or disabling the bar.
      * Parameters: this - status button.
      * Returns: undefined.
      */
-    _clearPanelRecoveryPopups() {
+    _destroyPanelRecoveryPopup() {
         print(`this=${this}`);
-        for (const popup of this._panelRecoveryPopups)
-            popup.destroy();
-        this._panelRecoveryPopups = [];
+        this._panelRecoveryPopup?.destroy();
+        this._panelRecoveryPopup = null;
         print(undefined);
     }
 
@@ -2688,10 +2686,8 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
     this._panelProgressStale = stale;
     if (!this._panelProgress) {
         this._hiddenPanelTasks = new Set();
-        this._openPanelRecovery = new Set();
-        this._panelRecoveryPopups = [];
         this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
-        this._panelProgress.connect('destroy', () => this._clearPanelRecoveryPopups());
+        this._panelProgress.connect('destroy', () => this._destroyPanelRecoveryPopup());
         this._panelProgressBars = new Map();
         this._panelProgressKey = '';
     }
@@ -2711,15 +2707,13 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
     const hidden = this._hiddenPanelTasks;
     const recoverable = new Set(groups.filter(group => group.entries.some(entry => hidden.has(entry.key)))
         .map(group => group.workspace));
-    for (const workspace of this._openPanelRecovery) {
-        if (!recoverable.has(workspace))
-            this._openPanelRecovery.delete(workspace);
-    }
-    const key = JSON.stringify(groups.map(group => [group.workspace, this._openPanelRecovery.has(group.workspace), group.entries.map(entry =>
-        [entry.key, monitorSortValue(entry.agent.monitor), hidden.has(entry.key)])]));
+    if (!recoverable.has(this._recoveryWorkspace))
+        this._recoveryWorkspace = null;
+    const key = JSON.stringify([this._recoveryWorkspace, groups.map(group => [group.workspace,
+        group.entries.map(entry => [entry.key, monitorSortValue(entry.agent.monitor), hidden.has(entry.key)])])]);
     if (key !== this._panelProgressKey) {
         this._hideTaskHover();
-        this._clearPanelRecoveryPopups();
+        this._destroyPanelRecoveryPopup();
         this._panelProgress.destroy_all_children();
         this._panelProgressBars.clear();
         for (const [index, group] of groups.entries()) {
@@ -2734,7 +2728,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
             groupActor._amsWorkspace = group.workspace;
             const box = new St.BoxLayout({style_class: 'ams-panel-workspace',
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
-            const recoveryBox = this._openPanelRecovery.has(group.workspace)
+            const recoveryBox = this._recoveryWorkspace === group.workspace
                 ? new St.BoxLayout({style_class: 'ams-panel-recovery', height: 48}) : null;
             let previousMonitor = null;
             for (const entry of group.entries) {

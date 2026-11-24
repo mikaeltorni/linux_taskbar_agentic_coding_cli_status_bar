@@ -174,7 +174,7 @@ ${snippets.join('\n')}
     class Destroyer extends St.BoxLayout { _hideTaskConfirmation = () => {}; ${declaration('_hideTaskHover', true)} ${declaration('destroy', true)} }
     return {agentPhaseBadgeColor, panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer, paintPanelWorkspaceSeparator,
-        updater: {${['_hideTaskHover', '_setPanelTaskHidden', '_togglePanelRecovery', '_showPanelRecovery', '_clearPanelRecoveryPopups', '_refresh', '_icon', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
+        updater: {${['_hideTaskHover', '_setPanelTaskHidden', '_togglePanelRecovery', '_showPanelRecovery', '_destroyPanelRecoveryPopup', '_refresh', '_icon', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _updatePanelTaskEstimate(') ? ['_updatePanelTaskEstimate'] : []),
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
 const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor, Gio, imports.gi.Pango, BoxPointer, Main);
@@ -1668,3 +1668,28 @@ w4Recovery['button-press-event'](w4Recovery, leftClick);
 const activeOnDisable = recoveryPointers.at(-1);
 hideButton._panelProgress.destroy();
 check(activeOnDisable.destroyed, 'disabling the panel releases its recovery popup chrome');
+
+// Switching between two workspaces closes the previous popup without restoring its tasks.
+const switchButton = Object.assign({_iconsDir: iconsDir, _box: new Actor(), _syncTaskHover: () => {}}, owners.updater);
+switchButton._updatePanelProgress(hidePayload, false);
+for (const task of hideTasks) {
+    const taskCell = switchButton._panelProgressBars.get(task.session_id).get_parent();
+    taskCell['button-press-event'](taskCell, ctrlClick);
+}
+for (const [workspace, session] of [[2, 'hide-a'], [4, 'hide-b'], [2, 'hide-a']]) {
+    const previouslyOpen = recoveryPointers.filter(popup => !popup.destroyed);
+    const workspaceTarget = workspaceLabel(switchButton, workspace);
+    workspaceTarget['button-press-event'](workspaceTarget, leftClick);
+    const current = recoveryPointers.filter(popup => !popup.destroyed);
+    check(current.length === 1 && current[0].anchor === workspaceLabel(switchButton, workspace),
+        `W${workspace} replaces any previous workspace popup`);
+    check(previouslyOpen.every(popup => popup.destroyed), `W${workspace} destroys previous popup chrome`);
+    check(current[0].children[0].children[0]._amsBar._amsAgent.session_id === session,
+        `W${workspace} still has its exact hidden task after switching`);
+}
+check(visibleBars(switchButton._panelProgress).length === 0, 'popup switching never restores either task');
+const openAfterSwitch = recoveryPointers.at(-1);
+switchButton._updatePanelProgress({providers: [{kind: 'codex', agents: [hideTasks[1]]}]}, false);
+check(openAfterSwitch.destroyed && recoveryPointers.every(popup => popup.destroyed),
+    'closing the last hidden task in an open workspace removes its popup');
+print('PASS: W2 to W4 to W2 switches one popup while preserving hidden state.');
