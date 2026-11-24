@@ -456,13 +456,19 @@ exhausted and returns to its usual blue when quota becomes available again.
 The panel reads each account's usage from the local poller's snapshot. All
 footer instance numbers use a 13.75 px monospace font.
 
-**Ctrl+left-click** an instance bar, or its task row in the right-click details
-menu, to ask **“Close this task and mark Done? Right-click to confirm”**. The
-confirmation shows the colored task details above the selected instance. From
-the details menu, the menu closes before the confirmation appears.
-**Right-click** the same bar or the confirmation to finish that task and close
-its CLI window. **Escape** or a click outside cancels. Ctrl+left-click itself
-never completes or closes a task.
+**Ctrl+left-click** an instance on the taskbar to hide it temporarily. Its
+task keeps running while it is hidden. Click the workspace label, such as
+**W2** or **W4**, to show that workspace's hidden instances in a popup above
+the bar. Click the same label again to close the popup, or click another
+workspace label with hidden tasks to switch to its popup.
+**Ctrl+left-click** an instance in the popup to put it back on the bar. The
+workspace label stays available when its last instance is hidden. Hidden state
+lasts until you restore the instance or the extension restarts.
+
+To finish a visible task, **Ctrl+left-click** its row in the right-click
+details menu. The details menu closes and shows the task confirmation above
+the instance. **Right-click** the same bar or the confirmation to mark the
+task Done and close its CLI window. **Escape** or a click outside cancels.
 
 This uses Phrase Automation's existing focused-task completion service: a
 private timestamped notes backup, the move to Done, and cleanup of the exact
