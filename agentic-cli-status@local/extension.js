@@ -109,48 +109,6 @@ function statusFilePath() {
   return GLib.build_filenamev([stateHome, 'agentic-cli-status', 'status.json']);
 }
 
-/** Read ACC's current live-session publication, if available.
- * Parameters: none.
- * Returns: parsed payload or null when unavailable.
- */
-function readLiveSessions() {
-  print('parameters=none');
-  let result = null;
-  try {
-    const dir = GLib.getenv('CODEX_AGENT_TRACKER_STATE_DIR') ||
-      GLib.build_filenamev([GLib.get_user_state_dir(), 'codex-agent-tracker']);
-    const file = Gio.File.new_for_path(GLib.build_filenamev([dir, 'model_status_bar.json']));
-    const [ok, bytes] = file.load_contents(null);
-    if (ok) {
-      const payload = JSON.parse(new TextDecoder().decode(bytes));
-      result = {updated_at: payload?.updated_at, providers: Array.isArray(payload?.providers)
-        ? payload.providers.filter(provider => provider?.kind === 'codex').map(provider => ({
-          kind: 'codex', agents: Array.isArray(provider.agents)
-            ? provider.agents.map(agent => ({codex_instance: agent?.codex_instance})) : [],
-        })) : []};
-    }
-  } catch (_error) {
-    // A missing or malformed publication cannot establish an active session.
-  }
-  print(JSON.stringify(result));
-  return result;
-}
-
-/** Check whether a Codex account has a live published session.
- * Parameters: payload - ACC session publication; instance - Codex account id; now - epoch seconds.
- * Returns: true when a current publication contains a matching session.
- */
-function hasLiveCodexSession(payload, instance, now) {
-  print(`payload=${JSON.stringify(payload)}, instance=${instance}, now=${now}`);
-  const updated = Date.parse(payload?.updated_at) / 1000;
-  const current = Number.isFinite(updated) && updated <= now + 30 && now - updated <= 120;
-  const result = current && Array.isArray(payload?.providers) && payload.providers.some(provider =>
-    provider?.kind === 'codex' && Array.isArray(provider.agents) &&
-    provider.agents.some(agent => Number(agent?.codex_instance || 1) === Number(instance)));
-  print(result);
-  return result;
-}
-
 /**
  * Resolve the poller's config file path honoring XDG_CONFIG_HOME.
  *
@@ -1066,19 +1024,23 @@ function resetsText(epoch, label) {
   return ` — resets ${reset}`;
 }
 
-/** Describe a Codex window's projected exhaustion time.
- * Parameters: window - published rate-limit window and forecast.
- * Returns: short forecast text for the account menu.
+/** Describe a current, measured Codex window projection.
+ * Parameters: window - published rate-limit window; now - current epoch seconds.
+ * Returns: short forecast text for the account menu, or empty text.
  */
-function exhaustionText(window) {
-  print(`window=${JSON.stringify(window)}`);
-  const seconds = window?.exhaustion_seconds;
-  let result = window?.exhaustion_state === 'after_reset' ? ' — not expected before reset' :
-    window?.exhaustion_state === 'stale' ? ' — rate unavailable' : ' — estimating usage rate';
-  if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0) {
-    const minutes = Math.ceil(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    result = minutes < 1 ? ' — limit reached' : hours ? ` — limit in ${hours}h ${minutes % 60}m` : ` — limit in ${minutes}m`;
+function exhaustionText(window, now) {
+  print(`window=${JSON.stringify(window)}, now=${now}`);
+  const deadline = window?.exhaustion_at;
+  const expires = window?.exhaustion_valid_until;
+  let result = '';
+  if (Number.isFinite(expires) && expires > now && Number.isFinite(deadline) && deadline > now) {
+    if (window.exhaustion_state === 'after_reset') {
+      result = ' — not expected before reset';
+    } else if (window.exhaustion_state === 'active') {
+      const minutes = Math.ceil((deadline - now) / 60);
+      const hours = Math.floor(minutes / 60);
+      result = hours ? ` — limit in ${hours}h ${minutes % 60}m` : ` — limit in ${minutes}m`;
+    }
   }
   print(result);
   return result;
@@ -1138,7 +1100,6 @@ class AgenticCliStatusButton extends PanelMenu.Button {
    */
     render(status) {
     print(`self=${this}, status=${JSON.stringify(status)}`);
-    const sessions = this._liveSessions;
     status = statusIsCurrent(status, GLib.get_real_time() / 1000000) ? status : null;
     const codex = verifiedCodexSnapshot(status?.clis?.codex);
     this._codexStatus = status ? {...status, clis: {...status.clis, codex}} : null;
@@ -1190,15 +1151,13 @@ class AgenticCliStatusButton extends PanelMenu.Button {
         for (const instance of snapshot.instances) {
           if (!this.menu.isEmpty())
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-          this._appendMenuSection(codexInstanceTitle(instance), instance,
-            Boolean(sessions) && hasLiveCodexSession(sessions, instance.id, GLib.get_real_time() / 1000000));
+          this._appendMenuSection(codexInstanceTitle(instance), instance);
         }
         continue;
       }
       if (!this.menu.isEmpty())
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-      this._appendMenuSection(names[cliId], snapshot, cliId === 'codex' && Boolean(sessions) &&
-        hasLiveCodexSession(sessions, snapshot.selected || 1, GLib.get_real_time() / 1000000));
+      this._appendMenuSection(names[cliId], snapshot);
     }
     print(null);
   }
@@ -1292,11 +1251,11 @@ class AgenticCliStatusButton extends PanelMenu.Button {
   /**
    * Append one CLI's detail lines to the popup menu.
    *
-   * Parameters: self - button; name - CLI title; snapshot - usage data; showProjection - whether the account has a live session.
+   * Parameters: self - button; name - CLI title; snapshot - usage data for this CLI or account.
    * Returns: None.
    */
-  _appendMenuSection(name, snapshot, showProjection = false) {
-    print(`self=${this}, name=${name}, snapshot=${JSON.stringify(snapshot)}, showProjection=${showProjection}`);
+  _appendMenuSection(name, snapshot) {
+    print(`self=${this}, name=${name}, snapshot=${JSON.stringify(snapshot)}`);
     // A carried plan can belong to the subscription state from before an
     // endpoint error; do not present it as current while the reading is
     // unknown.
@@ -1333,7 +1292,7 @@ class AgenticCliStatusButton extends PanelMenu.Button {
       item.label.clutter_text.set_markup(
         `   ${GLib.markup_escape_text(title, -1)}: ` +
         `<span foreground="${percentColor(left)}">${left}% left</span>` +
-        GLib.markup_escape_text(reset + (name.startsWith('Codex') && showProjection ? exhaustionText(window) : ''), -1));
+        GLib.markup_escape_text(reset + (name.startsWith('Codex') && left > 0 ? exhaustionText(window, nowEpoch) : ''), -1));
       this.menu.addMenuItem(item);
     }
     if (name === 'Cursor') {
@@ -1405,7 +1364,6 @@ export default class AgenticCliStatusExtension extends Extension {
       log('debug', `status file unreadable: ${error}`);
     }
     try {
-      this._button._liveSessions = readLiveSessions();
       this._button.render(status);
     } catch (error) {
       log('error', `render failed: ${error}`);

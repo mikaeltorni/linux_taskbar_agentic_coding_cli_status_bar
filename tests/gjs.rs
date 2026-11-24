@@ -267,7 +267,7 @@ fn gradient_and_segments() {
         return;
     };
     assert_eq!(js["exhaustion_estimate"], " — limit in 8m");
-    assert_eq!(js["exhaustion_unknown"], " — estimating usage rate");
+    assert_eq!(js["exhaustion_unknown"], "");
     assert_eq!(js["exhaustion_after_reset"], " — not expected before reset");
     assert!(js["forecast_market_counts"][1]["text"].as_str().unwrap().contains("0: 37% · 1: 46% · 4+: 33%"));
     assert_eq!(js["missing_forecast_volume"], "");
@@ -2659,66 +2659,51 @@ print(JSON.stringify({initial, prompt, inactive, missing, hover}));
     println!("None");
 }
 
-/// Show projected limits only for Codex accounts with a live session.
+/// Show only current, measured projections in the Codex popup.
 /// Parameters: none.
 /// Returns: None.
 #[test]
 fn codex_menu_hides_projection_for_idle_instances() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
-    let method = extract_method(&source.replace("
-  _appendMenuSection(", "
-    _appendMenuSection("), "_appendMenuSection");
+    let method = extract_method(&source.replace("\n  _appendMenuSection(", "\n    _appendMenuSection("), "_appendMenuSection");
+    let helper = extract_function(&source, "exhaustionText");
     let probe = format!(r#"
+        {helper}
         const GLib = {{ get_real_time:()=>2000000000, markup_escape_text:s=>s }};
         const PopupMenu = {{PopupMenuItem: class {{ constructor() {{ this.label={{clutter_text:{{set_markup:s=>lines.push(s)}}}}; }} }} }};
         const cliSectionHeading = n=>n, creditDetailText = ()=>'', percentLeft = ()=>80,
           resetPassed = ()=>false, resetsText = ()=>' — resets later', codexWindowTitle = ()=>'5h',
-          percentColor = ()=>'green', exhaustionText = ()=>' — limit in 8m';
+          percentColor = ()=>'green';
         let lines=[]; class Button {{ {method} }}
         const button=new Button(); button.menu={{addMenuItem:()=>{{}}}};
-        const snapshot={{windows:[{{label:'5h'}}]}};
-        button._appendMenuSection('Codex 1',snapshot,true); const active=lines.pop();
-        button._appendMenuSection('Codex 2',snapshot,false); const idle=lines.pop();
-        print(JSON.stringify({{active,idle}}));
+        const active={{exhaustion_state:'active', exhaustion_at:2480, exhaustion_seconds:480, exhaustion_valid_until:2020}};
+        const variants={{active, idle:{{exhaustion_state:'idle'}}, expired:{{...active, exhaustion_valid_until:2000}},
+          flat:{{exhaustion_state:'estimating'}}, legacy:{{exhaustion_state:'active', exhaustion_seconds:480}},
+          afterReset:{{...active, exhaustion_state:'after_reset', exhaustion_seconds:null}}}};
+        for (const [name, window] of Object.entries(variants)) {{
+          button._appendMenuSection('Codex',{{windows:[{{label:'5h', ...window}}]}});
+          variants[name]=lines.pop();
+        }}
+        print(JSON.stringify(variants));
     "#);
     let result = run_gjs(&[], &probe);
     assert!(result["active"].as_str().unwrap().contains("limit in 8m"));
-    assert!(!result["idle"].as_str().unwrap().contains("limit in 8m"));
-    assert!(result["idle"].as_str().unwrap().contains("resets later"));
+    for key in ["idle", "expired", "flat", "legacy"] {
+        assert!(result[key].as_str().unwrap().ends_with(" — resets later"), "{key}: {result}");
+    }
+    assert!(result["afterReset"].as_str().unwrap().contains("not expected before reset"));
     println!("None");
 }
 
-/// Match only live Codex sessions to their account and reject stale publications.
+/// Route each account's projection into its own displayed menu section.
 /// Parameters: none.
 /// Returns: None.
 #[test]
-fn codex_session_identity_controls_projection() {
+fn status_panel_routes_each_codex_account_to_its_menu() {
     println!("parameters=none");
     let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
-    let helper = extract_function(&source, "hasLiveCodexSession");
-    let probe = format!(r#"
-      {helper}
-      const payload={{updated_at:'2026-01-01T00:00:00Z',providers:[
-        {{kind:'codex',agents:[{{codex_instance:2}},{{}}]}},
-        {{kind:'grok',agents:[{{codex_instance:3}}]}}]}};
-      const now=Date.parse(payload.updated_at)/1000;
-      print(JSON.stringify([hasLiveCodexSession(payload,1,now),hasLiveCodexSession(payload,2,now),
-        hasLiveCodexSession(payload,3,now),hasLiveCodexSession(payload,2,now+121),
-        hasLiveCodexSession(null,2,now)]));
-    "#);
-    assert_eq!(run_gjs(&[], &probe), serde_json::json!([true,true,false,false,false]));
-    println!("None");
-}
-
-/// Route each live account's session state into its displayed menu section.
-/// Parameters: none.
-/// Returns: None.
-#[test]
-fn status_panel_matches_live_sessions_to_each_codex_menu() {
-    println!("parameters=none");
-    let source = fs::read_to_string(repo_root().join("agentic-cli-status@local/extension.js")).unwrap();
-    let helpers = ["hasVerifiedUsage", "verifiedCodexSnapshot", "statusIsCurrent", "hasLiveCodexSession"].iter().map(|name| extract_function(&source, name)).collect::<Vec<_>>().join("\n");
+    let helpers = ["hasVerifiedUsage", "verifiedCodexSnapshot", "statusIsCurrent"].iter().map(|name| extract_function(&source, name)).collect::<Vec<_>>().join("\n");
     let render = extract_method(&source, "render");
     let probe = format!(r#"
       {helpers}
@@ -2728,15 +2713,14 @@ fn status_panel_matches_live_sessions_to_each_codex_menu() {
         flashingCodexBarMarkup=()=>'', codexInstanceTitle=x=>`Codex ${{x.id}}`;
       class Button {{ {render} }}
       const b=new Button(), sections=[];
-      b._liveSessions={{updated_at:'2026-01-01T00:00:00Z',providers:[{{kind:'codex',agents:[{{codex_instance:2}}]}}]}};
       b._segments=new Map([['codex',{{clutter_text:{{set_markup:()=>{{}}}}}}]]); b._codexTracking=new Map();
       b._syncCodexFlash=()=>{{}}; b._appendForecastSection=()=>{{}};
-      b._appendMenuSection=(name, snapshot, visible)=>sections.push([name,visible]);
+      b._appendMenuSection=(name, snapshot)=>sections.push([name,snapshot.windows[0].exhaustion_state]);
       b.menu={{removeAll:()=>{{}},isEmpty:()=>true,addMenuItem:()=>{{}}}};
-      const account=id=>({{id,available:true,observed_at:now,windows:[{{used_percent:20}}]}});
+      const account=id=>({{id,available:true,observed_at:now,windows:[{{used_percent:20,exhaustion_state:id===1?'idle':'active'}}]}});
       b.render({{generated_at:now,clis:{{codex:{{instances:[account(1),account(2)]}}}}}});
       print(JSON.stringify(sections));
     "#);
-    assert_eq!(run_gjs(&[], &probe), serde_json::json!([["Codex 1",false],["Codex 2",true]]));
+    assert_eq!(run_gjs(&[], &probe), serde_json::json!([["Codex 1","idle"],["Codex 2","active"]]));
     println!("None");
 }
