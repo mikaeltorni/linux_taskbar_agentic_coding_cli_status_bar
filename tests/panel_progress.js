@@ -153,7 +153,7 @@ ${snippets.join('\n')}
     class Destroyer extends St.BoxLayout { _hideTaskConfirmation = () => {}; ${declaration('_hideTaskHover', true)} ${declaration('destroy', true)} }
     return {agentPhaseBadgeColor, panelTaskProgressValue, panelProgressUnderway, panelProgressOpacity, paintPanelTaskProgress, buildPanelTaskProgress,
         Destroyer, paintPanelWorkspaceSeparator,
-        updater: {${['_hideTaskHover', '_refresh', '_icon', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
+        updater: {${['_hideTaskHover', '_hidePanelTask', '_refresh', '_icon', '_updatePanelProgress', '_syncPanelPulseTimer', '_applyPanelProgressPulse',
             ...(source.includes('\n    _updatePanelTaskEstimate(') ? ['_updatePanelTaskEstimate'] : []),
             ...(source.includes('\n    _renderWorkspaceAttention(') ? ['_renderWorkspaceAttention'] : [])].map(name => declaration(name, true)).join(',')}}};`);
 const owners = makeOwners(St, Clutter, GLib, services, print, imports.cairo, Harbor, Gio, imports.gi.Pango);
@@ -774,7 +774,7 @@ button._updatePanelProgress(estimatePayload, false);
 const estimateRow = button._panelProgress.children[0].children[1];
 const estimateCells = estimateRow.children;
 check(estimateCells.every(cell => cell.style_class === 'ams-panel-task-cell' && cell.width === 52 &&
-    cell.layout_manager instanceof Clutter.BinLayout && cell.y_expand === true && cell.y_align === Clutter.ActorAlign.FILL && !cell.reactive),
+    cell.layout_manager instanceof Clutter.BinLayout && cell.y_expand === true && cell.y_align === Clutter.ActorAlign.FILL && !cell.can_focus),
     'each bar/time cell retains the drawing width and full-height panel allocation');
 check(JSON.stringify(estimateCells.map(cell => cell._amsBar._amsEstimateLabel.text)) === '["~2m","~1h1m",""]',
     'each running bar gets its own compact forecast, completed bar gets none');
@@ -1139,9 +1139,9 @@ for (const mouseButton of [2, 3, 8]) {
     check(selectedNotes.length === before, 'rejected selection leaves prior focus calls unchanged');
     check(selectionCell('select-b') === retainedSelectionCell, 'rejected selection preserves rendered cells');
 }
-check(selectionCell('select-unlinked').reactive === false, 'no selection target means no misleading clickable cell');
+check(selectionCell('select-unlinked').can_focus === false, 'unlinked cells cannot focus a terminal');
 button._updatePanelProgress({providers: [{agents: selectionAgents.map(agent => ({...agent, note_id: ''}))}]}, false);
-check(retainedSelectionCell.reactive === false, 'retained cell stops accepting clicks when note identity disappears');
+check(retainedSelectionCell.can_focus === false, 'retained cell stops offering terminal focus when note identity disappears');
 button._updatePanelProgress(null, false);
 check(retainedSelectionCell.destroyed && button._panelProgressBars.size === 0, 'closing instances destroys their click targets');
 print('PASS: individual instance left-click selection, current identity, all phases, other-button rejection and cleanup.');
@@ -1586,3 +1586,27 @@ button._harborEntries = [];
 button._updatePanelProgress(null, false);
 check(visibleBars(button._panelProgress).length === 0, 'ended Harbor membership leaves no separate panel strip');
 print('PASS: Harbor shares workspace headings, normal cell/fill typography and geometry; only its count is pink.');
+
+// Ctrl+left-click hides one exact instance while retaining its workspace label.
+const hideButton = Object.assign({_iconsDir: iconsDir, _box: new Actor(), _syncTaskHover: () => {}}, owners.updater);
+const hideTasks = [
+    {session_id: 'hide-a', note_id: 'hide-note', workspace: 2, phase: 'DONE'},
+    {session_id: 'hide-b', workspace: 4, phase: 'DONE'},
+];
+const hidePayload = {providers: [{kind: 'codex', agents: hideTasks}]};
+hideButton._focusAgent = () => { throw Error('hide must not focus a terminal'); };
+hideButton._updatePanelProgress(hidePayload, false);
+const ctrlClick = {get_button: () => 1, get_state: () => Clutter.ModifierType.CONTROL_MASK};
+const hiddenCell = hideButton._panelProgressBars.get('hide-a').get_parent();
+check(hiddenCell['button-press-event'](hiddenCell, ctrlClick) === Clutter.EVENT_STOP, 'Ctrl+click consumes the task event');
+check(visibleBars(hideButton._panelProgress).map(bar => bar._amsAgent.session_id).join() === 'hide-b',
+    'Ctrl+click removes just the selected instance from the bar');
+check(hideButton._panelProgress.children[0].children[0].text === 'W2', 'workspace label remains when its last task is hidden');
+hideButton._updatePanelProgress(hidePayload, true);
+check(visibleBars(hideButton._panelProgress).length === 1, 'regular refresh keeps the selected instance hidden');
+const unlinkedCell = hideButton._panelProgressBars.get('hide-b').get_parent();
+check(unlinkedCell.reactive, 'unlinked instance accepts Ctrl+click');
+unlinkedCell['button-press-event'](unlinkedCell, ctrlClick);
+check(visibleBars(hideButton._panelProgress).length === 0 && hideButton._panelProgress.visible,
+    'all-hidden panel still shows workspace labels');
+print('PASS: hide one instance by Ctrl+click, preserve sibling tasks and workspace labels, and retain state through refresh.');

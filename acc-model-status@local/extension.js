@@ -1272,11 +1272,11 @@ function exhaustedCodexAccounts(snapshot, now) {
  * Stack runtime, branded progress and the instance and forecast footer in the panel height.
  * Parameters: agent - scoped open-window agent whose bar and timing are displayed;
  * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering;
- * confirmAgent - callback arming task completion, or null when unavailable.
+ * toggleHidden - callback changing panel visibility, or null for an inert cell.
  * Returns: a fixed-width click and hover target with retained progress and labels.
  */
-function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
-    print(`agent=${agent} focusAgent=${focusAgent} confirmAgent=${confirmAgent}`);
+function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null) {
+    print(`agent=${agent} focusAgent=${focusAgent} toggleHidden=${toggleHidden}`);
     const cell = new St.Widget({
         style_class: 'ams-panel-task-cell',
         layout_manager: new Clutter.BinLayout(),
@@ -1284,7 +1284,7 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
         y_expand: true,
         y_align: Clutter.ActorAlign.FILL,
         clip_to_allocation: true,
-        reactive: Boolean(focusAgent && String(agent.note_id || '').trim()),
+        reactive: Boolean(toggleHidden || (focusAgent && String(agent.note_id || '').trim())),
         can_focus: Boolean(focusAgent && String(agent.note_id || '').trim()),
         track_hover: Boolean(focusAgent && String(agent.note_id || '').trim()),
     });
@@ -1340,9 +1340,8 @@ function buildPanelTaskCell(agent, focusAgent = null, confirmAgent = null) {
             cell._amsConfirmation();
             return Clutter.EVENT_STOP;
         }
-        if (event.get_button() === 1 && (event.get_state?.() & Clutter.ModifierType.CONTROL_MASK) &&
-            String(bar._amsAgent.note_id || '').trim() && confirmAgent) {
-            confirmAgent(cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount);
+        if (event.get_button() === 1 && (event.get_state?.() & Clutter.ModifierType.CONTROL_MASK) && toggleHidden) {
+            toggleHidden();
             return Clutter.EVENT_STOP;
         }
         if (event.get_button() !== 1)
@@ -2535,6 +2534,17 @@ class AccModelStatusButton extends PanelMenu.Button {
         return item;
     }
 
+    /** Hide a task and repaint using the latest panel snapshot.
+     * Parameters: this - status button; key - selected task key.
+     * Returns: undefined.
+     */
+    _hidePanelTask(key) {
+        print(`this=${this} key=${key}`);
+        this._hiddenPanelTasks.add(key);
+        this._updatePanelProgress(this._panelProgressPayload, this._panelProgressStale);
+        print(undefined);
+    }
+
     /** Anchor a menu-requested confirmation to the task's current panel cell.
      * Parameters: this - status button; agent - selected menu task; provider - row provider;
      * codexInstanceCount - account count for the detail colors.
@@ -2628,7 +2638,10 @@ class AccModelStatusButton extends PanelMenu.Button {
  */
 AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) {
     print(`this=${this} payload=${payload} stale=${stale}`);
+    this._panelProgressPayload = payload;
+    this._panelProgressStale = stale;
     if (!this._panelProgress) {
+        this._hiddenPanelTasks = new Set();
         this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
         this._panelProgressBars = new Map();
         this._panelProgressKey = '';
@@ -2646,7 +2659,9 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         (provider.agents || []).map((agent, index) => ({provider, agent,
             key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)}))).concat(this._harborEntries || []);
     const groups = groupWorkspaceEntries(entries);
-    const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry => [entry.key, monitorSortValue(entry.agent.monitor)])]));
+    const hidden = this._hiddenPanelTasks;
+    const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry =>
+        [entry.key, monitorSortValue(entry.agent.monitor), hidden.has(entry.key)])]));
     if (key !== this._panelProgressKey) {
         this._hideTaskHover();
         this._panelProgress.destroy_all_children();
@@ -2663,12 +2678,14 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
             let previousMonitor = null;
             for (const entry of group.entries) {
+                if (hidden.has(entry.key))
+                    continue;
                 const monitor = monitorSortValue(entry.agent.monitor);
                 if (previousMonitor !== null && monitor !== previousMonitor)
                     box.add_child(buildPanelMonitorSeparator());
                 previousMonitor = monitor;
                 const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId),
-                    (target, agent, provider, count) => this._showTaskConfirmation(target, agent, provider, count));
+                    () => this._hidePanelTask(entry.key));
                 const bar = cell._amsBar;
                 cell.connect('notify::hover', () => this._syncTaskHover(
                     cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
@@ -2706,6 +2723,8 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
     for (const entry of entries) {
         const entryStale = entry.agent.harbor ? false : stale;
         const bar = this._panelProgressBars.get(entry.key);
+        if (!bar)
+            continue;
         bar._amsAgent = entry.agent;
         bar._amsProvider = entry.provider;
         bar._amsInstanceCount = payload?.codexInstanceCount;
@@ -2720,9 +2739,8 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         }
         bar._amsLogo.visible = true;
         bar._amsLogo.opacity = entryStale ? 31 : 62;
-        cell.reactive = Boolean(String(entry.agent.note_id || '').trim());
-        cell.can_focus = cell.reactive;
-        cell.track_hover = cell.reactive;
+        cell.can_focus = Boolean(String(entry.agent.note_id || '').trim());
+        cell.track_hover = cell.can_focus;
         const estimate = bar._amsEstimateLabel;
         estimate.text = panelAgentEstimateText(entry.agent);
         estimate.visible = Boolean(estimate.text);
