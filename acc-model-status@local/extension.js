@@ -2729,7 +2729,10 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
             const box = new St.BoxLayout({style_class: 'ams-panel-workspace',
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
             const recoveryBox = this._recoveryWorkspace === group.workspace
-                ? new St.BoxLayout({style_class: 'ams-panel-recovery', height: 48}) : null;
+                ? new St.BoxLayout({
+                    style_class: 'popup-menu-content ams-panel-recovery',
+                    height: 48,
+                }) : null;
             let previousMonitor = null;
             for (const entry of group.entries) {
                 const hiddenTask = hidden.has(entry.key);

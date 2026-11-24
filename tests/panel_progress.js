@@ -1643,6 +1643,8 @@ let recovery = recoveryPointers.at(-1);
 check(recovery.visible && recovery.side === St.Side.BOTTOM && recovery.chrome && recovery.group._amsWorkspace === 2 &&
     recovery.group.y_align === Clutter.ActorAlign.FILL && recovery.anchor.text === 'W2',
     'recovery opens above the bar anchored to W2 in Shell chrome');
+check(recovery.children[0].style_class.split(' ').includes('popup-menu-content'),
+    'recovery cells sit on a native Shell menu background');
 check(recovery.children[0].children.map(cell => cell._amsBar._amsAgent.session_id).join() === 'hide-a',
     'recovery shows only hidden W2 tasks');
 check(visibleBars(hideButton._panelProgress).length === 0, 'opening recovery leaves individual cells hidden from the bar');
