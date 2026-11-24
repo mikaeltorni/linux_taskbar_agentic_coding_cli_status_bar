@@ -49,11 +49,15 @@ Fable) when `/usage` exposes one. Clicking the indicator opens a details menu
 with each window's remaining budget, plan, and reset time.
 Codex's manual-reset allowance is refreshed independently for each account
 through the installed CLI's read-only `account/rateLimits/read` metadata request
-every minute. Fresh metadata remains authoritative between refreshes for up to
+normally once a minute. At a known five-hour or weekly reset, the poller reads
+the account at its next tick. If the new window reports full usage remaining
+with a future reset time, one follow-up at least five seconds later lets ACC
+distinguish a sliding reset from a running timer. Fresh metadata remains
+authoritative between refreshes for up to
 two minutes, preserving its original observation time; an older pane cannot
 replace it with a pre-probe 100% reading. The same account-validated read publishes its 5h and weekly
 usage and reset timestamps to the status document for the indicator and ACC's
-startup probe selection. The menu shows zero resets explicitly; a failed read
+automatic rate-limit probes. The menu shows zero resets explicitly; a failed read
 hides the old count and timer metadata until the next retry. This does not
 redeem a reset or send a prompt.
 The monitor prefers the Codex installed by `linux_codex_claude_code_setup`
