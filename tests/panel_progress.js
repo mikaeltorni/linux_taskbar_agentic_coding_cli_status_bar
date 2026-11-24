@@ -1619,10 +1619,11 @@ hideButton._focusAgent = () => { throw Error('hide must not focus a terminal'); 
 hideButton._updatePanelProgress(hidePayload, false);
 const ctrlClick = {get_button: () => 1, get_state: () => Clutter.ModifierType.CONTROL_MASK};
 const hiddenCell = hideButton._panelProgressBars.get('hide-a').get_parent();
+const panelLogoSize = hiddenCell._amsBar._amsLogo.icon_size;
 check(hiddenCell['button-press-event'](hiddenCell, ctrlClick) === Clutter.EVENT_STOP, 'Ctrl+click consumes the task event');
 check(visibleBars(hideButton._panelProgress).map(bar => bar._amsAgent.session_id).join() === 'hide-b',
     'Ctrl+click removes just the selected instance from the bar');
-check(hideButton._panelProgress.children[0].children[0].text === 'W2', 'workspace label remains when its last task is hidden');
+check(hideButton._panelProgress.children[0].children[0].children[0].text === 'W2', 'workspace label remains when its last task is hidden');
 hideButton._updatePanelProgress(hidePayload, true);
 check(visibleBars(hideButton._panelProgress).length === 1, 'regular refresh keeps the selected instance hidden');
 const unlinkedCell = hideButton._panelProgressBars.get('hide-b').get_parent();
@@ -1633,16 +1634,26 @@ check(visibleBars(hideButton._panelProgress).length === 0 && hideButton._panelPr
 print('PASS: hide one instance by Ctrl+click, preserve sibling tasks and workspace labels, and retain state through refresh.');
 
 // Reveal only the selected workspace above the bar and restore through its task cell.
-const workspaceLabel = (target, number) => target._panelProgress.children
+const workspaceTarget = (target, number) => target._panelProgress.children
     .find(group => group._amsWorkspace === number)?.children[0];
 const leftClick = {get_button: () => 1, get_state: () => 0};
-const recoveryLabel = workspaceLabel(hideButton, 2);
-check(recoveryLabel.reactive && recoveryLabel['button-press-event'](recoveryLabel, leftClick) === Clutter.EVENT_STOP,
+const recoveryTarget = workspaceTarget(hideButton, 2);
+check(recoveryTarget.reactive && recoveryTarget['button-press-event'](recoveryTarget, leftClick) === Clutter.EVENT_STOP,
     'ordinary workspace label click opens recovery and consumes the bar event');
 let recovery = recoveryPointers.at(-1);
 check(recovery.visible && recovery.side === St.Side.BOTTOM && recovery.chrome && recovery.group._amsWorkspace === 2 &&
     recovery.group.y_align === Clutter.ActorAlign.FILL && recovery.anchor.text === 'W2',
     'recovery opens above the bar anchored to W2 in Shell chrome');
+const targetPadding = stylesheet.match(/\.ams-panel-workspace-target\s*\{[^}]*padding:\s*0\s+(\d+)px;/)?.[1];
+const openTarget = workspaceTarget(hideButton, 2);
+const paddedWorkspaceTarget = openTarget.children[0] === recovery.anchor && !recovery.anchor.reactive &&
+    openTarget.reactive && openTarget.y_expand && openTarget.y_align === Clutter.ActorAlign.FILL &&
+    Number(targetPadding) >= 6;
+const recoveryLogoSize = recovery.children[0].children[0]._amsBar._amsLogo.icon_size;
+const largerRecoveryLogo = recoveryLogoSize >= panelLogoSize + 12 &&
+    recovery.children[0].height >= recoveryLogoSize + 10;
+check(paddedWorkspaceTarget && largerRecoveryLogo,
+    `recovery needs a full-height padded hit area (${paddedWorkspaceTarget}) and room for a larger icon (${largerRecoveryLogo})`);
 check(recovery.children[0].style_class.split(' ').includes('popup-menu-content'),
     'recovery cells sit on a native Shell menu background');
 check(recovery.children[0].children.map(cell => cell._amsBar._amsAgent.session_id).join() === 'hide-a',
@@ -1650,20 +1661,22 @@ check(recovery.children[0].children.map(cell => cell._amsBar._amsAgent.session_i
 check(visibleBars(hideButton._panelProgress).length === 0, 'opening recovery leaves individual cells hidden from the bar');
 hideButton._updatePanelProgress(hidePayload, false);
 check(recoveryPointers.at(-1) === recovery && !recovery.destroyed, 'metadata refresh keeps recovery open');
-recovery.anchor['button-press-event'](recovery.anchor, leftClick);
+openTarget['button-press-event'](openTarget, leftClick);
 check(recovery.destroyed && visibleBars(hideButton._panelProgress).length === 0,
     'clicking the same label closes recovery without restoring its tasks');
-const reopened = workspaceLabel(hideButton, 2);
+const reopened = workspaceTarget(hideButton, 2);
 reopened['button-press-event'](reopened, leftClick);
 recovery = recoveryPointers.at(-1);
 const recoveredCell = recovery.children[0].children[0];
 check(recoveredCell['button-press-event'](recoveredCell, ctrlClick) === Clutter.EVENT_STOP, 'Ctrl+click in recovery consumes the task event');
 check(recovery.destroyed && visibleBars(hideButton._panelProgress).map(bar => bar._amsAgent.session_id).join() === 'hide-a',
     'Ctrl+click restores the task to the bar and dismisses empty recovery');
-check(!workspaceLabel(hideButton, 2).reactive, 'restored workspace label has no empty recovery menu');
+check(!workspaceTarget(hideButton, 2).reactive, 'restored workspace label has no empty recovery menu');
+check(visibleBars(hideButton._panelProgress)[0]._amsLogo.icon_size === panelLogoSize,
+    'restoring a task retains the original panel logo size');
 print('PASS: workspace click toggle, above-panel placement, refresh stability and Ctrl+click restore.');
 
-const w4Recovery = workspaceLabel(hideButton, 4);
+const w4Recovery = workspaceTarget(hideButton, 4);
 check(w4Recovery['button-press-event'](w4Recovery, {get_button: () => 3}) === Clutter.EVENT_PROPAGATE,
     'right-click on recovery label remains available to the details menu');
 w4Recovery['button-press-event'](w4Recovery, leftClick);
@@ -1680,10 +1693,10 @@ for (const task of hideTasks) {
 }
 for (const [workspace, session] of [[2, 'hide-a'], [4, 'hide-b'], [2, 'hide-a']]) {
     const previouslyOpen = recoveryPointers.filter(popup => !popup.destroyed);
-    const workspaceTarget = workspaceLabel(switchButton, workspace);
-    workspaceTarget['button-press-event'](workspaceTarget, leftClick);
+    const clickedTarget = workspaceTarget(switchButton, workspace);
+    clickedTarget['button-press-event'](clickedTarget, leftClick);
     const current = recoveryPointers.filter(popup => !popup.destroyed);
-    check(current.length === 1 && current[0].anchor === workspaceLabel(switchButton, workspace),
+    check(current.length === 1 && current[0].anchor === workspaceTarget(switchButton, workspace).children[0],
         `W${workspace} replaces any previous workspace popup`);
     check(previouslyOpen.every(popup => popup.destroyed), `W${workspace} destroys previous popup chrome`);
     check(current[0].children[0].children[0]._amsBar._amsAgent.session_id === session,

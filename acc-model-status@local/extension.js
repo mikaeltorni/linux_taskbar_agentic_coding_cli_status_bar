@@ -1272,15 +1272,16 @@ function exhaustedCodexAccounts(snapshot, now) {
  * Stack runtime, branded progress and the instance and forecast footer in the panel height.
  * Parameters: agent - scoped open-window agent whose bar and timing are displayed;
  * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering;
- * toggleHidden - callback changing panel visibility, or null for an inert cell.
+ * toggleHidden - callback changing panel visibility, or null for an inert cell;
+ * inRecovery - whether to use the larger task cell and logo in the recovery popup.
  * Returns: a fixed-width click and hover target with retained progress and labels.
  */
-function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null) {
-    print(`agent=${agent} focusAgent=${focusAgent} toggleHidden=${toggleHidden}`);
+function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRecovery = false) {
+    print(`agent=${agent} focusAgent=${focusAgent} toggleHidden=${toggleHidden} inRecovery=${inRecovery}`);
     const cell = new St.Widget({
         style_class: 'ams-panel-task-cell',
         layout_manager: new Clutter.BinLayout(),
-        width: 52,
+        width: inRecovery ? 70 : 52,
         y_expand: true,
         y_align: Clutter.ActorAlign.FILL,
         clip_to_allocation: true,
@@ -1299,6 +1300,7 @@ function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null) {
         visible: false,
     });
     const bar = buildPanelTaskProgress(agent);
+    bar.x_align = Clutter.ActorAlign.CENTER;
     const footer = new St.BoxLayout({
         style_class: 'ams-panel-task-footer',
         x_expand: true,
@@ -2731,7 +2733,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
             const recoveryBox = this._recoveryWorkspace === group.workspace
                 ? new St.BoxLayout({
                     style_class: 'popup-menu-content ams-panel-recovery',
-                    height: 48,
+                    height: 80,
                 }) : null;
             let previousMonitor = null;
             for (const entry of group.entries) {
@@ -2746,7 +2748,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                     previousMonitor = monitor;
                 }
                 const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId),
-                    () => this._setPanelTaskHidden(entry.key, !hiddenTask));
+                    () => this._setPanelTaskHidden(entry.key, !hiddenTask), hiddenTask);
                 const bar = cell._amsBar;
                 cell.connect('notify::hover', () => this._syncTaskHover(
                     cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
@@ -2766,18 +2768,27 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                 text: group.workspace > 0 ? `W${group.workspace}` : 'W?',
                 x_align: Clutter.ActorAlign.START,
                 y_align: Clutter.ActorAlign.CENTER,
-                reactive: hasHidden,
-                track_hover: hasHidden,
+                reactive: false,
             });
             if (hasHidden) {
-                label.connect('button-press-event', (_label, event) => {
+                const labelTarget = new St.BoxLayout({
+                    style_class: 'ams-panel-workspace-target',
+                    y_expand: true,
+                    y_align: Clutter.ActorAlign.FILL,
+                    reactive: true,
+                    track_hover: true,
+                });
+                labelTarget.add_child(label);
+                labelTarget.connect('button-press-event', (_target, event) => {
                     if (event.get_button() !== 1)
                         return Clutter.EVENT_PROPAGATE;
                     this._togglePanelRecovery(group.workspace);
                     return Clutter.EVENT_STOP;
                 });
+                groupActor.add_child(labelTarget);
+            } else {
+                groupActor.add_child(label);
             }
-            groupActor.add_child(label);
             groupActor.add_child(box);
             this._panelProgress.add_child(groupActor);
             if (recoveryBox)
