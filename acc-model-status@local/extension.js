@@ -2534,14 +2534,60 @@ class AccModelStatusButton extends PanelMenu.Button {
         return item;
     }
 
-    /** Hide a task and repaint using the latest panel snapshot.
-     * Parameters: this - status button; key - selected task key.
+    /** Change a task's panel visibility and repaint the latest snapshot.
+     * Parameters: this - status button; key - selected task key; hidden - whether the task belongs in recovery.
      * Returns: undefined.
      */
-    _hidePanelTask(key) {
-        print(`this=${this} key=${key}`);
-        this._hiddenPanelTasks.add(key);
+    _setPanelTaskHidden(key, hidden) {
+        print(`this=${this} key=${key} hidden=${hidden}`);
+        if (hidden)
+            this._hiddenPanelTasks.add(key);
+        else
+            this._hiddenPanelTasks.delete(key);
         this._updatePanelProgress(this._panelProgressPayload, this._panelProgressStale);
+        print(undefined);
+    }
+
+    /** Toggle the workspace's hidden-task popup.
+     * Parameters: this - status button; workspace - clicked workspace number.
+     * Returns: undefined.
+     */
+    _togglePanelRecovery(workspace) {
+        print(`this=${this} workspace=${workspace}`);
+        if (!this._openPanelRecovery.delete(workspace))
+            this._openPanelRecovery.add(workspace);
+        this._updatePanelProgress(this._panelProgressPayload, this._panelProgressStale);
+        print(undefined);
+    }
+
+    /** Place hidden task cells above the taskbar with an arrow at the workspace label.
+     * Parameters: this - status button; group - full-height workspace actor; label - workspace label;
+     * content - hidden task cells for this workspace.
+     * Returns: undefined.
+     */
+    _showPanelRecovery(group, label, content) {
+        print(`this=${this} group=${group} label=${label} content=${content}`);
+        const popup = new BoxPointer.BoxPointer(St.Side.BOTTOM, {reactive: true});
+        popup.add_style_class_name('popup-menu-boxpointer');
+        popup.bin.set_child(content);
+        Main.layoutManager.addChrome(popup);
+        popup.setPosition(group, 0.1);
+        popup.setSourceAlignment(0);
+        popup.setArrowActor(label);
+        this._panelRecoveryPopups.push(popup);
+        popup.open(BoxPointer.PopupAnimation.NONE);
+        print(undefined);
+    }
+
+    /** Release the current recovery popup actors before rebuilding or disabling the bar.
+     * Parameters: this - status button.
+     * Returns: undefined.
+     */
+    _clearPanelRecoveryPopups() {
+        print(`this=${this}`);
+        for (const popup of this._panelRecoveryPopups)
+            popup.destroy();
+        this._panelRecoveryPopups = [];
         print(undefined);
     }
 
@@ -2642,7 +2688,10 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
     this._panelProgressStale = stale;
     if (!this._panelProgress) {
         this._hiddenPanelTasks = new Set();
+        this._openPanelRecovery = new Set();
+        this._panelRecoveryPopups = [];
         this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
+        this._panelProgress.connect('destroy', () => this._clearPanelRecoveryPopups());
         this._panelProgressBars = new Map();
         this._panelProgressKey = '';
     }
@@ -2660,10 +2709,17 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
             key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)}))).concat(this._harborEntries || []);
     const groups = groupWorkspaceEntries(entries);
     const hidden = this._hiddenPanelTasks;
-    const key = JSON.stringify(groups.map(group => [group.workspace, group.entries.map(entry =>
+    const recoverable = new Set(groups.filter(group => group.entries.some(entry => hidden.has(entry.key)))
+        .map(group => group.workspace));
+    for (const workspace of this._openPanelRecovery) {
+        if (!recoverable.has(workspace))
+            this._openPanelRecovery.delete(workspace);
+    }
+    const key = JSON.stringify(groups.map(group => [group.workspace, this._openPanelRecovery.has(group.workspace), group.entries.map(entry =>
         [entry.key, monitorSortValue(entry.agent.monitor), hidden.has(entry.key)])]));
     if (key !== this._panelProgressKey) {
         this._hideTaskHover();
+        this._clearPanelRecoveryPopups();
         this._panelProgress.destroy_all_children();
         this._panelProgressBars.clear();
         for (const [index, group] of groups.entries()) {
@@ -2671,21 +2727,29 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                 this._panelProgress.add_child(buildPanelWorkspaceSeparator());
             const groupActor = new St.BoxLayout({
                 style_class: 'ams-panel-workspace-group',
+                y_expand: true,
+                y_align: Clutter.ActorAlign.FILL,
                 reactive: false,
             });
             groupActor._amsWorkspace = group.workspace;
             const box = new St.BoxLayout({style_class: 'ams-panel-workspace',
                 y_expand: true, y_align: Clutter.ActorAlign.FILL});
+            const recoveryBox = this._openPanelRecovery.has(group.workspace)
+                ? new St.BoxLayout({style_class: 'ams-panel-recovery', height: 48}) : null;
             let previousMonitor = null;
             for (const entry of group.entries) {
-                if (hidden.has(entry.key))
+                const hiddenTask = hidden.has(entry.key);
+                const target = hiddenTask ? recoveryBox : box;
+                if (!target)
                     continue;
-                const monitor = monitorSortValue(entry.agent.monitor);
-                if (previousMonitor !== null && monitor !== previousMonitor)
-                    box.add_child(buildPanelMonitorSeparator());
-                previousMonitor = monitor;
+                if (!hiddenTask) {
+                    const monitor = monitorSortValue(entry.agent.monitor);
+                    if (previousMonitor !== null && monitor !== previousMonitor)
+                        box.add_child(buildPanelMonitorSeparator());
+                    previousMonitor = monitor;
+                }
                 const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId),
-                    () => this._hidePanelTask(entry.key));
+                    () => this._setPanelTaskHidden(entry.key, !hiddenTask));
                 const bar = cell._amsBar;
                 cell.connect('notify::hover', () => this._syncTaskHover(
                     cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
@@ -2696,19 +2760,31 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                         this._hideTaskConfirmation();
                 });
                 this._panelProgressBars.set(entry.key, bar);
-                box.add_child(cell);
+                target.add_child(cell);
             }
+            const hasHidden = recoverable.has(group.workspace);
             const label = new St.Label({
                 style_class: 'ams-panel-workspace-label',
                 style: `color: ${panelWorkspaceColor(group.workspace)};`,
                 text: group.workspace > 0 ? `W${group.workspace}` : 'W?',
                 x_align: Clutter.ActorAlign.START,
                 y_align: Clutter.ActorAlign.CENTER,
-                reactive: false,
+                reactive: hasHidden,
+                track_hover: hasHidden,
             });
+            if (hasHidden) {
+                label.connect('button-press-event', (_label, event) => {
+                    if (event.get_button() !== 1)
+                        return Clutter.EVENT_PROPAGATE;
+                    this._togglePanelRecovery(group.workspace);
+                    return Clutter.EVENT_STOP;
+                });
+            }
             groupActor.add_child(label);
             groupActor.add_child(box);
             this._panelProgress.add_child(groupActor);
+            if (recoveryBox)
+                this._showPanelRecovery(groupActor, label, recoveryBox);
         }
         this._panelProgressKey = key;
     }

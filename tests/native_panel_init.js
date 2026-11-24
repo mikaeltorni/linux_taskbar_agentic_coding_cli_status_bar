@@ -19,6 +19,7 @@ class Actor {
     add_child = actor => { actor.parent = this; this.children.push(actor); };
     get_parent = () => this.parent;
     get_children = () => this.children;
+    connect = () => 1;
     destroy_all_children = () => { this.children = []; };
 }
 const NativePanelButton = GObject.registerClass(class HarborNativeParent extends GObject.Object {

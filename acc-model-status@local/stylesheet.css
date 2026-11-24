@@ -118,6 +118,15 @@
   color: #9a9996;
 }
 
+.ams-panel-workspace-label:hover {
+  text-decoration: underline;
+}
+
+.ams-panel-recovery {
+  spacing: 6px;
+  padding: 4px 6px;
+}
+
 .ams-active {
   color: #8ff0a4;
 }
