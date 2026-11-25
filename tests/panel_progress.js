@@ -127,7 +127,7 @@ class RecoveryPointer extends Actor {
 const BoxPointer = {BoxPointer: RecoveryPointer, PopupAnimation: {NONE: 0}};
 const Main = {layoutManager: {addChrome: popup => { popup.chrome = true; }}};
 const St = {Side: {BOTTOM: 3}, Icon: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Widget: Actor};
-const Clutter = {ModifierType: {CONTROL_MASK: 4}, ActorAlign: {CENTER: 0, FILL: 1, END: 2, START: 3}, BinLayout: class {}};
+const Clutter = {ModifierType: {CONTROL_MASK: 4, MOD1_MASK: 8}, ActorAlign: {CENTER: 0, FILL: 1, END: 2, START: 3}, BinLayout: class {}};
 const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'panelTaskProgressValue', 'panelProgressColor', 'panelProgressStateColor', 'panelProgressWave', 'panelProgressUnderway', 'panelProgressGoalActive', 'panelProgressOpacity', 'panelProgressHostOpacity', 'paintPanelTaskProgress', 'buildPanelTaskProgress',
     'workspaceSortValue', 'windowDisplaySortValue', 'monitorSortValue', 'compareWorkspaceEntries', 'groupWorkspaceEntries',
     'paintPanelWorkspaceSeparator', 'buildPanelWorkspaceSeparator', 'taskEstimateText',
@@ -1822,3 +1822,24 @@ try {
     StateGLib.rmdir(persistenceDir);
 }
 print('PASS: hiding and restoration survive panel restarts with late ACC data.');
+
+// Use the real reconstructed bar and pass its updated task details to the popup owner.
+const completionCalls = [];
+const completionPanel = Object.assign({
+    _iconsDir: iconsDir, _box: new Actor(), _syncTaskHover: () => {},
+    _showTaskConfirmation: (...args) => completionCalls.push(args),
+}, owners.updater);
+const completionAgent = {session_id: 'click-complete', note_id: 'linked-note', workspace: 4, phase: 'RUNNING'};
+const completionProvider = {kind: 'codex', agents: [completionAgent]};
+completionPanel._updatePanelProgress({providers: [completionProvider]}, false);
+const completionTile = completionPanel._panelProgressBars.get(completionAgent.session_id).get_parent();
+const finishedCompletionAgent = {...completionAgent, phase: 'DONE'};
+const finishedCompletionProvider = {...completionProvider, agents: [finishedCompletionAgent]};
+completionPanel._updatePanelProgress({providers: [finishedCompletionProvider]}, false);
+check(completionTile['button-press-event'](completionTile,
+    {get_button: () => 1, get_state: () => Clutter.ModifierType.MOD1_MASK}) === Clutter.EVENT_STOP,
+    'Alt-click on the rendered bar consumes the click');
+check(completionCalls.length === 1 && completionCalls[0][0] === completionTile &&
+    completionCalls[0][1] === finishedCompletionAgent && completionCalls[0][2] === finishedCompletionProvider,
+    'the rendered bar routes the latest payload and the clicked anchor to confirmation');
+print('PASS: rendered taskbar wires Left Alt-click to current-instance confirmation.');
