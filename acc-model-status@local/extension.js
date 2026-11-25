@@ -2032,6 +2032,7 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _showTaskConfirmation(cell, agent, provider, codexInstanceCount) {
+        print(`this=${this} cell=${cell} agent=${agent} provider=${provider} codexInstanceCount=${codexInstanceCount}`);
         this._hideTaskConfirmation();
         this._hideTaskHover();
         const content = new St.BoxLayout({vertical: true, reactive: true,
@@ -2070,6 +2071,7 @@ class AccModelStatusButton extends PanelMenu.Button {
         popup.open(BoxPointer.PopupAnimation.NONE);
         // Grab the stage so both the popup and its original panel cell remain clickable.
         this._taskConfirmationGrab = Main.pushModal(global.stage, {actionMode: Shell.ActionMode.NORMAL});
+        print(undefined);
     }
 
     /** Cancel an armed task and disconnect its stage input handler.
@@ -2077,6 +2079,7 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _hideTaskConfirmation() {
+        print(`this=${this}`);
         if (this._taskConfirmationSignal) {
             global.stage.disconnect(this._taskConfirmationSignal);
             this._taskConfirmationSignal = null;
@@ -2091,6 +2094,7 @@ class AccModelStatusButton extends PanelMenu.Button {
             pending.cell._amsConfirmation = null;
             pending.popup.destroy();
         }
+        print(undefined);
     }
 
     /** Consume the selected task confirmation once before invoking completion.
