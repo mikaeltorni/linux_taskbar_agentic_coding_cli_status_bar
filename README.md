@@ -343,6 +343,12 @@ The `VB` segment shows the rounded percentage of the monthly allowance
 remaining. Open the taskbar indicator menu for the Mistral Vibe row and its
 local reset date. ACC's AFK display also shows the local reset time.
 
+While a Vibe session is running, the poller also estimates when the monthly
+allowance will run out from consecutive account reads (up to ten minutes
+apart) and publishes `exhaustion_at`, `exhaustion_seconds` and
+`exhaustion_state` on the `month` window. ACC's AFK dashboard renders that
+projection next to the monthly line, the same way it does for Codex windows.
+
 The monitor uses Vibe 3.1.2's native account read, which uses the signed-in
 organization's billing metadata. It sends no model prompts and needs no
 browser cookies. The row appears after a successful reading. If Mistral
