@@ -1528,6 +1528,9 @@ pub fn poll_once(
         if *cli_id == "codex" {
             snapshot = forecast_codex_limits(snapshot, last_cli, home, now);
         }
+        if *cli_id == "vibe" {
+            snapshot = forecast_vibe_limits(snapshot, last_cli, home, now);
+        }
         snapshot["enabled"] = json!(true);
         let available = snapshot.get("instances").and_then(Value::as_array)
             .filter(|rows| !rows.is_empty())
@@ -1553,12 +1556,14 @@ pub fn poll_once(
 const FORECAST_ACTIVITY_MAX_AGE: f64 = 30.0;
 /// Allow for the minute cadence of the read-only Codex metadata collector.
 const FORECAST_SAMPLE_MAX_AGE: f64 = 120.0;
+/// Allow for the five-minute cadence of the read-only Vibe account read.
+const VIBE_FORECAST_SAMPLE_MAX_AGE: f64 = 700.0;
 
-/// Load the earliest current run for each tracked Codex instance.
-/// Parameters: home - user home for resolving tracker state; now - current epoch seconds.
-/// Returns: running instances and their start epochs, with the publication expiry epoch.
-fn codex_forecast_activity(home: &Path, now: f64) -> (HashMap<i64, f64>, f64) {
-    println!("home={home:?}, now={now}");
+/// Load the earliest current run for each tracked session of one harness kind.
+/// Parameters: home - user home for resolving tracker state; now - current epoch seconds; kind - session kind to match.
+/// Returns: per-key earliest start epochs (Codex keys are instance ids, other kinds key on the kind itself), with the publication expiry epoch.
+fn forecast_activity(home: &Path, now: f64, kind: &str) -> (HashMap<String, f64>, f64) {
+    println!("home={home:?}, now={now}, kind={kind}");
     let path = crate::collectors::codex::tracker_state_dir(home).join("agent_status_snapshot.json");
     let payload: Value = fs::read(path).ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -1569,17 +1574,26 @@ fn codex_forecast_activity(home: &Path, now: f64) -> (HashMap<i64, f64>, f64) {
     };
     let updated = timestamp(&payload["updated_at"]).unwrap_or(0.0);
     let expires = updated + FORECAST_ACTIVITY_MAX_AGE;
-    let mut running = HashMap::<i64, f64>::new();
+    let mut running = HashMap::<String, f64>::new();
     if updated > 0.0 && now < expires && updated <= now + 5.0 {
         for row in payload["entries"].as_array().into_iter().flatten() {
-            if row["kind"] != "codex" || row["phase"] != "RUNNING" || row["run_active"] != true {
+            if row["kind"] != kind || row["phase"] != "RUNNING" || row["run_active"] != true {
                 continue;
             }
-            let id = row["codex_instance"].as_i64()
-                .or_else(|| row["codex_instance"].as_str()?.parse().ok());
+            let key = if kind == "codex" {
+                row["codex_instance"].as_i64()
+                    .filter(|id| *id > 0)
+                    .map(|id| id.to_string())
+                    .or_else(|| row["codex_instance"].as_str()
+                        .and_then(|text| text.parse::<i64>().ok())
+                        .filter(|id| *id > 0)
+                        .map(|id| id.to_string()))
+            } else {
+                Some(kind.to_string())
+            };
             let started = timestamp(&row["run_started_at"]).filter(|time| *time <= now.min(updated));
-            if let (Some(id), Some(started)) = (id.filter(|id| *id > 0), started) {
-                running.entry(id).and_modify(|first| *first = first.min(started)).or_insert(started);
+            if let (Some(key), Some(started)) = (key, started) {
+                running.entry(key).and_modify(|first| *first = first.min(started)).or_insert(started);
             }
         }
     }
@@ -1588,17 +1602,42 @@ fn codex_forecast_activity(home: &Path, now: f64) -> (HashMap<i64, f64>, f64) {
     result
 }
 
+/// Load the earliest current run for each tracked Codex instance.
+/// Parameters: home - user home for resolving tracker state; now - current epoch seconds.
+/// Returns: running instances and their start epochs, with the publication expiry epoch.
+fn codex_forecast_activity(home: &Path, now: f64) -> (HashMap<i64, f64>, f64) {
+    println!("home={home:?}, now={now}");
+    let (running, expires) = forecast_activity(home, now, "codex");
+    let instances = running.into_iter()
+        .filter_map(|(key, started)| key.parse::<i64>().ok().map(|id| (id, started)))
+        .collect();
+    let result = (instances, expires);
+    println!("{result:?}");
+    result
+}
+
+/// Load the earliest current run for Mistral Vibe sessions.
+/// Parameters: home - user home for resolving tracker state; now - current epoch seconds.
+/// Returns: the earliest Vibe run start, with the publication expiry epoch.
+fn vibe_forecast_activity(home: &Path, now: f64) -> (Option<f64>, f64) {
+    println!("home={home:?}, now={now}");
+    let (running, expires) = forecast_activity(home, now, "vibe");
+    let result = (running.get("vibe").copied(), expires);
+    println!("{result:?}");
+    result
+}
+
 /// Measure the change between two recent observations from the current run.
-/// Parameters: sample - current usage sample; baseline - earlier usage sample; started - running activity floor.
+/// Parameters: sample - current usage sample; baseline - earlier usage sample; started - running activity floor; max_age - maximum usable gap between the observations.
 /// Returns: elapsed seconds and quota percentage-point increase, or None for an unusable pair.
-fn observed_usage_delta(sample: &Value, baseline: &Value, started: f64) -> Option<(f64, f64)> {
-    println!("sample={sample}, baseline={baseline}, started={started}");
+fn observed_usage_delta(sample: &Value, baseline: &Value, started: f64, max_age: f64) -> Option<(f64, f64)> {
+    println!("sample={sample}, baseline={baseline}, started={started}, max_age={max_age}");
     let result = sample["observed_at"].as_f64().zip(sample["used_percent"].as_f64())
         .zip(baseline["observed_at"].as_f64().zip(baseline["used_percent"].as_f64()))
         .and_then(|((observed, used), (earlier, previous_used))| {
             let elapsed = observed - earlier;
             let increase = used - previous_used;
-            (earlier >= started && elapsed > 0.0 && elapsed <= FORECAST_SAMPLE_MAX_AGE
+            (earlier >= started && elapsed > 0.0 && elapsed <= max_age
                 && increase >= 0.0).then_some((elapsed, increase))
         });
     println!("{result:?}");
@@ -1606,7 +1645,7 @@ fn observed_usage_delta(sample: &Value, baseline: &Value, started: f64) -> Optio
 }
 
 /// Classify recent usage and estimate exhaustion independently for each account window.
-/// Parameters: account - current account snapshot; previous - previous account with the same identity; active_since - earliest currently running turn for this account; activity_expires - tracker publication expiry; now - current epoch seconds.
+/// Parameters: account - current account snapshot; previous - previous account with the same identity; active_since - earliest currently running turn for this account; activity_expires - tracker publication expiry; now - current epoch seconds; sample_max_age - maximum usable gap between usage observations for this CLI.
 /// Returns: account snapshot with expiring flat-rate or forecast metadata when measured.
 fn forecast_account_limits(
     mut account: Value,
@@ -1614,14 +1653,15 @@ fn forecast_account_limits(
     active_since: Option<f64>,
     activity_expires: f64,
     now: f64,
+    sample_max_age: f64,
 ) -> Value {
-    println!("account={account}, previous={previous:?}, active_since={active_since:?}, activity_expires={activity_expires}, now={now}");
+    println!("account={account}, previous={previous:?}, active_since={active_since:?}, activity_expires={activity_expires}, now={now}, sample_max_age={sample_max_age}");
     let observed = account["observed_at"].as_f64().unwrap_or(0.0);
     let stale = account["stale"] == true;
     let prior_windows = previous.filter(|row| row["source"] == account["source"])
         .and_then(|row| row["windows"].as_array());
     let sample_start = active_since.filter(|started| {
-        !stale && observed >= *started && observed <= now && now - observed < FORECAST_SAMPLE_MAX_AGE
+        !stale && observed >= *started && observed <= now && now - observed < sample_max_age
     });
     if let Some(windows) = account.get_mut("windows").and_then(Value::as_array_mut) {
         for window in windows {
@@ -1639,14 +1679,14 @@ fn forecast_account_limits(
                 })) {
                     let prior_sample = &prior["usage_sample"];
                     let anchor = if prior_sample == &sample { &prior["usage_baseline"] } else { prior_sample };
-                    if let Some((elapsed, increase)) = observed_usage_delta(&sample, anchor, started) {
+                    if let Some((elapsed, increase)) = observed_usage_delta(&sample, anchor, started, sample_max_age) {
                         if increase > 0.0 {
                             let at = observed + (100.0 - used) * elapsed / increase;
                             deadline = (at.is_finite() && at > now).then_some(at);
                         }
                         if increase == 0.0 || deadline.is_some() {
                             baseline = anchor.clone();
-                            valid_until = Some(activity_expires.min(observed + FORECAST_SAMPLE_MAX_AGE)
+                            valid_until = Some(activity_expires.min(observed + sample_max_age)
                                 .min(reset).min(deadline.unwrap_or(reset)));
                             state = match deadline {
                                 Some(at) if at > reset => "after_reset",
@@ -1680,7 +1720,7 @@ fn forecast_codex_limits(mut snapshot: Value, previous: Option<&Value>, home: &P
             let prior = previous.and_then(|p| p["instances"].as_array())
                 .and_then(|items| items.iter().find(|item| item["id"] == row["id"] && item["home"] == row["home"]));
             let active_since = row["id"].as_i64().and_then(|id| running.get(&id)).copied();
-            *row = forecast_account_limits(row.clone(), prior, active_since, expires, now);
+            *row = forecast_account_limits(row.clone(), prior, active_since, expires, now, FORECAST_SAMPLE_MAX_AGE);
         }
         let selected = snapshot["selected"].as_i64();
         if let Some(row) = snapshot["instances"].as_array().and_then(|rows| rows.iter().find(|row| row["id"].as_i64() == selected)).cloned() {
@@ -1689,10 +1729,21 @@ fn forecast_codex_limits(mut snapshot: Value, previous: Option<&Value>, home: &P
     } else {
         let selected = snapshot["selected"].as_i64().unwrap_or(1);
         let prior = previous.filter(|row| row["selected"].as_i64().unwrap_or(1) == selected);
-        snapshot = forecast_account_limits(snapshot, prior, running.get(&selected).copied(), expires, now);
+        snapshot = forecast_account_limits(snapshot, prior, running.get(&selected).copied(), expires, now, FORECAST_SAMPLE_MAX_AGE);
     }
     println!("{snapshot}");
     snapshot
+}
+
+/// Attach a usage forecast to the Vibe monthly snapshot.
+/// Parameters: snapshot - current Vibe snapshot; previous - previous Vibe snapshot; home - user home for resolving tracker state; now - current epoch seconds.
+/// Returns: snapshot with per-window forecast data.
+fn forecast_vibe_limits(snapshot: Value, previous: Option<&Value>, home: &Path, now: f64) -> Value {
+    println!("snapshot={snapshot}, previous={previous:?}, home={home:?}, now={now}");
+    let (active_since, expires) = vibe_forecast_activity(home, now);
+    let result = forecast_account_limits(snapshot, previous, active_since, expires, now, VIBE_FORECAST_SAMPLE_MAX_AGE);
+    println!("{result}");
+    result
 }
 
 /// Refresh the Codex reset forecast for this tick.
@@ -2194,6 +2245,66 @@ for method, line in zip(steps, sys.stdin, strict=True):
         let missing = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &PollHooks::default());
         assert_eq!(missing["clis"]["vibe"]["windows"], json!([]));
         println!("()");
+    }
+
+    /// Estimate Vibe monthly exhaustion from successive account reads while a Vibe session runs.
+    /// Parameters: none.
+    /// Returns: None.
+    #[test]
+    fn public_poll_forecasts_vibe_monthly_exhaustion() {
+        println!("parameters=none");
+        use std::os::unix::fs::PermissionsExt;
+        let sandbox = Sandbox::new();
+        configure(false);
+        let mut cfg = load_config(None);
+        cfg["clis"]["vibe"]["enabled"] = json!(true);
+        save_config(&cfg, None).unwrap();
+        let path = sandbox.home.join(".local/bin/vibe-app-server");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let server = |usage: f64| {
+            fs::write(&path, format!(r#"#!/usr/bin/env python3
+import json, sys
+steps = ["initialize", "initialized", "session/start", "account/read"]
+for method, line in zip(steps, sys.stdin, strict=True):
+    req = json.loads(line)
+    results = {{
+        "initialize": {{}},
+        "session/start": {{"state": {{"session": {{"id": "ephemeral-id"}}}}}},
+        "account/read": {{"account": {{"budget": {{"usagePercentage": {usage}, "resetAt": "2026-12-01T00:00:00Z", "paygEnabled": False}}}}}},
+    }}
+    if "id" in req:
+        print(json.dumps({{"id": req["id"], "result": results[method]}}), flush=True)
+"#)).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let running = |started: f64| json!([{
+            "kind": "vibe", "phase": "RUNNING", "run_active": true,
+            "run_started_at": chrono::DateTime::from_timestamp(started as i64, 0).unwrap().to_rfc3339()
+        }]);
+        let window = |status: Value| status["clis"]["vibe"]["windows"][0].clone();
+
+        server(10.0);
+        write_forecast_activity(&sandbox.home, NOW, running(NOW - 10.0));
+        let first = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &PollHooks::default());
+        assert_eq!(window(first.clone())["exhaustion_state"], "estimating");
+        assert!(window(first.clone())["exhaustion_at"].is_null());
+
+        server(20.0);
+        write_forecast_activity(&sandbox.home, NOW + 300.0, running(NOW - 10.0));
+        let second = poll_once(Some(&sandbox.home), Some(&first), Some(NOW + 300.0), None, None, &PollHooks::default());
+        let second_window = window(second.clone());
+        assert_eq!(second_window["exhaustion_state"], "active");
+        // 10 points in 300s: the remaining 80 points need 2400s.
+        assert_eq!(second_window["exhaustion_at"], json!(NOW + 2700.0));
+        assert_eq!(second_window["exhaustion_seconds"], json!(2400.0));
+
+        write_forecast_activity(&sandbox.home, NOW + 310.0, json!([
+            {"kind":"vibe", "phase":"DONE", "run_active":false}
+        ]));
+        let idle = poll_once(Some(&sandbox.home), Some(&second), Some(NOW + 310.0), None, None, &PollHooks::default());
+        assert_eq!(window(idle.clone())["exhaustion_state"], "idle");
+        assert!(window(idle)["exhaustion_at"].is_null());
+        println!("None");
     }
 
     #[test]
