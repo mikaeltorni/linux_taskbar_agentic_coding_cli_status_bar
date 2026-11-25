@@ -1237,35 +1237,20 @@ const panelAgentRuntimeColor = (agent, now = Date.now(), stale = false) => {
 };
 
 /**
- * Resolve the published instance numbers that distinguish open bars.
+ * Resolve account badges for open Codex bars when multiple logins are registered.
  * Parameters: entries - scoped agent and provider pairs; codexInstanceCount - registered Codex accounts.
- * Returns: a map from each numbered bar's key to its display number.
+ * Returns: a map from each labeled bar's key to its Codex account number.
  */
 function panelInstanceNumbers(entries, codexInstanceCount) {
     print(`entries=${entries} codexInstanceCount=${codexInstanceCount}`);
-    const projectGroups = new Map();
     const result = new Map();
-    for (const {agent, provider, key} of entries) {
-        const kind = agent.kind || provider.kind;
-        const showAccount = kind === 'codex' && codexInstanceCount > 1;
-        const number = Number(showAccount ? agent.codex_instance : agent.instance);
-        const displayNumber = Number.isSafeInteger(number) && number > 0 ? number : null;
-        if (showAccount) {
-            if (displayNumber !== null)
-                result.set(key, displayNumber);
-        } else if (!agent.harbor) {
-            const groupKey = JSON.stringify([kind, agent.project || '']);
-            if (!projectGroups.has(groupKey))
-                projectGroups.set(groupKey, []);
-            projectGroups.get(groupKey).push({key, displayNumber});
-        }
-    }
-    for (const group of projectGroups.values()) {
-        if (group.length > 1) {
-            for (const {key, displayNumber} of group) {
-                if (displayNumber !== null)
-                    result.set(key, displayNumber);
-            }
+    if (codexInstanceCount > 1) {
+        for (const {agent, provider, key} of entries) {
+            if ((agent.kind || provider.kind) !== 'codex')
+                continue;
+            const accountNumber = Number(agent.codex_instance);
+            if (Number.isSafeInteger(accountNumber) && accountNumber > 0)
+                result.set(key, accountNumber);
         }
     }
     print(result);
