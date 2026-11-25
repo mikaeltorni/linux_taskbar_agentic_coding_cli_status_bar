@@ -1588,29 +1588,26 @@ fn codex_forecast_activity(home: &Path, now: f64) -> (HashMap<i64, f64>, f64) {
     result
 }
 
-/// Extrapolate a future quota deadline from a positive delta during the current run.
-/// Parameters: sample - current usage sample; baseline - earlier usage sample; started - running activity floor; now - current epoch seconds.
-/// Returns: the projected deadline, or None when the samples cannot establish a current rate.
-fn exhaustion_deadline(sample: &Value, baseline: &Value, started: f64, now: f64) -> Option<f64> {
-    println!("sample={sample}, baseline={baseline}, started={started}, now={now}");
-    let deadline = sample["observed_at"].as_f64().zip(sample["used_percent"].as_f64())
+/// Measure the change between two recent observations from the current run.
+/// Parameters: sample - current usage sample; baseline - earlier usage sample; started - running activity floor.
+/// Returns: elapsed seconds and quota percentage-point increase, or None for an unusable pair.
+fn observed_usage_delta(sample: &Value, baseline: &Value, started: f64) -> Option<(f64, f64)> {
+    println!("sample={sample}, baseline={baseline}, started={started}");
+    let result = sample["observed_at"].as_f64().zip(sample["used_percent"].as_f64())
         .zip(baseline["observed_at"].as_f64().zip(baseline["used_percent"].as_f64()))
         .and_then(|((observed, used), (earlier, previous_used))| {
             let elapsed = observed - earlier;
             let increase = used - previous_used;
-            if earlier < started || elapsed <= 0.0 || elapsed > FORECAST_SAMPLE_MAX_AGE || increase <= 0.0 {
-                return None;
-            }
-            let deadline = observed + (100.0 - used) * elapsed / increase;
-            (deadline.is_finite() && deadline > now).then_some(deadline)
+            (earlier >= started && elapsed > 0.0 && elapsed <= FORECAST_SAMPLE_MAX_AGE
+                && increase >= 0.0).then_some((elapsed, increase))
         });
-    println!("{deadline:?}");
-    deadline
+    println!("{result:?}");
+    result
 }
 
-/// Estimate exhaustion independently for one account's rate-limit windows.
+/// Classify recent usage and estimate exhaustion independently for each account window.
 /// Parameters: account - current account snapshot; previous - previous account with the same identity; active_since - earliest currently running turn for this account; activity_expires - tracker publication expiry; now - current epoch seconds.
-/// Returns: account snapshot with per-window forecast metadata.
+/// Returns: account snapshot with expiring flat-rate or forecast metadata when measured.
 fn forecast_account_limits(
     mut account: Value,
     previous: Option<&Value>,
@@ -1642,11 +1639,21 @@ fn forecast_account_limits(
                 })) {
                     let prior_sample = &prior["usage_sample"];
                     let anchor = if prior_sample == &sample { &prior["usage_baseline"] } else { prior_sample };
-                    deadline = exhaustion_deadline(&sample, anchor, started, now);
-                    if let Some(at) = deadline {
-                        baseline = anchor.clone();
-                        valid_until = Some(activity_expires.min(observed + FORECAST_SAMPLE_MAX_AGE).min(reset).min(at));
-                        state = if at > reset { "after_reset" } else { "active" };
+                    if let Some((elapsed, increase)) = observed_usage_delta(&sample, anchor, started) {
+                        if increase > 0.0 {
+                            let at = observed + (100.0 - used) * elapsed / increase;
+                            deadline = (at.is_finite() && at > now).then_some(at);
+                        }
+                        if increase == 0.0 || deadline.is_some() {
+                            baseline = anchor.clone();
+                            valid_until = Some(activity_expires.min(observed + FORECAST_SAMPLE_MAX_AGE)
+                                .min(reset).min(deadline.unwrap_or(reset)));
+                            state = match deadline {
+                                Some(at) if at > reset => "after_reset",
+                                Some(_) => "active",
+                                None => "flat",
+                            };
+                        }
                     }
                 }
             }
@@ -2405,7 +2412,7 @@ for method, line in zip(steps, sys.stdin, strict=True):
         println!("None");
     }
 
-    /// Estimate exhaustion from two observations of the same Codex account window.
+    /// Distinguish rising, flat and unavailable rates across observations of one Codex account.
     /// Parameters: none.
     /// Returns: None.
     #[test]
@@ -2427,7 +2434,9 @@ for method, line in zip(steps, sys.stdin, strict=True):
 
         write_forecast_activity(&sandbox.home, NOW, running(NOW - 10.0));
         let first = poll_once(Some(&sandbox.home), None, Some(NOW), None, None, &first_hooks);
-        assert!(window(first.clone())["exhaustion_seconds"].is_null());
+        let first_window = window(first.clone());
+        assert_eq!(first_window["exhaustion_state"], "estimating");
+        assert!(first_window["exhaustion_seconds"].is_null());
 
         write_forecast_activity(&sandbox.home, NOW + 60.0, running(NOW - 10.0));
         let second = poll_once(Some(&sandbox.home), Some(&first), Some(NOW + 60.0), None, None, &second_hooks);
@@ -2449,16 +2458,26 @@ for method, line in zip(steps, sys.stdin, strict=True):
 
         write_forecast_activity(&sandbox.home, NOW + 120.0, running(NOW - 10.0));
         let flat = poll_once(Some(&sandbox.home), Some(&second), Some(NOW + 120.0), None, None, &second_hooks);
-        assert!(window(flat.clone())["exhaustion_seconds"].is_null());
+        let flat_window = window(flat.clone());
+        assert_eq!(flat_window["exhaustion_state"], "flat");
+        assert_eq!(flat_window["exhaustion_valid_until"], json!(NOW + 150.0));
+        assert!(flat_window["exhaustion_at"].is_null());
+        assert!(flat_window["exhaustion_seconds"].is_null());
+
+        let repeated = poll_once(Some(&sandbox.home), Some(&flat), Some(NOW + 125.0), None, None, &second_hooks);
+        assert_eq!(window(repeated)["exhaustion_state"], "flat");
+
+        let expired = poll_once(Some(&sandbox.home), Some(&flat), Some(NOW + 150.0), None, None, &second_hooks);
+        assert_eq!(window(expired)["exhaustion_state"], "idle");
 
         write_forecast_activity(&sandbox.home, NOW + 121.0, running(NOW + 121.0));
         let resumed = poll_once(Some(&sandbox.home), Some(&flat), Some(NOW + 121.0), None, None, &second_hooks);
-        assert!(window(resumed)["exhaustion_seconds"].is_null());
+        assert_eq!(window(resumed)["exhaustion_state"], "estimating");
 
         let reset_hooks = PollHooks { codex_metadata_reader: Some(Arc::new(|_, _| Ok(json!({"resets_available": 1, "timer_windows": [{"label":"5h", "used_percent":2, "resets_at": NOW + 5000.0}]})))), ..PollHooks::default() };
         write_forecast_activity(&sandbox.home, NOW + 180.0, running(NOW - 10.0));
         let reset = poll_once(Some(&sandbox.home), Some(&flat), Some(NOW + 180.0), None, None, &reset_hooks);
-        assert!(window(reset)["exhaustion_seconds"].is_null());
+        assert_eq!(window(reset)["exhaustion_state"], "estimating");
         println!("None");
     }
 
