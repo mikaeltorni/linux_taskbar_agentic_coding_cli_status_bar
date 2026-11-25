@@ -75,6 +75,11 @@
   spacing: 6px;
 }
 
+.ams-panel-task-selection {
+  border: 1px solid #00ffe6;
+  border-radius: 3px;
+}
+
 .ams-panel-task-logo {
   color: #e4e7ed;
 }
