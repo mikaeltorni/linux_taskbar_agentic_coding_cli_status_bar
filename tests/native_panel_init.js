@@ -46,7 +46,7 @@ const NativePanelButton = GObject.registerClass(class HarborNativeParent extends
 const Panel = new Function('GObject', 'PanelMenu', 'Extension', 'St', 'Main', 'file', `${source};
     payloadFile = () => file; readUnreadStates = () => new Map(); return AccModelStatusButton;`)(
     GObject, {Button: NativePanelButton}, class {}, {BoxLayout: Actor},
-    {panel: {menuManager: {_grabParams: {actionMode: 1}}}}, {get_parent: () => ({get_child: () => ({})})});
+    {panel: {menuManager: {_grabParams: {actionMode: 1}}}}, {get_parent: () => ({get_child: () => null})});
 Panel.prototype._startWatching = () => {};
 Panel.prototype._startWindowWatching = () => {};
 Panel.prototype._syncPanelPulseTimer = () => {};

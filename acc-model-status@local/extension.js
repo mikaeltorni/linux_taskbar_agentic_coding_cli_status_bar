@@ -41,6 +41,9 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 const PAYLOAD_FILENAME = 'model_status_bar.json';
 /** Local acknowledgement state for finished turns. */
 const UNREAD_FILENAME = 'model-status-unread.json';
+/** Saved taskbar visibility choices for tracked instances. */
+const HIDDEN_PANEL_FILENAME = 'model-status-hidden-instances.json';
+const PANEL_SLOT_PREFIX = 'panel-slot:';
 /** Tracker state directory relative to the user's state home. */
 const STATE_DIR_NAME = 'codex-agent-tracker';
 /** Environment override honored by the tracker (and therefore by us). */
@@ -287,6 +290,59 @@ function saveUnreadStates(file, states) {
     } catch (error) {
         logError(error, 'acc-model-status: could not save unread completion state');
     }
+}
+
+/** Identify panel keys that are safe to remember after a restart.
+ * Parameters: key - a published task identity or a generated panel slot.
+ * Returns: whether the key identifies a task rather than an anonymous slot.
+ */
+function isPersistentPanelTaskKey(key) {
+    print(`key=${key}`);
+    const result = typeof key === 'string' && key.trim().length > 0 && !key.startsWith(PANEL_SLOT_PREFIX);
+    print(result);
+    return result;
+}
+
+/** Read saved task identities on the first panel refresh.
+ * Parameters: file - per-user hidden task state document.
+ * Returns: a set of saved keys, empty if the document is absent or unreadable.
+ */
+function readHiddenPanelTasks(file) {
+    print(`file=${file}`);
+    const hidden = new Set();
+    try {
+        if (file?.query_exists(null)) {
+            const [ok, bytes] = file.load_contents(null);
+            const keys = ok ? JSON.parse(new TextDecoder().decode(bytes)) : null;
+            if (Array.isArray(keys)) {
+                for (const key of keys.filter(isPersistentPanelTaskKey))
+                    hidden.add(key);
+            }
+        }
+    } catch (error) {
+        print(`acc-model-status: could not read hidden taskbar instances: ${error.message}`);
+    }
+    print([...hidden]);
+    return hidden;
+}
+
+/** Atomically save and flush hidden task identities to disk.
+ * Parameters: file - per-user hidden task state document; hidden - proposed visibility set.
+ * Returns: whether the persistent write succeeded.
+ */
+function saveHiddenPanelTasks(file, hidden) {
+    print(`file=${file} hidden=${JSON.stringify([...hidden])}`);
+    let saved = false;
+    try {
+        GLib.mkdir_with_parents(file.get_parent().get_path(), 0o700);
+        const contents = JSON.stringify([...hidden].filter(isPersistentPanelTaskKey));
+        saved = GLib.file_set_contents_full(file.get_path(), new TextEncoder().encode(contents),
+            GLib.FileSetContentsFlags.CONSISTENT | GLib.FileSetContentsFlags.DURABLE, 0o600);
+    } catch (error) {
+        print(`acc-model-status: could not save hidden taskbar instances: ${error.message}`);
+    }
+    print(saved);
+    return saved;
 }
 
 /** Return existing group-switch values that collide with Alt+Above_Tab. */
@@ -2536,17 +2592,22 @@ class AccModelStatusButton extends PanelMenu.Button {
         return item;
     }
 
-    /** Change a task's panel visibility and repaint the latest snapshot.
+    /** Save a task's panel visibility change before repainting the latest snapshot.
      * Parameters: this - status button; key - selected task key; hidden - whether the task belongs in recovery.
      * Returns: undefined.
      */
     _setPanelTaskHidden(key, hidden) {
         print(`this=${this} key=${key} hidden=${hidden}`);
+        const nextHidden = new Set(this._hiddenPanelTasks);
         if (hidden)
-            this._hiddenPanelTasks.add(key);
+            nextHidden.add(key);
         else
-            this._hiddenPanelTasks.delete(key);
-        this._updatePanelProgress(this._panelProgressPayload, this._panelProgressStale);
+            nextHidden.delete(key);
+        if (!this._hiddenPanelFile || !isPersistentPanelTaskKey(key) ||
+            saveHiddenPanelTasks(this._hiddenPanelFile, nextHidden)) {
+            this._hiddenPanelTasks = nextHidden;
+            this._updatePanelProgress(this._panelProgressPayload, this._panelProgressStale);
+        }
         print(undefined);
     }
 
@@ -2687,7 +2748,8 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
     this._panelProgressPayload = payload;
     this._panelProgressStale = stale;
     if (!this._panelProgress) {
-        this._hiddenPanelTasks = new Set();
+        this._hiddenPanelFile = this._file?.get_parent().get_child(HIDDEN_PANEL_FILENAME);
+        this._hiddenPanelTasks = readHiddenPanelTasks(this._hiddenPanelFile);
         this._panelProgress = new St.BoxLayout({style_class: 'ams-panel-progress'});
         this._panelProgress.connect('destroy', () => this._destroyPanelRecoveryPopup());
         this._panelProgressBars = new Map();
@@ -2704,7 +2766,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
     }
     const entries = (payload?.providers || []).flatMap(provider =>
         (provider.agents || []).map((agent, index) => ({provider, agent,
-            key: String(agent.session_id || agent.tmux_name || agent.key || `${provider.kind}:${index}`)}))).concat(this._harborEntries || []);
+            key: String(agent.session_id || agent.tmux_name || agent.key || `${PANEL_SLOT_PREFIX}${provider.kind}:${index}`)}))).concat(this._harborEntries || []);
     const groups = groupWorkspaceEntries(entries);
     const hidden = this._hiddenPanelTasks;
     const hiddenCounts = new Map();

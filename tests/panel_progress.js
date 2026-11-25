@@ -139,7 +139,7 @@ const snippets = ['phaseColor', 'agentPhaseBadgeColor', 'taskProgressValue', 'pa
     ...(source.includes('function panelLaunchWaitSeconds(') ? ['panelLaunchWaitSeconds'] : []),
     ...((source.includes('function panelAgentRuntimeText(') || source.includes('const panelAgentRuntimeText = (')) ? ['formatPanelRunDuration', 'panelAgentRuntimeText'] : []),
     ...((source.includes('function panelAgentRuntimeColor(') || source.includes('const panelAgentRuntimeColor = (')) ? ['panelAgentRuntimeColor'] : []),
-    'panelCompletionAgeText',
+    'panelCompletionAgeText', 'isPersistentPanelTaskKey', 'readHiddenPanelTasks', 'saveHiddenPanelTasks',
     ...(source.includes('function panelWorkspaceColor(') ? ['panelWorkspaceColor'] : []),
     ...(source.includes('function buildPanelMonitorSeparator(') ? ['paintPanelMonitorSeparator', 'buildPanelMonitorSeparator'] : [])]
     .map(name => declaration(name));
@@ -149,7 +149,9 @@ const harborSource = new TextDecoder().decode(harborBytes).replace(/^import .*;$
 const Harbor = new Function(`${harborSource}; return {harborPanelEntries, harborCountText, formatHarborEstimate};`)();
 const timers = new Map();
 let nextTimer = 1;
-const GLib = {PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true,
+const StateGLib = imports.gi.GLib;
+const GLib = {mkdir_with_parents: StateGLib.mkdir_with_parents, file_set_contents_full: StateGLib.file_set_contents_full,
+    FileSetContentsFlags: StateGLib.FileSetContentsFlags, PRIORITY_DEFAULT: 0, SOURCE_CONTINUE: true,
     timeout_add: (_priority, delay, callback) => {
         const id = nextTimer++;
         callback.delay = delay;
@@ -167,6 +169,8 @@ const services = {readPayload: () => snapshot, scopePayloadToWindows: value => v
 const makeOwners = new Function('St', 'Clutter', 'GLib', 'services', 'print', 'Cairo', 'Harbor', 'Gio', 'Pango', 'BoxPointer', 'Main', `${source.slice(source.indexOf('const PHASE_COLORS ='), source.indexOf('};', source.indexOf('const PHASE_COLORS =')) + 2)}
 ${snippets.join('\n')}
     const FALLBACK_ICON = 'acc-provider-generic-symbolic';
+    ${source.match(/^const HIDDEN_PANEL_FILENAME = .+;$/m)[0]}
+    ${source.match(/^const PANEL_SLOT_PREFIX = .+;$/m)[0]}
     const {harborCountText, formatHarborEstimate} = Harbor;
     const {readPayload, scopePayloadToWindows, withWindowDisplayIds, readWindowDisplayIds,
         ageSeconds, STALE_SECONDS,
@@ -1741,3 +1745,80 @@ check(hiddenCount(2) === '1' && hiddenCount(4) === undefined, 'moving a hidden t
 countButton._updatePanelProgress({providers: [{kind: 'codex', agents: [countTasks[0]]}]}, false);
 check(hiddenCount(2) === undefined, 'a removed hidden task no longer contributes to the count');
 print('PASS: small teal per-workspace counts track hiding, popup state, restoration and task moves.');
+
+// Restart the panel against a real temporary state file with initially missing directories.
+const persistenceDir = StateGLib.dir_make_tmp('acc-panel-hide-XXXXXX');
+const stateFile = Gio.File.new_for_path(`${persistenceDir}/tracker/model-status-hidden-instances.json`);
+const startPersistencePanel = (file = stateFile) => Object.assign({
+    _iconsDir: iconsDir, _box: new Actor(), _syncTaskHover: () => {}, _file: file.get_parent().get_child('model_status_bar.json'),
+}, owners.updater);
+const pressTaskCtrl = (panel, key) => {
+    const cell = panel._panelProgressBars.get(key).get_parent();
+    return cell['button-press-event'](cell, ctrlClick);
+};
+const persistedAgent = {session_id: 'persistent-session-id', note_id: 'persistent-note', workspace: 2, phase: 'DONE'};
+const persistencePayload = {providers: [{kind: 'codex', agents: [persistedAgent]}]};
+try {
+    const beforeRestart = startPersistencePanel();
+    beforeRestart._updatePanelProgress(persistencePayload, false);
+    check(visibleBars(beforeRestart._panelProgress).length === 1, 'first-run state starts with the task visible');
+    pressTaskCtrl(beforeRestart, persistedAgent.session_id);
+    check(visibleBars(beforeRestart._panelProgress).length === 0, 'Ctrl-click hides the task before restart');
+    beforeRestart._panelProgress.destroy();
+
+    const afterRestart = startPersistencePanel();
+    afterRestart._updatePanelProgress(null, false);
+    afterRestart._updatePanelProgress({providers: [{kind: 'codex', agents: [
+        {...persistedAgent, workspace: 4, note_id: 'resumed-note'},
+        {...persistedAgent, session_id: 'different-session', workspace: 4},
+    ]}]}, false);
+    check(visibleBars(afterRestart._panelProgress).map(bar => bar._amsAgent.session_id).join() === 'different-session',
+        'restarted panel keeps the resumed session hidden after initially empty status, without hiding unrelated tasks');
+    const resumedWorkspace = workspaceTarget(afterRestart, 4);
+    check(resumedWorkspace.children[0].text === '1', 'the restored hidden count follows the current workspace');
+    resumedWorkspace['button-press-event'](resumedWorkspace, leftClick);
+    pressTaskCtrl(afterRestart, persistedAgent.session_id);
+    check(visibleBars(afterRestart._panelProgress).length === 2, 'Ctrl-click restores the previously saved task');
+    afterRestart._panelProgress.destroy();
+
+    const afterRestore = startPersistencePanel();
+    afterRestore._updatePanelProgress(persistencePayload, false);
+    check(visibleBars(afterRestore._panelProgress).length === 1, 'restoration remains visible across the next restart');
+    afterRestore._panelProgress.destroy();
+
+    const anonymousPayload = {providers: [{kind: 'codex', agents: [{workspace: 2, phase: 'DONE'}]}]};
+    const anonymousPanel = startPersistencePanel();
+    anonymousPanel._updatePanelProgress(anonymousPayload, false);
+    pressTaskCtrl(anonymousPanel, [...anonymousPanel._panelProgressBars.keys()][0]);
+    check(visibleBars(anonymousPanel._panelProgress).length === 0, 'a task without an ID can still be hidden on this panel');
+    anonymousPanel._panelProgress.destroy();
+    const replacementPanel = startPersistencePanel();
+    replacementPanel._updatePanelProgress(anonymousPayload, false);
+    check(visibleBars(replacementPanel._panelProgress).length === 1, 'an anonymous slot cannot hide a new task after restart');
+    replacementPanel._panelProgress.destroy();
+
+    StateGLib.file_set_contents(stateFile.get_path(), '{broken-json');
+    const recoveredPanel = startPersistencePanel();
+    recoveredPanel._updatePanelProgress(persistencePayload, false);
+    check(visibleBars(recoveredPanel._panelProgress).length === 1, 'unreadable saved state starts with a usable panel');
+    pressTaskCtrl(recoveredPanel, persistedAgent.session_id);
+    recoveredPanel._panelProgress.destroy();
+    const repairedPanel = startPersistencePanel();
+    repairedPanel._updatePanelProgress(persistencePayload, false);
+    check(visibleBars(repairedPanel._panelProgress).length === 0, 'the next successful hide replaces malformed state');
+    repairedPanel._panelProgress.destroy();
+
+    const blockedFile = stateFile.get_child('model-status-hidden-instances.json');
+    const blockedPanel = startPersistencePanel(blockedFile);
+    blockedPanel._updatePanelProgress(persistencePayload, false);
+    pressTaskCtrl(blockedPanel, persistedAgent.session_id);
+    check(visibleBars(blockedPanel._panelProgress).length === 1, 'a failed save leaves the panel in its previous state');
+    blockedPanel._panelProgress.destroy();
+} finally {
+    if (stateFile.query_exists(null)) {
+        stateFile.delete(null);
+        stateFile.get_parent().delete(null);
+    }
+    StateGLib.rmdir(persistenceDir);
+}
+print('PASS: hiding and restoration survive panel restarts with late ACC data.');
