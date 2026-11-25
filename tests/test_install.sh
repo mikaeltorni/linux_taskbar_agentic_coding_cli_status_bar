@@ -12,6 +12,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d /tmp/agentic-cli-status-test.XXXXXX)"
 BIN_DIR="$TMP_DIR/bin"
 TARGET_HOME="$TMP_DIR/home"
+TEST_USER="$(id -un)"
+TEST_UID="$(id -u)"
+TEST_GID="$(id -g)"
 EXTENSION_UUID="agentic-cli-status@local"
 CALL_LOG="$TMP_DIR/calls.log"
 PASS=0
@@ -83,8 +86,8 @@ mkdir -p "$BIN_DIR" "$TARGET_HOME"
 
 cat >"$BIN_DIR/getent" <<EOF
 #!/usr/bin/env bash
-if [[ "\${1:-}" == "passwd" && "\${2:-}" == "mk" ]]; then
-  printf '%s\n' "mk:x:1000:1000::$TARGET_HOME:/bin/bash"
+if [[ "\${1:-}" == "passwd" && "\${2:-}" == "$TEST_USER" ]]; then
+  printf '%s\n' "$TEST_USER:x:$TEST_UID:$TEST_GID::$TARGET_HOME:/bin/bash"
   exit 0
 fi
 exec /usr/bin/getent "\$@"
@@ -133,8 +136,13 @@ isc_functions_dir() {
 }
 ISC_FUNCTIONS_DIR_RESOLVED="$(isc_functions_dir || true)"
 
+# Run the public installer with isolated user settings and desktop commands.
+# Parameters: $@ - standalone installer arguments.
+# Returns: the installer's exit status.
 run_installer() {
-  PATH="$BIN_DIR:$PATH" SUDO_USER=mk DISPLAY=:99 \
+  printf 'arguments=%s\n' "$*" >&2
+  local status=0
+  PATH="$BIN_DIR:$PATH" SUDO_USER="$TEST_USER" DISPLAY=:99 \
     HOME="$TARGET_HOME" \
     ISC_FUNCTIONS_DIR="$ISC_FUNCTIONS_DIR_RESOLVED" \
     XDG_CONFIG_HOME="$TARGET_HOME/.config" \
@@ -142,7 +150,9 @@ run_installer() {
     CARGO_HOME="$CARGO_HOME" \
     RUSTUP_HOME="$RUSTUP_HOME" \
     ACS_LOG_DIR="$TMP_DIR/logs" \
-    bash "$REPO_ROOT/install.sh" "$@"
+    bash "$REPO_ROOT/install.sh" "$@" || status=$?
+  printf '%s\n' "$status" >&2
+  return "$status"
 }
 
 # --- Default install: core deploy + all default-on components -------------
@@ -408,14 +418,14 @@ LIST_HOME="$TMP_DIR/list-home"
 mkdir -p "$LIST_HOME"
 cat >"$BIN_DIR/getent" <<EOF
 #!/usr/bin/env bash
-if [[ "\${1:-}" == "passwd" && "\${2:-}" == "mk" ]]; then
-  printf '%s\n' "mk:x:1000:1000::$LIST_HOME:/bin/bash"
+if [[ "\${1:-}" == "passwd" && "\${2:-}" == "$TEST_USER" ]]; then
+  printf '%s\n' "$TEST_USER:x:$TEST_UID:$TEST_GID::$LIST_HOME:/bin/bash"
   exit 0
 fi
 exec /usr/bin/getent "\$@"
 EOF
 chmod +x "$BIN_DIR/getent"
-PATH="$BIN_DIR:$PATH" SUDO_USER=mk DISPLAY=:99 HOME="$LIST_HOME" \
+PATH="$BIN_DIR:$PATH" SUDO_USER="$TEST_USER" DISPLAY=:99 HOME="$LIST_HOME" \
   XDG_CONFIG_HOME="$LIST_HOME/.config" XDG_STATE_HOME="$LIST_HOME/.local/state" \
   ISC_FUNCTIONS_DIR="$ISC_FUNCTIONS_DIR_RESOLVED" \
   bash "$REPO_ROOT/install.sh" --list-components >"$TMP_DIR/list.out" 2>/dev/null || {
