@@ -471,10 +471,12 @@ instance stays hidden when you reopen the same session, and its count appears
 on the workspace where it opens. Tasks without a stable identity can be
 hidden for the current desktop session.
 
-To finish a visible task, **Ctrl+left-click** its row in the right-click
-details menu. The details menu closes and shows the task confirmation above
-the instance. **Right-click** the same bar or the confirmation to mark the
-task Done and close its CLI window. **Escape** or a click outside cancels.
+To finish a task, hold **Left Alt** and **left-click** its instance tile
+on the taskbar or in the workspace recovery popup. A confirmation appears
+above it. Click **Close and mark Done** or press **Enter** to move the task
+to Done and close its CLI window. Click **Cancel**, press **Escape**, or
+click outside to dismiss the confirmation. **§+0** remains available from
+the focused terminal through Phrase Automation.
 
 This uses Phrase Automation's existing focused-task completion service: a
 private timestamped notes backup, the move to Done, and cleanup of the exact
