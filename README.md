@@ -580,9 +580,10 @@ unknown or invalid finish leaves the age blank.
 
 The lower right shows the running agent's remaining estimate in 13.5px
 monospace text. The lower left shows the account number when multiple Codex
-accounts are registered. Otherwise, when a project has multiple open sessions
-of the same harness, their published project-local instance numbers appear
-there. The estimate shows only the compact duration, such as `~3m` or
+accounts are registered. With one Codex account, the number is hidden, even
+when several Codex sessions are open. Mistral Vibe and the other harnesses
+have no account number on their progress bars. The estimate shows only the
+compact duration, such as `~3m` or
 `~1h30m`. It disappears when the agent stops running, when a
 launch countdown is showing, or when no estimate is available. A rate-limited
 wait does not put time left under the bar. The far-right aggregate time estimate is removed. Timing labels
