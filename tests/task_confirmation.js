@@ -23,6 +23,7 @@ class Actor {
     disconnect = signal => { delete this.signals[signal]; };
     add_child = child => this.children.push(child);
     get_children = () => this.children;
+    contains = actor => this.children.some(child => child === actor || child.contains?.(actor));
     add_style_class_name = () => {};
     set_style = style => { this.style = style; };
     remove_style_class_name = () => {};
@@ -35,10 +36,11 @@ class Actor {
     open = () => { this.visible = true; };
     destroy = () => { this.destroyed = true; this.signals.destroy?.(this); };
 }
-const Clutter = {ModifierType: {CONTROL_MASK: 4}, EventType: {BUTTON_PRESS: 1, KEY_PRESS: 2},
-    KEY_Escape: 27, EVENT_STOP: true, EVENT_PROPAGATE: false,
+const Clutter = {ModifierType: {CONTROL_MASK: 4, MOD1_MASK: 8, MOD5_MASK: 128}, EventType: {BUTTON_PRESS: 1, KEY_PRESS: 2},
+    KEY_Escape: 27, KEY_Return: 13, KEY_KP_Enter: 14, EVENT_STOP: true, EVENT_PROPAGATE: false,
     ActorAlign: {CENTER: 0, FILL: 1, START: 2, END: 3}, BinLayout: class {}, FixedLayout: class {}};
 const stage = new Actor();
+stage.get_event_actor = event => event.target;
 const popups = [];
 const grabs = [];
 const Pointer = class {
@@ -52,7 +54,6 @@ const Pointer = class {
         this.setPosition = actor => { this.anchor = actor; };
         this.open = () => { this.visible = true; };
         this.destroy = () => { this.destroyed = true; };
-        this.contains = actor => this.children.includes(actor) || this.children.some(child => child.children.includes(actor));
         this.add_style_class_name = () => {};
         this.side = side;
         popups.push(this);
@@ -65,7 +66,7 @@ const Button = new Function('GObject', 'PanelMenu', 'Extension', 'BoxPointer', '
     `${source}\nreturn {Button: AccModelStatusButton, buildPanelTaskCell, completionCommand};`)(
     {registerClass: value => value}, {Button: class {}}, class {},
     {BoxPointer: Pointer, PopupAnimation: {NONE: 0}},
-    {Widget: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Icon: Actor, Side: {BOTTOM: 3}},
+    {Widget: Actor, BoxLayout: Actor, DrawingArea: Actor, Label: Actor, Icon: Actor, Button: Actor, Side: {BOTTOM: 3}},
     {layoutManager: {addChrome: () => {}},
         pushModal: actor => { const grab = {actor}; grabs.push(grab); return grab; },
         popModal: grab => { grabs.splice(grabs.indexOf(grab), 1); }},
@@ -76,47 +77,66 @@ button._agentMenuItem = (agent, provider, count, track) => new Actor({agent, pro
 button._completeAgent = agent => completed.push(agent);
 const agent = {note_id: 'note-a', session_id: 'session-a', title: 'Fix test run behavior', phase: 'DONE'};
 const provider = {kind: 'codex'};
-const cell = Button.buildPanelTaskCell(agent, id => focused.push(id));
-const arm = () => button._showTaskConfirmation(cell, agent, provider, 3);
-const click = (actor, buttonNumber, ctrl = false) => (actor.signals['button-press-event'] || actor.signals['captured-event'])(actor,
-    {type: () => 1, get_button: () => buttonNumber, get_state: () => ctrl ? 4 : 0});
-arm();
+let hides = 0;
+const requestCompletion = (target, current) => button._showTaskConfirmation(target, current, provider, 3);
+const cell = Button.buildPanelTaskCell(agent, id => focused.push(id), () => { hides++; }, false, requestCompletion);
+const click = (actor, buttonNumber, modifiers = 0) => actor.signals['button-press-event'](actor,
+    {type: () => Clutter.EventType.BUTTON_PRESS, get_button: () => buttonNumber, get_state: () => modifiers});
+const arm = () => click(cell, 1, Clutter.ModifierType.MOD1_MASK);
+const modalKey = key => stage.signals['captured-event'](stage,
+    {type: () => Clutter.EventType.KEY_PRESS, get_key_symbol: () => key});
+check(arm() === Clutter.EVENT_STOP && popups.length === 1, 'Left Alt-click opens confirmation on the taskbar cell');
 check(focused.length === 0 && completed.length === 0, 'arming neither focuses nor completes');
-check(popups.length === 1 && popups[0].anchor === cell && popups[0].side === 3, 'confirmation sits above the exact instance');
-check(grabs.length === 1 && grabs[0].actor === stage, 'confirmation grabs pointer and keyboard so outside clicks and Escape reach Shell');
+check(popups[0].anchor === cell && popups[0].side === 3, 'confirmation sits above the exact instance');
+check(grabs.length === 1 && grabs[0].actor === stage, 'confirmation grabs pointer and keyboard');
 const popup = popups[0];
 const content = popup.children[0];
 check(content.children[0].agent === agent, 'confirmation includes the original colored task details');
-check(content.children.some(child => /right.click.*confirm/i.test(child.text || '')), 'visible text says right-click to confirm');
-for (const mouseButton of [1, 2, 8]) {
-    click(content, mouseButton);
-    check(completed.length === 0, 'other buttons never confirm');
-}
-click(cell, 3);
-check(completed.length === 1 && completed[0] === agent && popup.destroyed, 'right-click on the instance confirms exact task once');
-click(cell, 3);
-check(completed.length === 1, 'a second right-click never repeats completion');
+check(content.children.some(child => /close this task and mark done/i.test(child.text || '')),
+    'confirmation explicitly mentions closing the task and moving it to Done');
+check(click(cell, 3) === Clutter.EVENT_PROPAGATE && completed.length === 0,
+    'right-click on the task never completes it');
+const actions = content.children.at(-1);
+const confirm = actions.children.find(child => child.label === 'Close and mark Done');
+check(stage.signals['captured-event'](stage, {type: () => Clutter.EventType.BUTTON_PRESS, target: confirm}) === Clutter.EVENT_PROPAGATE &&
+    !popup.destroyed && completed.length === 0, 'popup button press is delivered without dismissing or completing');
+confirm.signals.clicked();
+check(completed.length === 1 && completed[0] === agent && popup.destroyed,
+    'the explicit Done button completes the exact task once');
 click(cell, 1);
 check(focused.at(-1) === 'note-a', 'ordinary left-click retains terminal selection');
+click(cell, 1, Clutter.ModifierType.MOD5_MASK);
+check(popups.length === 1, 'AltGr does not open completion');
+for (const modifiers of [Clutter.ModifierType.CONTROL_MASK, Clutter.ModifierType.CONTROL_MASK | Clutter.ModifierType.MOD1_MASK])
+    click(cell, 1, modifiers);
+check(hides === 2 && popups.length === 1, 'Ctrl-click retains the established hide gesture');
 arm();
-click(popups.at(-1).children[0], 3);
-check(completed.length === 2, 'right-click on the confirmation also works');
+check(modalKey(Clutter.KEY_Return) === Clutter.EVENT_STOP && completed.length === 2,
+    'Enter confirms a separately armed task');
 arm();
 const cancelled = popups.at(-1);
-stage.signals['captured-event'](stage, {type: () => 2, get_key_symbol: () => 27});
-check(cancelled.destroyed && completed.length === 2, 'Escape cancels without completion');
+check(modalKey(Clutter.KEY_Escape) === Clutter.EVENT_STOP && cancelled.destroyed && completed.length === 2,
+    'Escape cancels without completion');
+arm();
+const cancelledButton = popups.at(-1);
+const cancel = cancelledButton.children[0].children.at(-1).children.find(child => child.label === 'Cancel');
+cancel.signals.clicked();
+check(cancelledButton.destroyed && completed.length === 2, 'Cancel button dismisses without completing');
 arm();
 const outside = popups.at(-1);
-stage.signals['captured-event'](stage, {type: () => 1, get_source: () => new Actor()});
+stage.signals['captured-event'](stage, {type: () => Clutter.EventType.BUTTON_PRESS, target: new Actor()});
 check(outside.destroyed && completed.length === 2, 'outside click cancels without completion');
 arm();
 button._syncTaskHover({...cell, hover: false}, agent, provider, 3);
 check(!popups.at(-1).destroyed, 'pointer leave does not dismiss the armed confirmation');
 button._hideTaskConfirmation();
 button._hideTaskConfirmation();
-check(grabs.length === 0, 'cancellation releases modal input grab');
-check(Object.keys(stage.signals).length === 0, 'cancellation releases stage input handler');
-print('PASS: anchored task details, right-click confirmation, other-button rejection, cancellation and ordinary selection.');
+check(grabs.length === 0 && Object.keys(stage.signals).length === 0, 'cancellation releases modal input');
+const anonymousCell = Button.buildPanelTaskCell({...agent, session_id: ''}, null, null, false, requestCompletion);
+const previousPopups = popups.length;
+click(anonymousCell, 1, Clutter.ModifierType.MOD1_MASK);
+check(popups.length === previousPopups, 'the gesture cannot arm an unregistered task');
+print('PASS: Left Alt-click opens an anchored confirmation with explicit buttons and keyboard handling.');
 
 const registry = {sessions: {'session-a': {id: 'session-a', launch_env: {PHRASE_AUTOMATION_IN_PROGRESS_NOTE_ID: 'note-a', PHRASE_AUTOMATION_NOTES_FILE: '/tmp/isolated-notes.json'}}}};
 const command = Button.completionCommand(agent, registry);
@@ -128,55 +148,18 @@ for (const invalid of [{...agent, session_id: ''}, {...agent, session_id: '   '}
 check(JSON.stringify(Button.completionCommand(agent, {sessions: {}})) === JSON.stringify(['pa', 'mark-in-progress-done', '--close-session', 'session-a']), 'native owner validates missing frontend registry instead of frontend rejecting it');
 print('PASS: completion uses registered note ownership; missing and mismatched identities are rejected.');
 
-// Use the real menu row builder and events while details are open.
+// The details menu no longer has a completion shortcut.
 button._icon = () => ({});
 button._focusAgent = id => focused.push(id);
 button._taskRows = new Map();
 button._runClockActors = [];
-button._panelProgressBars = new Map([['session-a', {get_parent: () => cell}]]);
-button.menu.close = () => { button.menu.isOpen = false; };
-button.menu.isOpen = true;
 const row = Button.Button.prototype._agentMenuItem.call(button, agent, provider, 3);
-const beforeMenu = completed.length;
-check(click(row, 1, true) === Clutter.EVENT_STOP, 'Ctrl+left-click inside details arms confirmation');
-check(!button.menu.isOpen && popups.at(-1).anchor === cell, 'details closes and confirmation anchors above matching panel instance');
-row.signals.activate?.(row, {get_button: () => 1, get_state: () => 4});
-check(focused.length === 1 && completed.length === beforeMenu, 'menu release neither focuses nor prematurely completes');
-check(/close.*right.click.*confirm/i.test(popups.at(-1).children[0].children.at(-1).text), 'confirmation explicitly asks to close the task');
-click(cell, 3);
-check(completed.length === beforeMenu + 1 && completed.at(-1).session_id === 'session-a', 'menu arming confirms only the selected instance');
-button._panelProgressBars.clear();
-button.menu.isOpen = true;
-check(click(row, 1, true) === Clutter.EVENT_STOP, 'a vanished panel instance consumes Ctrl+click');
-check(!button._taskConfirmation && completed.length === beforeMenu + 1, 'vanished instance cannot arm a stale menu task');
-const normal = Button.Button.prototype._agentMenuItem.call(button, agent, provider, 3);
-normal.signals.activate(normal, {get_button: () => 1, get_state: () => 0});
-check(focused.at(-1) === 'note-a', 'ordinary menu activation retains focus behavior');
-print('PASS: details-menu Ctrl+click, exact panel anchor, release suppression, vanished target and normal activation.');
-
-// GNOME ClickAction may emit activate without our pointer-press callback.
-button._panelProgressBars = new Map([['session-a', {get_parent: () => cell}]]);
-button.menu.isOpen = true;
-const nativeClick = Button.Button.prototype._agentMenuItem.call(button, agent, provider, 3);
-const focusBeforeNative = focused.length;
-nativeClick.signals.activate(nativeClick, {get_button: () => 1, get_state: () => 4});
-check(button._taskConfirmation?.agent.session_id === 'session-a', 'native Ctrl+click activation arms confirmation even without pointer-press');
-check(focused.length === focusBeforeNative && !button.menu.isOpen, 'native Ctrl activation closes details without focusing terminal');
-button._hideTaskConfirmation();
-print('PASS: native menu ClickAction Ctrl activation bypasses focus and opens confirmation.');
-
-const captureRow = Button.Button.prototype._agentMenuItem.call(button, agent, provider, 3);
-const capturePress = captureRow.signals['captured-event'];
-check(Boolean(capturePress), 'menu captures Ctrl press before native ClickAction consumes it');
-const captureFocus = focused.length;
-check(capturePress(captureRow, {type: () => 1, get_button: () => 1, get_state: () => 4}) === Clutter.EVENT_STOP,
-    'captured Ctrl press arms without reaching ClickAction');
-check(button._taskConfirmation?.agent.session_id === 'session-a' && focused.length === captureFocus,
-    'captured menu press confirms exact task without focusing');
-button._hideTaskConfirmation();
-check(capturePress(captureRow, {type: () => 2}) === Clutter.EVENT_PROPAGATE,
-    'non-pointer events retain native menu handling');
-print('PASS: menu captured-event arms before native ClickAction.');
+const menuPopupCount = popups.length;
+check(!row.signals['captured-event'], 'details row no longer captures the old Ctrl gesture');
+row.signals.activate(row, {get_button: () => 1, get_state: () => Clutter.ModifierType.CONTROL_MASK});
+check(popups.length === menuPopupCount && completed.length === 2, 'details-menu Ctrl-click cannot open confirmation or complete');
+check(focused.at(-1) === 'note-a', 'details menu continues to select the exact task');
+print('PASS: old details-menu completion shortcut removed.');
 
 // The reported window has no launch-env note link; the panel carries its tmux name.
 const recoveredAgent = {...agent, note_id: 'acc-session-a', tmux_name: 'acc-session-a'};

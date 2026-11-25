@@ -1322,11 +1322,12 @@ function exhaustedCodexAccounts(snapshot, now) {
  * Parameters: agent - scoped open-window agent whose bar and timing are displayed;
  * focusAgent - callback selecting the exact agent note, or null for noninteractive rendering;
  * toggleHidden - callback changing panel visibility, or null for an inert cell;
- * inRecovery - whether to use the larger task cell and logo in the recovery popup.
+ * inRecovery - whether to use the larger task cell and logo in the recovery popup;
+ * requestCompletion - callback for the selected cell and its current task details.
  * Returns: a fixed-width task tile with retained progress, labels and a selection outline.
  */
-function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRecovery = false) {
-    print(`agent=${agent} focusAgent=${focusAgent} toggleHidden=${toggleHidden} inRecovery=${inRecovery}`);
+function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRecovery = false, requestCompletion = null) {
+    print(`agent=${agent} focusAgent=${focusAgent} toggleHidden=${toggleHidden} inRecovery=${inRecovery} requestCompletion=${requestCompletion}`);
     const cell = new St.Widget({
         style_class: 'ams-panel-task-cell',
         layout_manager: new Clutter.BinLayout(),
@@ -1334,7 +1335,7 @@ function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRec
         y_expand: true,
         y_align: Clutter.ActorAlign.FILL,
         clip_to_allocation: true,
-        reactive: Boolean(toggleHidden || (focusAgent && String(agent.note_id || '').trim())),
+        reactive: Boolean(toggleHidden || requestCompletion || (focusAgent && String(agent.note_id || '').trim())),
         can_focus: Boolean(focusAgent && String(agent.note_id || '').trim()),
         track_hover: Boolean(focusAgent && String(agent.note_id || '').trim()),
     });
@@ -1396,16 +1397,17 @@ function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRec
         visible: false,
     });
     cell.connect('button-press-event', (_cell, event) => {
-        if (event.get_button() === 3 && cell._amsConfirmation) {
-            cell._amsConfirmation();
-            return Clutter.EVENT_STOP;
-        }
-        if (event.get_button() === 1 && (event.get_state?.() & Clutter.ModifierType.CONTROL_MASK) && toggleHidden) {
+        if (event.get_button() !== 1)
+            return Clutter.EVENT_PROPAGATE;
+        const modifiers = event.get_state?.() ?? 0;
+        if ((modifiers & Clutter.ModifierType.CONTROL_MASK) && toggleHidden) {
             toggleHidden();
             return Clutter.EVENT_STOP;
         }
-        if (event.get_button() !== 1)
-            return Clutter.EVENT_PROPAGATE;
+        if ((modifiers & Clutter.ModifierType.MOD1_MASK) && requestCompletion) {
+            requestCompletion(cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount);
+            return Clutter.EVENT_STOP;
+        }
         const noteId = String(bar._amsAgent.note_id || '').trim();
         if (noteId && focusAgent)
             focusAgent(noteId);
@@ -2033,9 +2035,14 @@ class AccModelStatusButton extends PanelMenu.Button {
     /** Arm an above-instance confirmation containing the task's colored details.
      * Parameters: this - status button; cell - selected instance actor; agent - selected task;
      * provider - task provider; codexInstanceCount - registered account count.
-     * Returns: undefined.
+     * Returns: undefined; unregistered tasks do not open a confirmation.
      */
     _showTaskConfirmation(cell, agent, provider, codexInstanceCount) {
+        print(`this=${this} cell=${cell} agent=${agent} provider=${provider} codexInstanceCount=${codexInstanceCount}`);
+        if (!completionCommand(agent)) {
+            print(undefined);
+            return;
+        }
         this._hideTaskConfirmation();
         this._hideTaskHover();
         const content = new St.BoxLayout({vertical: true, reactive: true,
@@ -2044,27 +2051,34 @@ class AccModelStatusButton extends PanelMenu.Button {
         details.reactive = false;
         details.can_focus = false;
         content.add_child(details);
-        content.add_child(new St.Label({text: 'Close this task and mark Done? Right-click to confirm · Esc to cancel',
-            style_class: 'ams-task-confirmation-hint', reactive: false}));
+        content.add_child(new St.Label({text: 'Close this task and mark Done?', reactive: false}));
+        const actions = new St.BoxLayout({style_class: 'ams-task-confirmation-actions', x_align: Clutter.ActorAlign.END});
+        const cancel = new St.Button({label: 'Cancel', style_class: 'button', can_focus: true});
+        const confirm = new St.Button({label: 'Close and mark Done', style_class: 'button', can_focus: true});
+        cancel.connect('clicked', () => this._hideTaskConfirmation());
+        confirm.connect('clicked', () => this._confirmTaskCompletion());
+        actions.add_child(cancel);
+        actions.add_child(confirm);
+        content.add_child(actions);
         const popup = new BoxPointer.BoxPointer(St.Side.BOTTOM, {reactive: true});
         popup.add_style_class_name('popup-menu-boxpointer');
         popup.add_style_class_name('ams-task-hover');
         popup.bin.set_child(content);
         this._taskConfirmation = {cell, agent, popup};
-        cell._amsConfirmation = () => this._confirmTaskCompletion();
-        content.connect('button-press-event', (_actor, event) => {
-            if (event.get_button() === 3)
-                this._confirmTaskCompletion();
-            return Clutter.EVENT_STOP;
-        });
         this._taskConfirmationSignal = global.stage.connect('captured-event', (_stage, event) => {
-            if (event.type() === Clutter.EventType.KEY_PRESS && event.get_key_symbol() === Clutter.KEY_Escape) {
-                this._hideTaskConfirmation();
-                return Clutter.EVENT_STOP;
-            }
-            if (event.type() === Clutter.EventType.BUTTON_PRESS) {
-                const source = event.get_source();
-                if (source !== cell && !cell.contains?.(source) && source !== popup && !popup.contains?.(source))
+            if (event.type() === Clutter.EventType.KEY_PRESS) {
+                const key = event.get_key_symbol();
+                if (key === Clutter.KEY_Escape) {
+                    this._hideTaskConfirmation();
+                    return Clutter.EVENT_STOP;
+                }
+                if (key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter) {
+                    this._confirmTaskCompletion();
+                    return Clutter.EVENT_STOP;
+                }
+            } else if (event.type() === Clutter.EventType.BUTTON_PRESS) {
+                const target = _stage.get_event_actor(event);
+                if (!target || (target !== popup && !popup.contains(target)))
                     this._hideTaskConfirmation();
             }
             return Clutter.EVENT_PROPAGATE;
@@ -2072,8 +2086,9 @@ class AccModelStatusButton extends PanelMenu.Button {
         Main.layoutManager.addChrome(popup);
         popup.setPosition(cell, 0.5);
         popup.open(BoxPointer.PopupAnimation.NONE);
-        // Grab the stage so both the popup and its original panel cell remain clickable.
+        // Give the popup keyboard input and recognize clicks outside it.
         this._taskConfirmationGrab = Main.pushModal(global.stage, {actionMode: Shell.ActionMode.NORMAL});
+        print(undefined);
     }
 
     /** Cancel an armed task and disconnect its stage input handler.
@@ -2081,6 +2096,7 @@ class AccModelStatusButton extends PanelMenu.Button {
      * Returns: undefined.
      */
     _hideTaskConfirmation() {
+        print(`this=${this}`);
         if (this._taskConfirmationSignal) {
             global.stage.disconnect(this._taskConfirmationSignal);
             this._taskConfirmationSignal = null;
@@ -2091,10 +2107,8 @@ class AccModelStatusButton extends PanelMenu.Button {
         }
         const pending = this._taskConfirmation;
         this._taskConfirmation = null;
-        if (pending) {
-            pending.cell._amsConfirmation = null;
-            pending.popup.destroy();
-        }
+        pending?.popup.destroy();
+        print(undefined);
     }
 
     /** Consume the selected task confirmation once before invoking completion.
@@ -2480,30 +2494,8 @@ class AccModelStatusButton extends PanelMenu.Button {
             reactive: actionable,
             can_focus: actionable,
         });
-        if (actionable) {
-            item.connect('activate', (_item, event) => {
-                if (item._amsSuppressActivation) {
-                    item._amsSuppressActivation = false;
-                    if (this._taskConfirmation?.agent.session_id === agent.session_id)
-                        return;
-                }
-                if (track && event?.get_button?.() === 1 &&
-                    (event.get_state() & Clutter.ModifierType.CONTROL_MASK)) {
-                    this._armMenuTaskConfirmation(agent, provider, codexInstanceCount);
-                    return;
-                }
-                this._focusAgent(noteId);
-            });
-            if (track) {
-                item.connect('captured-event', (_item, event) => {
-                    if (event.type() !== Clutter.EventType.BUTTON_PRESS || event.get_button() !== 1 || !(event.get_state() & Clutter.ModifierType.CONTROL_MASK))
-                        return Clutter.EVENT_PROPAGATE;
-                    item._amsSuppressActivation = true;
-                    this._armMenuTaskConfirmation(agent, provider, codexInstanceCount);
-                    return Clutter.EVENT_STOP;
-                });
-            }
-        }
+        if (actionable)
+            item.connect('activate', () => this._focusAgent(noteId));
         const row = new St.BoxLayout({style_class: 'ams-agent-row'});
 
         const projectTag = String(agent.project_tag || '').trim();
@@ -2656,21 +2648,6 @@ class AccModelStatusButton extends PanelMenu.Button {
         print(undefined);
     }
 
-    /** Anchor a menu-requested confirmation to the task's current panel cell.
-     * Parameters: this - status button; agent - selected menu task; provider - row provider;
-     * codexInstanceCount - account count for the detail colors.
-     * Returns: undefined; vanished panel targets remain unarmed.
-     */
-    _armMenuTaskConfirmation(agent, provider, codexInstanceCount) {
-        const key = String(agent.session_id || agent.tmux_name || agent.key || '');
-        const bar = this._panelProgressBars?.get(key);
-        if (bar) {
-            this.menu.close();
-            this._showTaskConfirmation(bar.get_parent(), bar._amsAgent || agent,
-                bar._amsProvider || provider, bar._amsInstanceCount || codexInstanceCount);
-        }
-    }
-
     /** Activate one agent terminal through ACC's shared focus-and-pointer selector. */
     _focusAgent(noteId) {
         const targetNoteId = String(noteId || '').trim();
@@ -2818,7 +2795,8 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
                     previousMonitor = monitor;
                 }
                 const cell = buildPanelTaskCell(entry.agent, noteId => this._focusAgent(noteId),
-                    () => this._setPanelTaskHidden(entry.key, !hiddenTask), hiddenTask);
+                    () => this._setPanelTaskHidden(entry.key, !hiddenTask), hiddenTask,
+                    (targetCell, agent, provider, count) => this._showTaskConfirmation(targetCell, agent, provider, count));
                 const bar = cell._amsBar;
                 cell.connect('notify::hover', () => this._syncTaskHover(
                     cell, bar._amsAgent, bar._amsProvider, bar._amsInstanceCount));
