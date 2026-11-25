@@ -795,7 +795,7 @@ const instanceStyle = stylesheet.match(/\.ams-panel-agent-instance\s*\{([^}]+)\}
 check(/font-size:\s*13\.75px;/.test(instanceStyle), 'panel instance numbers grow from 11px to 13.75px');
 check(/color:\s*#9ebfec;/.test(instanceStyle), 'the default panel instance number color stays blue');
 
-// Account and project-local instance numbers share the footer with the estimate.
+// Only registered account numbers share the footer with the estimate.
 const numberedBase = {project: 'sample', workspace: 2, phase: 'RUNNING', run_active: true,
     task_time_estimate: {status: 'estimated', label: '~1h 1m left'}, workflow: {fraction: .4}};
 const numberedCodex = [
@@ -805,14 +805,18 @@ const numberedCodex = [
     {...numberedBase, session_id: 'cx-one-done', kind: 'codex', codex_instance: 1, phase: 'DONE'},
 ];
 const numberedVibe = [
-    {...numberedBase, session_id: 'va-one', kind: 'vibe', instance: '1'},
-    {...numberedBase, session_id: 'va-ten', kind: 'vibe', instance: '10'},
+    ...[1, 2, 3, 4, 5, 6].map(number => ({
+        ...numberedBase, session_id: `va-${number}`, kind: 'vibe', instance: String(number),
+    })),
     {...numberedBase, session_id: 'va-invalid', kind: 'vibe', instance: 'none'},
     {...numberedBase, session_id: 'va-other', kind: 'vibe', instance: '2', project: 'different'},
 ];
 const numberedPayload = {codexInstanceCount: 2, providers: [
     {kind: 'codex', agents: numberedCodex}, {kind: 'vibe', agents: numberedVibe},
-    {kind: 'claude', agents: [{...numberedBase, session_id: 'cc-only', instance: '1'}]},
+    {kind: 'claude', agents: [
+        {...numberedBase, session_id: 'cc-one', instance: '1'},
+        {...numberedBase, session_id: 'cc-two', instance: '2'},
+    ]},
 ]};
 const quotaNow = Math.floor(Date.now() / 1000);
 const quotaAccounts = [
@@ -827,7 +831,8 @@ const numberedButton = Object.assign({
 numberedButton._updatePanelProgress(numberedPayload, false);
 for (const [key, expected] of [
     ['cx-one', '1'], ['cx-one-done', '1'], ['cx-two', '2'], ['cx-unknown', ''],
-    ['va-one', '1'], ['va-ten', '10'], ['va-invalid', ''], ['va-other', ''], ['cc-only', ''],
+    ...numberedVibe.map(agent => [agent.session_id, '']),
+    ['cc-one', ''], ['cc-two', ''],
 ]) {
     const bar = numberedButton._panelProgressBars.get(key);
     const instance = bar._amsInstanceLabel;
@@ -836,7 +841,7 @@ for (const [key, expected] of [
     check(footer !== bar.get_parent() && footer.y_align === Clutter.ActorAlign.END &&
         footer.x_align === Clutter.ActorAlign.FILL, 'full-width footer sits below the bar');
     check(instance.text === expected && instance.visible === Boolean(expected),
-        `published instance number for ${key} is ${expected}`);
+        `badge for ${key} expected ${JSON.stringify(expected)}, got ${JSON.stringify(instance.text)}`);
     check(footer.children[0] === instance && instance.x_align === Clutter.ActorAlign.START &&
         footer.children[1] === estimate && estimate.x_align === Clutter.ActorAlign.END,
         'instance stays on the left and ETA is anchored to the right within the same footer');
@@ -845,8 +850,8 @@ const badgeFor = key => numberedButton._panelProgressBars.get(key)._amsInstanceL
 check(badgeFor('cx-one').style === 'color: #ef4444;' &&
     badgeFor('cx-one-done').style === 'color: #ef4444;',
     'every badge for an exhausted Codex account is red regardless of task phase');
-check(!badgeFor('cx-two').style && !badgeFor('va-one').style,
-    'available Codex and unrelated project-local numbers keep their usual color');
+check(!badgeFor('cx-two').style && !badgeFor('va-1').style,
+    'available Codex keeps its usual color and Vibe has no account color');
 quotaAccounts[0].windows[0].resets_at = quotaNow - 1;
 quotaAccounts[1].windows[0].used_percent = 100;
 numberedButton._updatePanelProgress(numberedPayload, false);
@@ -878,9 +883,8 @@ check(!numberedButton._panelProgressBars.get('cx-two')._amsInstanceLabel.visible
 numberedButton._updatePanelProgress({codexInstanceCount: 1, providers: [
     {kind: 'codex', agents: [numberedCodex[0], numberedCodex[1]]},
 ]}, false);
-check(numberedButton._panelProgressBars.get('cx-one')._amsInstanceLabel.text === '3' &&
-    numberedButton._panelProgressBars.get('cx-two')._amsInstanceLabel.text === '8',
-    'multiple tracked sessions sharing one login show project-local instance numbers');
+check(['cx-one', 'cx-two'].every(key => !badgeFor(key).visible && badgeFor(key).text === ''),
+    'multiple Codex sessions sharing one login have no account badges');
 numberedButton._updatePanelProgress(null, false);
 
 
