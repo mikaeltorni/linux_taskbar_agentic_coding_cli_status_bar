@@ -240,7 +240,11 @@ after reset, the menu says “not expected before reset.”
 The poller checks on its configured interval (five seconds by default) without
 sending prompts. It uses activity reports up to 30 seconds old and quota readings
 up to two minutes apart. Run `agentic-cli-status --show` to inspect the
-published account windows and available projections.
+published account windows and available projections. When two fresh readings
+from a running account's current window have equal usage, the JSON window
+reports `exhaustion_state: "flat"` with a freshness deadline in
+`exhaustion_valid_until`. ACC's AFK dashboard uses this state to show an
+observed rate of 0% per hour for that account.
 
 Polymarket is discovered through its public Gamma search API. An open Codex
 reset market appears in the forecast menu with its current Yes prices; weekly
