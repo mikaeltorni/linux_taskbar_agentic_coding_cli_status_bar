@@ -465,8 +465,11 @@ workspace label with hidden tasks to switch to its popup.
 **Ctrl+left-click** an instance in the popup to put it back on the bar. The
 workspace label stays available when its last instance is hidden. A small
 teal number above the label shows how many instances are hidden in that
-workspace. It disappears when the count reaches zero. Hidden state lasts
-until you restore the instance or the extension restarts.
+workspace. It disappears when the count reaches zero. For tracked instances,
+hiding and restoring are saved across GNOME restarts and reboots. A hidden
+instance stays hidden when you reopen the same session, and its count appears
+on the workspace where it opens. Tasks without a stable identity can be
+hidden for the current desktop session.
 
 To finish a visible task, **Ctrl+left-click** its row in the right-click
 details menu. The details menu closes and shows the task confirmation above
