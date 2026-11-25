@@ -390,6 +390,13 @@ assert_eq "$(cfg_get clis.codex.enabled)" "true" "codex should stay enabled"
 # --- Optional taskbar includes an independent native Harbor observer --------
 run_installer --select model_status_bar >"$TMP_DIR/model-status.out" 2>&1 || {
   FAIL=$((FAIL + 1)); echo "FAIL: --select model_status_bar exited non-zero"; }
+for asset in extension.js stylesheet.css; do
+  if ! cmp -s "$REPO_ROOT/acc-model-status@local/$asset" \
+    "$TARGET_HOME/.local/share/gnome-shell/extensions/acc-model-status@local/$asset"; then
+    FAIL=$((FAIL + 1))
+    echo "FAIL: model status bar must install the current $asset"
+  fi
+done
 assert_file_exists "$TARGET_HOME/.local/bin/harbor-taskbar" "Harbor observer must be installed"
 assert_file_exists "$TARGET_HOME/.local/share/gnome-shell/extensions/acc-model-status@local/harbor.js" "Harbor taskbar module must deploy"
 assert_file_contains "$TARGET_HOME/.config/systemd/user/harbor-taskbar.service" 'ExecStart=%h/.local/bin/harbor-taskbar' "Harbor observer must be a standalone native service"

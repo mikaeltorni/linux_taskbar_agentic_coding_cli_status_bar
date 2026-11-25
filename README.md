@@ -397,10 +397,9 @@ counts and rates. Its fill shows ACC's actual workflow completion percentage,
 with a continuous red-to-green gradient for ordinary and goal runs: red at
 0%, green at 100%, and intermediate colors based on measured completion.
 Active goal bars retain this gradient. Goal identity appears in the purple
-runtime above the bar. Focused bars keep their existing teal outline. A
-rate-limited agent uses the Notes RATE pink/purple (`#f472b6`), also used by
-its menu badge. A DRAFT agent uses lime green (`#84c32f`), matching its menu
-badge, for both its track and measured fill. At 0% it shows only the faint
+runtime above the bar. A rate-limited agent uses the Notes RATE pink/purple
+(`#f472b6`), also used by its menu badge. A DRAFT agent uses lime green (`#84c32f`),
+matching its menu badge, for both its track and measured fill. At 0% it shows only the faint
 lime track. These state colors preserve fill widths, track/fill alpha,
 and the existing opacity animation. Confirmed
 finished agents show a full bar; unavailable workflow progress shows an empty
@@ -420,8 +419,9 @@ intermediate workspace interpolated on the same scale. Higher workspace
 numbers keep the W8 color; unknown workspaces show neutral `W?`. While a turn is actively running, its bar
 smoothly pulses from 100% opacity to 30% and back every three seconds, matching
 the terminal indicator. For active goals, only the progress fill and track pulse;
-the runtime text and teal focus edges stay steady. Stale goal bars still use the usual dimmed appearance. A finished, unopened instance keeps full opacity while
-its green fill smoothly turns white and back over the same three-second cycle.
+the runtime text and teal tile outline stay steady. Stale goal bars still use
+the usual dimmed appearance. A finished, unopened instance keeps full opacity
+while its green fill smoothly turns white and back over the same three-second cycle.
 Ready bars stay at least as bright as their original green rather than fading.
 Other idle bars stay steady, and stale snapshots stay dimmed. Each progress
 cell centers a large, subdued harness logo behind its runtime, progress track,
@@ -431,11 +431,11 @@ the artwork remains visible behind the labels. Codex, Vibe and the other
 bundled harnesses use their own artwork.
 Unrecognized harnesses use a generic mark. [Vibe product artwork](https://mistral.ai/products/vibe/)
 Status refreshes reuse the bars so they remain visible throughout the pulse.
-Updates continue while the drop-down is open. The focused terminal's bar gets
-a subtle **one-pixel teal outline** (`#00ffe6`, matching the CLI selection cue).
-The outline sits one pixel outside the 50×8 fill, using a 52×11
-drawing area so it never covers progress pixels. Bars within each workspace
-have a six-pixel gap between their drawing areas. At each monitor change
+Updates continue while the drop-down is open. An opaque **one-pixel teal
+outline** (`#00ffe6`) frames the focused terminal's entire taskbar tile,
+including the harness logo, runtime or completion age, progress bar,
+instance number and estimate. The outline stays steady as the progress pulses.
+Tiles within each workspace have a six-pixel gap. At each monitor change
 within a workspace, a thin teal vertical line spans the centered half of the
 taskbar height, with
 six pixels of space on each side (twice the normal spacing, plus the one-pixel

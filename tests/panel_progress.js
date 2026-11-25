@@ -454,7 +454,7 @@ button._updatePanelProgress(null, false);
 check(timers.size === 0, 'empty snapshot cleans up the ready timer');
 print('PASS: repeated ready snapshots render the instance bar without a W5:1 workspace badge.');
 
-// The focused terminal has a one-pixel teal edge, independent of its workspace.
+// The focused terminal has a steady teal outline around all the tile data.
 const focused = {...a, session_id: 'focus', focused: true, workspace: 1,
     workflow: {available: true, fraction: 0.8}};
 const nearby = {...b, session_id: 'nearby', focused: false, workspace: 1, current_workspace: true};
@@ -462,53 +462,37 @@ const focusPayload = {providers: [{kind: 'codex', agents: [focused, nearby]}]};
 button._updatePanelProgress(focusPayload, false);
 const focusedBar = button._panelProgressBars.get('focus');
 const nearbyBar = button._panelProgressBars.get('nearby');
-check(focusedBar.strokes.length === 1, 'selected instance paints a border');
-const edge = focusedBar.strokes.at(-1);
-check(edge.width === 1 && JSON.stringify(edge.rect) === '[0.5,0.5,51,9]',
-    'one-pixel edge sits outside the 50 by 8 fill in reserved drawing room');
-check(JSON.stringify(edge.color.slice(0,3).map(channel => Math.round(channel*255))) === '[0,255,230]' &&
-    edge.color[3] === 0.8, 'subtle teal matches CLI selection color #00ffe6');
-check(nearbyBar.strokes.length === 0, 'same workspace does not imply selection');
-check(JSON.stringify(focusedBar.draws.at(-2).rect) === '[1,1,40,8]',
-    'outward border preserves the measured fill dimensions and origin');
-check(JSON.stringify(focusedBar.draws.at(-3).rect) === '[1,1,50,8]',
-    'full progress track remains 50x8 inside reserved drawing room');
-const track = focusedBar.draws.at(-3).rect;
-check(edge.rect[0] + edge.width / 2 <= track[0] &&
-    edge.rect[1] + edge.width / 2 <= track[1] &&
-    edge.rect[0] + edge.rect[2] - edge.width / 2 >= track[0] + track[2] &&
-    edge.rect[1] + edge.rect[3] - edge.width / 2 >= track[1] + track[3],
-    'teal stroke never overlaps any progress fill pixel');
-const oldEdges = focusedBar.strokes.length;
+const focusedCell = focusedBar.get_parent();
+const nearbyCell = nearbyBar.get_parent();
+const focusedOutline = focusedCell.children.at(-1);
+const nearbyOutline = nearbyCell.children.at(-1);
+check(focusedOutline.style_class === 'ams-panel-task-selection' && focusedOutline.visible,
+    'selected instance draws its outline above the logo, bar and both rows of labels');
+check(focusedOutline.x_expand && focusedOutline.y_expand && focusedOutline.x_align === Clutter.ActorAlign.FILL &&
+    focusedOutline.y_align === Clutter.ActorAlign.FILL && !focusedOutline.reactive,
+    'the outline spans the full tile and leaves it clickable');
+check(/\.ams-panel-task-selection\s*\{[^}]*border:\s*1px solid #00ffe6;/.test(css),
+    'selection uses a fully opaque teal edge');
+check(!nearbyOutline.visible, 'same workspace does not imply selection');
+check(focusedBar.strokes.length === 0 && nearbyBar.strokes.length === 0, 'progress bars paint without selection strokes');
+check(JSON.stringify(focusedBar.draws.at(-1).rect) === '[1,1,40,8]' &&
+    JSON.stringify(focusedBar.draws.at(-2).rect) === '[1,1,50,8]',
+    'selection preserves the measured fill and track dimensions');
 focused.focused = false;
 nearby.focused = true;
 button._updatePanelProgress(focusPayload, false);
-check(button._panelProgressBars.get('focus') === focusedBar && button._panelProgressBars.get('nearby') === nearbyBar,
-    'focus transfer retains bar actor identity');
-check(focusedBar.strokes.length === oldEdges && nearbyBar.strokes.length === 1,
-    'outline follows focus and clears from the old selection');
+check(focusedBar.get_parent() === focusedCell && nearbyBar.get_parent() === nearbyCell,
+    'focus transfer retains tile actor identity');
+check(!focusedOutline.visible && nearbyOutline.visible, 'outline follows focus and clears from the old selection');
 nearby.focused = false;
 button._updatePanelProgress(focusPayload, false);
-check(nearbyBar.strokes.length === 1, 'focusing outside agent terminals clears selection');
-for (const agent of [
-    {...a, focused: true}, {...b, focused: true}, {...ready, focused: true},
-    {phase: 'STOPPED', focused: true, workflow: {available: false}},
-]) {
-    const bar = owners.buildPanelTaskProgress(agent);
-    bar._amsPulseAt = 1500;
-    bar.queue_repaint();
-    check(bar.strokes.length === 1 && bar.width === 52 && bar.height === 11,
-        'focused running, stopped, ready and unavailable bars all retain a compact outline');
-    if (agent.unread_completion)
-        check(bar.draws.at(-2).color.slice(0,3).every(channel => channel === 1),
-            'teal outline does not replace the ready white fill');
-}
+check(!focusedOutline.visible && !nearbyOutline.visible, 'focusing outside agent terminals clears selection');
 nearby.focused = true;
 button._updatePanelProgress(focusPayload, true);
-check(nearbyBar.strokes.length === 2 && nearbyBar.opacity === 128, 'stale selected bar keeps the outline and stale opacity');
+check(nearbyOutline.visible && nearbyBar.opacity === 128, 'stale progress dims independently of the tile outline');
 button._updatePanelProgress(null, false);
 check(timers.size === 0, 'selection does not start an extra animation source');
-print('PASS: selected instance uses a one-pixel teal edge matching CLI focus and follows focus changes.');
+print('PASS: selected instance has a steady full-tile teal border that follows focus changes.');
 
 // State colors must preserve the measured fill and every existing alpha.
 for (const [state, expected] of [
@@ -545,7 +529,7 @@ print('PASS: goal and RATE fills match state colors and preserve measured progre
 
 check(/\.ams-panel-workspace\s*\{[^}]*spacing:\s*6px;/.test(css),
     'same-workspace bars have a slightly wider six-pixel actor gap');
-print('PASS: outward focus outline leaves the 50x8 fill clear and bars have wider spacing.');
+print('PASS: bars keep six-pixel spacing.');
 
 // Active ordinary progress tracks completion from red to green.
 for (const [fraction, expected] of [[0,[239,68,68]], [.25,[188,100,75]], [.5,[137,133,81]], [.75,[85,165,88]], [1,[34,197,94]]]) {
@@ -560,7 +544,7 @@ for (const [fraction, expected] of [[0,[239,68,68]], [.25,[188,100,75]], [.5,[13
 }
 print('PASS: ordinary active bars transition red to green with measured widths and translucent partial fill.');
 
-// Goal identity moves to the timer; progress keeps its measured gradient and focus outline.
+// Goal identity moves to the timer; progress keeps its measured gradient.
 for (const focused of [false, true]) {
     for (const [fraction, expected] of [[0, [239,68,68]], [.5, [137,133,81]], [1, [34,197,94]]]) {
         const agent = {phase: 'RUNNING', run_active: true, goal_active: true, focused,
@@ -570,15 +554,9 @@ for (const focused of [false, true]) {
         bar.queue_repaint();
         check(JSON.stringify(bar.draws[0].color.slice(0,3).map(value => Math.round(value*255))) === JSON.stringify(expected),
             'goal retains the measured progress gradient');
-        check(bar.strokes.length === (focused ? 1 : 0), 'goal bar has only the optional teal focus outline');
-        check(bar.strokes.every(stroke => stroke.width === 1 &&
-            JSON.stringify(stroke.color) === JSON.stringify([0,1,230/255,.8])),
-            'goal painting adds no purple stroke and preserves the teal focus edge');
+        check(bar.strokes.length === 0, 'goal bar never paints a focus or goal stroke');
         check(bar.draws[0].color[3] === .22 && bar.width === 52 && bar.height === 11,
-            'goal outline preserves alpha and actor dimensions');
-        if (focused)
-            check(JSON.stringify(bar.strokes[0].color) === JSON.stringify([0,1,230/255,.8]),
-                'focused goal retains teal outline underneath purple bottom');
+            'goal progress preserves alpha and actor dimensions');
     }
 }
 for (const state of [
@@ -591,7 +569,7 @@ for (const state of [
     bar.queue_repaint();
     check(bar.strokes.length === 0, 'ordinary, inactive, ready and RATE bars have no active-goal edge');
 }
-print('PASS: goal bars keep gradient and teal focus outline with no purple partition.');
+print('PASS: goal bars keep their gradient with no focus or goal stroke.');
 
 // Goal fill retains its previous pulse while the purple stripe is removed.
 const steadyGoal = {session_id: 'steady-goal', phase: 'RUNNING', run_active: true,
@@ -1045,7 +1023,7 @@ const runtimePayload = {providers: [{kind: 'codex', agents: runtimeAgents}]};
 button._updatePanelProgress(runtimePayload, false);
 const runtimeRow = button._panelProgress.children[0].children[1];
 const runtimeCells = runtimeRow.children;
-check(runtimeCells.every(cell => cell.children.length === 4), 'each cell contains a logo, bar, lower forecast and upper runtime');
+check(runtimeCells.every(cell => cell.children.length === 5), 'each cell contains a logo, bar, lower forecast, upper runtime and selection outline');
 const liveRuntime = runtimeCells[0]._amsBar._amsRuntimeLabel;
 const doneRuntime = runtimeCells[1]._amsBar._amsRuntimeLabel;
 check(liveRuntime.text === '01:01' && doneRuntime.text === '1h ago' && doneRuntime.visible, 'live timer formats hours:minutes and finish age comes from the confirmed timestamp');
@@ -1215,8 +1193,9 @@ check(regularTimer.visible && regularTimer.text === '00:10' && regularTimer.styl
     'regular run runtime is yellow');
 check(goalTimer.visible && goalTimer.text === '01:01' && goalTimer.style === 'color: #a855f7;',
     'goal runtime is purple');
-check(regularTimerBar.strokes.length === 0 && goalTimerBar.strokes.length === 1 && goalTimerBar.strokes[0].width === 1,
-    'neither regular nor focused goal bar has a purple partition');
+const goalTimerOutline = goalTimerBar.get_parent().children.at(-1);
+check(regularTimerBar.strokes.length === 0 && goalTimerBar.strokes.length === 0 && goalTimerOutline.visible,
+    'focused goal keeps its tile outline and progress has no extra strokes');
 const regularTimerCell = regularTimerBar.get_parent();
 timerColorAgents[0].goal_active = true;
 timerColorAgents[1].goal_active = false;
@@ -1232,8 +1211,8 @@ check(regularTimer.style === 'color: #a855f7;' && regularTimer.opacity === 128 &
 Object.assign(timerColorAgents[0], {phase: 'DONE', run_active: false});
 button._updatePanelProgress(timerColorPayload, false);
 check(!regularTimer.visible && regularTimer.text === '', 'completed goal never leaves a colored timer visible');
-check(regularTimerBar.strokes.every(stroke => stroke.width === 1) && goalTimerBar.strokes.every(stroke => stroke.width === 1),
-    'state transitions never restore a purple stripe');
+check(goalTimerOutline.visible && regularTimerBar.strokes.length === 0 && goalTimerBar.strokes.length === 0,
+    'goal transitions and pulses preserve the focused tile outline without adding strokes to progress');
 button._updatePanelProgress(null, false);
 Date.now = savedColorDateNow;
 print('PASS: yellow regular runtime, purple goal runtime, retained state transitions and no goal stripe.');
@@ -1453,6 +1432,14 @@ for (const [offset, expected, age] of [[0, [34,197,94], '0s ago'], [750, [145,22
     check(fill.every((channel, index) => Math.abs(channel - expected[index]) <= 1),
         'timer and progress fill sample the same flash at every phase');
 }
+Date.now = () => completionClockNow + 180000;
+Object.assign(completionClockAgent, {focused: true, unread_completion: false});
+button._updatePanelProgress(completionClockPayload, false);
+const completionClockCell = completionClockBar.get_parent();
+check(completionClockLabel.text === '3m ago' && completionClockLabel.get_parent() === completionClockCell &&
+    completionClockBar._amsLogo.get_parent() === completionClockCell && completionClockCell.children.at(-1).visible,
+    'focused completed tile frames the age label and provider logo together');
+Object.assign(completionClockAgent, {focused: false, unread_completion: true});
 Date.now = () => completionClockNow + 1500;
 button._updatePanelProgress(completionClockPayload, true);
 check(completionClockLabel.style === 'color: rgb(34, 197, 94);' && completionClockLabel.opacity === 128,

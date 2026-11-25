@@ -1055,7 +1055,7 @@ function panelProgressHostOpacity(agent, now, stale, ready) {
 }
 
 /**
- * Paint measured progress with its existing outer teal focus outline.
+ * Paint the measured progress track and fill.
  * Parameters: area - taskbar DrawingArea carrying its current agent.
  * Returns: undefined after releasing the Cairo drawing context.
  */
@@ -1078,13 +1078,6 @@ function paintPanelTaskProgress(area) {
         context.setSourceRGBA(...color, fraction === 1 ? 1 : 0.72 * fillAlpha);
         context.rectangle(1, 1, fillWidth * fraction, fillHeight);
         context.fill();
-    }
-    if (area._amsAgent.focused === true) {
-        // Reserve one pixel outside the fill for the CLI selection color.
-        context.setSourceRGBA(0, 1, 230 / 255, 0.8);
-        context.setLineWidth(1);
-        context.rectangle(0.5, 0.5, Math.max(0, width - 1), Math.max(0, height - 2));
-        context.stroke();
     }
     context.$dispose();
     print(undefined);
@@ -1331,7 +1324,7 @@ function exhaustedCodexAccounts(snapshot, now) {
  * toggleHidden - callback changing panel visibility, or null for an inert cell;
  * inRecovery - whether to use the larger task cell and logo in the recovery popup;
  * requestCompletion - callback for the selected cell and its current task details.
- * Returns: a fixed-width click and hover target with retained progress and labels.
+ * Returns: a fixed-width task tile with retained progress, labels and a selection outline.
  */
 function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRecovery = false, requestCompletion = null) {
     print(`agent=${agent} focusAgent=${focusAgent} toggleHidden=${toggleHidden} inRecovery=${inRecovery} requestCompletion=${requestCompletion}`);
@@ -1394,6 +1387,15 @@ function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRec
         y_align: Clutter.ActorAlign.START,
         reactive: false,
     });
+    const selection = new St.Widget({
+        style_class: 'ams-panel-task-selection',
+        x_expand: true,
+        y_expand: true,
+        x_align: Clutter.ActorAlign.FILL,
+        y_align: Clutter.ActorAlign.FILL,
+        reactive: false,
+        visible: false,
+    });
     cell.connect('button-press-event', (_cell, event) => {
         if (event.get_button() !== 1)
             return Clutter.EVENT_PROPAGATE;
@@ -1412,6 +1414,7 @@ function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRec
         return Clutter.EVENT_STOP;
     });
     cell._amsBar = bar;
+    cell._amsSelection = selection;
     bar._amsLogo = logo;
     bar._amsInstanceLabel = instance;
     bar._amsEstimateLabel = estimate;
@@ -1423,6 +1426,7 @@ function buildPanelTaskCell(agent, focusAgent = null, toggleHidden = null, inRec
     footer.add_child(estimate);
     cell.add_child(footer);
     cell.add_child(runtime);
+    cell.add_child(selection);
     print(cell);
     return cell;
 }
@@ -2869,6 +2873,7 @@ AccModelStatusButton.prototype._updatePanelProgress = function (payload, stale) 
         bar._amsProvider = entry.provider;
         bar._amsInstanceCount = payload?.codexInstanceCount;
         const cell = bar.get_parent();
+        cell._amsSelection.visible = entry.agent.focused === true;
         const kind = entry.agent.kind || entry.provider.kind;
         const publishedIcon = kind === entry.provider.kind ? entry.provider.icon : null;
         const icon = publishedIcon && publishedIcon !== FALLBACK_ICON ? publishedIcon :
